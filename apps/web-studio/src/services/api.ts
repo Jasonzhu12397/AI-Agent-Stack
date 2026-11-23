@@ -2035,6 +2035,16 @@ export function setAgentPluginInstallationStatus(
   });
 }
 
+export function rotateAgentPluginCredential(
+  installationId: string,
+  credentialRef: string,
+): Promise<AgentPluginInstallation> {
+  return request("/api/v1/agent-plugin-installations/" + installationId + "/credential/", {
+    method: "POST",
+    body: JSON.stringify({ credential_ref: credentialRef }),
+  });
+}
+
 export function getProjectAgentCapabilities(
   tenantId: string,
   projectId: string,

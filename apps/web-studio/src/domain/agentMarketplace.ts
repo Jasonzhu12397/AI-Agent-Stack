@@ -255,18 +255,31 @@ export function statusTransition(
 }
 
 // A credential reference is a URI pointing at a secret held outside the
-// platform, for example env://PLUGIN_SECRET_TOKEN. The platform never stores
-// or echoes the resolved secret value.
-const CREDENTIAL_REFERENCE_PATTERN =
-  /^[a-z][a-z0-9+.-]{1,31}:\/\/[A-Za-z0-9_./:-]{1,200}$/;
+// platform, for example env://PLUGIN_SECRET_TOKEN or
+// vault://merchant/agent#token. The platform never stores or echoes the
+// resolved secret value.
+//
+// The bound matches the backend `credential_ref` column (200 characters) and
+// the resolver's syntax: a scheme, then a non-empty body with no whitespace.
+// The backend accepts the vault `#field` fragment, so the browser must not
+// reject it first.
+export const CREDENTIAL_REFERENCE_MAX_LENGTH = 200;
+
+const CREDENTIAL_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*$/;
 
 // Returns true when the value looks like a scheme://path secret reference.
-// Whitespace, line breaks and unsupported schemes are rejected.
+// Whitespace, line breaks, an empty body and an over-long value are rejected.
 export function isCredentialReference(value: string): boolean {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!trimmed || /\s/.test(trimmed)) return false;
-  return CREDENTIAL_REFERENCE_PATTERN.test(trimmed);
+  if (trimmed.length > CREDENTIAL_REFERENCE_MAX_LENGTH) return false;
+  const separator = trimmed.indexOf("://");
+  if (separator <= 0) return false;
+  const scheme = trimmed.slice(0, separator);
+  const body = trimmed.slice(separator + 3);
+  if (!CREDENTIAL_SCHEME_PATTERN.test(scheme)) return false;
+  return body.length > 0;
 }
 
 // Heuristic guard against pasting a plaintext secret: whitespace, an
@@ -274,7 +287,7 @@ export function isCredentialReference(value: string): boolean {
 function looksLikePlaintextSecret(value: string): boolean {
   const trimmed = value.trim();
   if (/\s/.test(trimmed)) return true;
-  if (trimmed.length > 200) return true;
+  if (trimmed.length > CREDENTIAL_REFERENCE_MAX_LENGTH) return true;
   if (/^sk-/i.test(trimmed)) return true;
   if (/^Bearer\s/i.test(trimmed)) return true;
   return false;
@@ -343,6 +356,38 @@ export function validateInstall(
     }
   } else if (ref) {
     errors.push("This plugin does not accept a credential reference.");
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// ---- Credential rotation ---------------------------------------------------
+
+export interface CredentialRotationPayload {
+  credential_ref: string;
+}
+
+// Build the rotation body for an existing installation. Rotation changes the
+// reference only: the installation, its grants and its workflow bindings stay
+// untouched, so an expired token costs one request instead of a reinstall.
+export function credentialRotationPayload(credentialRef: string): CredentialRotationPayload {
+  return { credential_ref: (credentialRef ?? "").trim() };
+}
+
+// Validate a rotation attempt in the browser with the same rules the install
+// flow applies: a required, non-plaintext, well-formed reference.
+export function validateCredentialRotation(credentialRef: string): InstallValidation {
+  const errors: string[] = [];
+  const ref = (credentialRef ?? "").trim();
+  if (!ref) {
+    errors.push("A new credential reference is required.");
+  } else if (looksLikePlaintextSecret(ref)) {
+    errors.push(
+      "Enter a secret reference URI (for example env://PLUGIN_SECRET_TOKEN), not a plaintext credential.",
+    );
+  } else if (!isCredentialReference(ref)) {
+    errors.push(
+      "Credential reference must use scheme://path format (for example env://PLUGIN_SECRET_TOKEN).",
+    );
   }
   return { ok: errors.length === 0, errors };
 }

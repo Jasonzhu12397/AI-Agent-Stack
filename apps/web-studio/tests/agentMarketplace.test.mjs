@@ -14,6 +14,9 @@ import {
   catalogStatusLabel,
   catalogInstallPayload,
   validateCatalogInstall,
+  validateCredentialRotation,
+  credentialRotationPayload,
+  CREDENTIAL_REFERENCE_MAX_LENGTH,
   protocolLabel,
 } from "../src/domain/agentMarketplace.ts";
 
@@ -503,4 +506,37 @@ test("filterCatalog matches the openai_compatible protocol exactly", () => {
     filterCatalog(entries, { protocol: "a2a" }).map((item) => item.plugin_key),
     ["d"],
   );
+});
+
+test("isCredentialReference accepts the vault field fragment the backend resolves", () => {
+  assert.equal(isCredentialReference("vault://merchant/agent#token"), true);
+  assert.equal(isCredentialReference("env://PLUGIN_SECRET_TOKEN_V2"), true);
+});
+
+test("isCredentialReference enforces the credential_ref column bound", () => {
+  const prefix = "env://";
+  const atLimit = prefix + "A".repeat(CREDENTIAL_REFERENCE_MAX_LENGTH - prefix.length);
+  const pastLimit = atLimit + "A";
+  assert.equal(isCredentialReference(atLimit), true);
+  assert.equal(isCredentialReference(pastLimit), false);
+});
+
+test("isCredentialReference rejects references with an empty body", () => {
+  assert.equal(isCredentialReference("env://"), false);
+  assert.equal(isCredentialReference("://missing"), false);
+});
+
+test("validateCredentialRotation requires a non-plaintext reference", () => {
+  assert.equal(validateCredentialRotation("").ok, false);
+  assert.equal(validateCredentialRotation("   ").ok, false);
+  assert.equal(validateCredentialRotation("sk-abc123secret").ok, false);
+  assert.equal(validateCredentialRotation("plain-token").ok, false);
+  assert.equal(validateCredentialRotation("env://PLUGIN_SECRET_TOKEN_V2").ok, true);
+  assert.equal(validateCredentialRotation("vault://merchant/agent#token").ok, true);
+});
+
+test("credentialRotationPayload trims and sends only the reference", () => {
+  const payload = credentialRotationPayload("  env://PLUGIN_SECRET_TOKEN_V2  ");
+  assert.deepEqual(payload, { credential_ref: "env://PLUGIN_SECRET_TOKEN_V2" });
+  assert.deepEqual(Object.keys(payload), ["credential_ref"]);
 });

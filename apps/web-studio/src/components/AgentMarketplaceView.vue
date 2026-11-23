@@ -4,6 +4,7 @@ import {
   catalogInstallPayload,
   catalogStatusLabel,
   credentialHint,
+  credentialRotationPayload,
   declaredCapabilities,
   filterCatalog,
   installPayload,
@@ -12,6 +13,7 @@ import {
   statusTransition,
   summarizeInvocation,
   validateCatalogInstall,
+  validateCredentialRotation,
   validateInstall,
   visibleCapabilities,
   type InstallValidation,
@@ -28,6 +30,7 @@ import {
   getProjectAgentCapabilities,
   installAgentPlugin,
   installAgentPluginFromCatalog,
+  rotateAgentPluginCredential,
   setAgentPluginInstallationStatus,
   type AgentCapabilityResponse,
   type AgentPluginDefinition,
@@ -55,6 +58,8 @@ const catalogProtocol = ref("");
 const catalogInstalledOnly = ref(false);
 const catalogBusyKey = ref("");
 const catalogCredentialRefs = ref<Record<string, string>>({});
+const rotationRefs = ref<Record<string, string>>({});
+const rotationBusyKey = ref("");
 
 const entries = computed<MarketplaceEntry[]>(() =>
   mergeMarketplace(definitions.value, installations.value),
@@ -241,6 +246,40 @@ async function install(entry: MarketplaceEntry): Promise<void> {
   }
 }
 
+// Point a live installation at a new credential reference. The installation,
+// its grants and its bindings are untouched: rotation exists so an expired
+// token does not force a reinstall.
+async function rotateCredential(installationId: string, name: string): Promise<void> {
+  if (!installationId || !props.projectId) return;
+  const ref = rotationRefs.value[installationId] ?? "";
+  const validation = validateCredentialRotation(ref);
+  if (!validation.ok) {
+    error.value = validation.errors[0];
+    info.value = "";
+    return;
+  }
+  submitting.value = true;
+  rotationBusyKey.value = installationId;
+  error.value = "";
+  info.value = "";
+  try {
+    const payload = credentialRotationPayload(ref);
+    await rotateAgentPluginCredential(installationId, payload.credential_ref);
+    info.value = name + ": credential reference rotated.";
+    rotationRefs.value[installationId] = "";
+    await refresh();
+  } catch (cause) {
+    // Show the backend detail and its programmable code; the submitted
+    // reference is never echoed into the message or logged.
+    const code = apiErrorCode(cause);
+    const message = cause instanceof Error ? cause.message : "Credential rotation failed.";
+    error.value = code ? `${message} (${code})` : message;
+  } finally {
+    submitting.value = false;
+    rotationBusyKey.value = "";
+  }
+}
+
 async function changeStatus(entry: MarketplaceEntry, action: LifecycleAction): Promise<void> {
   const installation = entry.installation;
   if (!installation) return;
@@ -354,7 +393,30 @@ onMounted(() => void refresh());
               }}
             </small>
           </div>
-          <div class="installation-actions">
+          <div
+            v-if="entry.installation_id && entry.auth_required && entry.installation_status === 'installed'"
+            class="marketplace-rotation"
+          >
+            <el-input
+              :model-value="rotationRefs[entry.installation_id] ?? ''"
+              placeholder="env://PLUGIN_SECRET_MARKET_AGENT_TOKEN_V2"
+              spellcheck="false"
+              @update:model-value="rotationRefs[entry.installation_id] = $event"
+            />
+            <el-button
+              size="small"
+              plain
+              :loading="submitting && rotationBusyKey === entry.installation_id"
+              @click="rotateCredential(entry.installation_id, entry.name)"
+            >
+            Rotate credential
+          </el-button>
+            <small class="marketplace-credential-hint">
+              Replaces the reference only; grants and workflow bindings are kept.
+            </small>
+          </div>
+
+        <div class="installation-actions">
             <el-button
               v-if="!entry.installed"
               type="primary"
