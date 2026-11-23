@@ -26,7 +26,9 @@ from core.models import (
 
 _CAPABILITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 _PLUGIN_KEY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_CREDENTIAL_REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+_CREDENTIAL_REF_PATTERN = re.compile(
+    r"^[a-z][a-z0-9+.-]{1,31}://[A-Za-z0-9_:@-](?:[A-Za-z0-9_./:@-]{0,199})$"
+)
 _SENSITIVE_KEY_PARTS = (
     "password",
     "secret",

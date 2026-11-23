@@ -36,6 +36,7 @@ from core.agent_node_views import (
 from core.agent_plugin_views import (
     AgentPluginCatalogView,
     AgentPluginDetailView,
+    AgentCapabilityListView,
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
 )
@@ -405,6 +406,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-plugin-installations/",
         AgentPluginInstallationListCreateView.as_view(),
         name="agent-plugin-installations",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-capabilities/",
+        AgentCapabilityListView.as_view(),
+        name="agent-capability-list",
     ),
     path(
         "api/v1/agent-plugin-installations/<uuid:installation_id>/status/",
