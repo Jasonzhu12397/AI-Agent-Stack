@@ -3,6 +3,11 @@ export type UsageSnapshot = {
   monthly_limit: number;
   daily_used: number;
   monthly_used: number;
+  remaining_daily?: number | null;
+  remaining_monthly?: number | null;
+  reset_at?: string | null;
+  monthly_reset_at?: string | null;
+  limits_source?: string | null;
   period_start: string | null;
   period_end: string | null;
   history: { period: string; consumed_tokens: number; source: string }[];
@@ -76,6 +81,110 @@ export function formatAmount(cents: number, currency: string): string {
   return `${currency === "CNY" ? "¥" : currency + " "}${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }
 
+export type QuotaPeriod = "daily" | "monthly";
+export type QuotaState = "ok" | "warning" | "exhausted";
+
+const QUOTA_WARNING_RATIO = 0.8;
+
+function normalizePeriod(period: string | null | undefined): QuotaPeriod {
+  return period === "monthly" ? "monthly" : "daily";
+}
+
+function safeUsed(used: number): number {
+  return Number.isFinite(used) && used > 0 ? used : 0;
+}
+
+function safeLimit(limit: number): number {
+  return Number.isFinite(limit) && limit > 0 ? limit : 0;
+}
+
+/**
+ * Thresholds: >= 100% exhausted, >= 80% warning, otherwise ok. Boundaries are
+ * exact so 79.9% stays ok while 80.0% raises the warning state.
+ */
+export function quotaState(used: number, limit: number): QuotaState {
+  const ceiling = safeLimit(limit);
+  if (ceiling <= 0) return "ok";
+  const ratio = safeUsed(used) / ceiling;
+  if (ratio >= 1) return "exhausted";
+  if (ratio >= QUOTA_WARNING_RATIO) return "warning";
+  return "ok";
+}
+
+/**
+ * Remaining quota never renders negative: prefer the server-supplied remaining
+ * value when it is a non-negative number, otherwise derive `limit - used`.
+ */
+export function remainingQuota(
+  used: number,
+  limit: number,
+  remaining?: number | null,
+): number {
+  if (typeof remaining === "number" && Number.isFinite(remaining) && remaining >= 0) {
+    return Math.max(0, remaining);
+  }
+  return Math.max(0, safeLimit(limit) - safeUsed(used));
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** Render an ISO timestamp as local `YYYY-MM-DD HH:mm`; invalid input shows `—`. */
+export function formatResetAt(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+const PERIOD_COPY: Record<QuotaPeriod, string> = {
+  daily: "每日",
+  monthly: "每月",
+};
+
+/**
+ * User-facing quota copy. The exhausted state carries the reset time when the
+ * server provides one; missing reset time is never fabricated.
+ */
+export function quotaMessage(
+  state: QuotaState,
+  period: string | null | undefined,
+  options: { percent?: number; resetAt?: string | null } = {},
+): string {
+  const label = PERIOD_COPY[normalizePeriod(period)];
+  if (state === "exhausted") {
+    const reset = options.resetAt
+      ? `将于 ${formatResetAt(options.resetAt)} 重置，`
+      : "";
+    return `本期${label}额度已用尽，${reset}或升级套餐后继续使用。`;
+  }
+  if (state === "warning") {
+    const percent = Number.isFinite(options.percent ?? NaN) ? Math.round(options.percent ?? 0) : 0;
+    return `已使用 ${percent}%，接近${label}额度上限。`;
+  }
+  return `${label}额度使用正常。`;
+}
+
+/**
+ * Map budget-guard failures to a blocking copy that names the day/month
+ * period. Any other code falls back to the generic mapping; a 429 is never
+ * rendered as "no data".
+ */
+export function mapQuotaError(
+  code: string,
+  period?: string | null,
+  resetAt?: string | null,
+): string {
+  if (code === "TENANT_TOKEN_BUDGET_EXCEEDED") {
+    const label = PERIOD_COPY[normalizePeriod(period)];
+    const reset = resetAt ? `，将于 ${formatResetAt(resetAt)} 重置` : "";
+    return `${label}额度已用尽，本次请求已被阻断${reset}，升级套餐后可继续使用。`;
+  }
+  return describeError(code);
+}
+
 export function describeError(code: string): string {
   switch (code) {
     case "PAYMENT_PROVIDER_NOT_CONFIGURED":
@@ -96,6 +205,9 @@ export const pageLabels = [
   "Billing period",
   "Daily quota",
   "Monthly quota",
+  "Remaining",
+  "Resets at",
+  "Quota exhausted: requests that consume quota are blocked.",
   "Usage history",
   "Orders",
   "No subscription is active",

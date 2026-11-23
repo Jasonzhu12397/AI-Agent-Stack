@@ -8,6 +8,7 @@ from core.billing_views import (
     OrderRefundView,
     PaymentCallbackView,
     PlansView,
+    ReconciliationView,
     SubscriptionCancelView,
     SubscriptionRenewView,
     SubscriptionSettleView,
@@ -76,6 +77,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/billing/orders/<uuid:order_id>/refund/",
         OrderRefundView.as_view(),
         name="billing-order-refund",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/reconciliation/",
+        ReconciliationView.as_view(),
+        name="billing-reconciliation",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/billing/payments/<str:channel>/callback/",

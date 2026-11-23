@@ -9,10 +9,15 @@ import { fetchSubscriptionBundle } from "./api";
 import {
   describeError,
   formatAmount,
+  formatResetAt,
   formatTokens,
   isPaid,
+  mapQuotaError,
   orderStatusLabel,
   pageLabels,
+  quotaMessage,
+  quotaState,
+  remainingQuota,
   usagePercent,
 } from "./logic";
 
@@ -27,6 +32,36 @@ const resource = useSettingsResource(async () => {
 const usage = computed(() => resource.data.value?.usage ?? null);
 const orders = computed(() => resource.data.value?.orders ?? []);
 const subscription = computed(() => resource.data.value?.subscription ?? null);
+
+const dailyState = computed(() =>
+  usage.value ? quotaState(usage.value.daily_used, usage.value.daily_limit) : "ok",
+);
+const monthlyState = computed(() =>
+  usage.value ? quotaState(usage.value.monthly_used, usage.value.monthly_limit) : "ok",
+);
+const dailyRemaining = computed(() =>
+  usage.value
+    ? remainingQuota(usage.value.daily_used, usage.value.daily_limit, usage.value.remaining_daily)
+    : 0,
+);
+const monthlyRemaining = computed(() =>
+  usage.value
+    ? remainingQuota(usage.value.monthly_used, usage.value.monthly_limit, usage.value.remaining_monthly)
+    : 0,
+);
+const dailyResetAt = computed(() => usage.value?.reset_at ?? null);
+const monthlyResetAt = computed(() => usage.value?.monthly_reset_at ?? null);
+
+const quotaBlocked = computed(
+  () => dailyState.value === "exhausted" || monthlyState.value === "exhausted",
+);
+const blockedMessage = computed(() => {
+  if (!usage.value) return "";
+  if (dailyState.value === "exhausted") {
+    return mapQuotaError("TENANT_TOKEN_BUDGET_EXCEEDED", "daily", dailyResetAt.value);
+  }
+  return mapQuotaError("TENANT_TOKEN_BUDGET_EXCEEDED", "monthly", monthlyResetAt.value);
+});
 
 onMounted(() => void resource.reload());
 void pageLabels;
@@ -61,18 +96,71 @@ void pageLabels;
       <el-empty v-else description="No subscription is active. Nothing is billed for this tenant." :image-size="64" />
     </el-card>
 
+    <el-alert
+      v-if="quotaBlocked"
+      class="settings-quota-alert"
+      type="error"
+      :title="t('Quota exhausted: requests that consume quota are blocked.')"
+      :description="blockedMessage"
+      show-icon
+    />
+
     <el-card v-if="usage" class="settings-card" shadow="never">
       <template #header>{{ t("Usage values are authoritative") }}</template>
       <div class="settings-usage-row">
-        <div>
-          <p class="settings-usage-label">{{ t("Daily quota") }}</p>
-          <p>{{ formatTokens(usage.daily_used) }} / {{ formatTokens(usage.daily_limit) }} tokens</p>
-          <el-progress :percentage="usagePercent(usage.daily_used, usage.daily_limit)" :stroke-width="10" />
+        <div :class="['settings-quota-cell', `settings-quota-cell--${dailyState}`]">
+          <p class="settings-usage-label">
+            {{ t("Daily quota") }}
+            <el-tag
+              v-if="dailyState !== 'ok'"
+              :type="dailyState === 'exhausted' ? 'danger' : 'warning'"
+              effect="plain"
+            >
+              {{
+                quotaMessage(dailyState, "daily", {
+                  percent: usagePercent(usage.daily_used, usage.daily_limit),
+                  resetAt: dailyResetAt,
+                })
+              }}
+            </el-tag>
+          </p>
+          <p>
+            {{ formatTokens(usage.daily_used) }} / {{ formatTokens(usage.daily_limit) }} tokens
+            · {{ t("Remaining") }} {{ formatTokens(dailyRemaining) }}
+          </p>
+          <el-progress
+            :percentage="usagePercent(usage.daily_used, usage.daily_limit)"
+            :status="dailyState === 'exhausted' ? 'exception' : dailyState === 'warning' ? 'warning' : undefined"
+            :stroke-width="10"
+          />
+          <p class="muted">{{ t("Resets at") }}: {{ formatResetAt(dailyResetAt) }}</p>
         </div>
-        <div>
-          <p class="settings-usage-label">{{ t("Monthly quota") }}</p>
-          <p>{{ formatTokens(usage.monthly_used) }} / {{ formatTokens(usage.monthly_limit) }} tokens</p>
-          <el-progress :percentage="usagePercent(usage.monthly_used, usage.monthly_limit)" :stroke-width="10" />
+        <div :class="['settings-quota-cell', `settings-quota-cell--${monthlyState}`]">
+          <p class="settings-usage-label">
+            {{ t("Monthly quota") }}
+            <el-tag
+              v-if="monthlyState !== 'ok'"
+              :type="monthlyState === 'exhausted' ? 'danger' : 'warning'"
+              effect="plain"
+            >
+              {{
+                quotaMessage(monthlyState, "monthly", {
+                  percent: usagePercent(usage.monthly_used, usage.monthly_limit),
+                  resetAt: monthlyResetAt,
+                })
+              }}
+            </el-tag>
+          </p>
+          <p>
+            {{ formatTokens(usage.monthly_used) }} / {{ formatTokens(usage.monthly_limit) }} tokens
+            · {{ t("Remaining") }} {{ formatTokens(monthlyRemaining) }}
+          </p>
+          <el-progress
+            :percentage="usagePercent(usage.monthly_used, usage.monthly_limit)"
+            :status="monthlyState === 'exhausted' ? 'exception' : monthlyState === 'warning' ? 'warning' : undefined"
+            :stroke-width="10"
+          />
+          <p class="muted">{{ t("Resets at") }}: {{ formatResetAt(monthlyResetAt) }}</p>
         </div>
       </div>
       <p v-if="usage.period_start || usage.period_end" class="muted">

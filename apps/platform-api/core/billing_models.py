@@ -141,6 +141,7 @@ class Order(models.Model):
         PAID = "paid", "Paid"
         FAILED = "failed", "Failed"
         CLOSED = "closed", "Closed"
+        PARTIAL_REFUNDED = "partial_refunded", "Partially Refunded"
         REFUNDED = "refunded", "Refunded"
 
     class Channel(models.TextChoices):
@@ -149,10 +150,13 @@ class Order(models.Model):
 
     # Allowed forward transitions. Repeated callbacks for a terminal state are
     # idempotent no-ops; anything else moves state backwards and is rejected.
+    # This table is the single refund state machine shared by every channel;
+    # adapters must not define a second one.
     TRANSITIONS = {
         Status.CREATED: {Status.PENDING, Status.FAILED, Status.CLOSED},
         Status.PENDING: {Status.PAID, Status.FAILED, Status.CLOSED},
-        Status.PAID: {Status.REFUNDED},
+        Status.PAID: {Status.PARTIAL_REFUNDED, Status.REFUNDED},
+        Status.PARTIAL_REFUNDED: {Status.REFUNDED},
         Status.FAILED: set(),
         Status.CLOSED: set(),
         Status.REFUNDED: set(),
@@ -171,6 +175,9 @@ class Order(models.Model):
         default=Status.CREATED,
     )
     amount_cents = models.PositiveBigIntegerField(default=0)
+    # Cumulative cents refunded across partial and full refunds. The remaining
+    # refundable balance is ``amount_cents - refunded_cents``.
+    refunded_cents = models.PositiveBigIntegerField(default=0)
     currency = models.CharField(max_length=8, default="CNY")
     channel = models.CharField(max_length=16, choices=Channel.choices)
     provider_trade_no = models.CharField(max_length=128, blank=True, default="")
@@ -264,3 +271,104 @@ class EntitlementGrant(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Entitlement grants cannot be deleted through the model API.")
+
+
+class PaymentTransactionAudit(models.Model):
+    """Append-only ledger row for provider requests and callbacks.
+
+    Every outbound payment request and every verified or rejected callback is
+    recorded here alongside the chain audit event. The metadata dict is
+    sanitized upstream: it carries channel, trade numbers and amounts only,
+    never private keys, symmetric keys, certificates or PEM material.
+    """
+
+    class Direction(models.TextChoices):
+        REQUEST = "request", "Request"
+        CALLBACK = "callback", "Callback"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        "core.Tenant",
+        on_delete=models.SET_NULL,
+        related_name="payment_transaction_audits",
+        null=True,
+        blank=True,
+    )
+    order = models.ForeignKey(
+        "Order",
+        on_delete=models.SET_NULL,
+        related_name="payment_transaction_audits",
+        null=True,
+        blank=True,
+    )
+    channel = models.CharField(max_length=16)
+    direction = models.CharField(max_length=16, choices=Direction.choices)
+    event_type = models.CharField(max_length=80)
+    status = models.CharField(max_length=32, blank=True, default="")
+    amount_cents = models.PositiveBigIntegerField(default=0)
+    provider_trade_no = models.CharField(max_length=128, blank=True, default="")
+    error_code = models.CharField(max_length=80, blank=True, default="")
+    metadata = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Payment audit rows are append-only and cannot be updated.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Payment audit rows cannot be deleted through the model API.")
+
+
+class EntitlementReclaim(models.Model):
+    """Append-only ledger row clawing back token quota on a refund.
+
+    A refund reclaims a proportional slice of the grant it originated from;
+    the tenant budget limit may only move through this ledger record, exactly
+    as grants are the only write path that raises the limit. One refund
+    reference binds to exactly one reclaim row: replays of the same refund
+    (active refund repeated, or a replayed provider refund callback) reuse the
+    existing row and never deduct the budget twice.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        "core.Tenant",
+        on_delete=models.CASCADE,
+        related_name="entitlement_reclaims",
+    )
+    grant = models.ForeignKey(
+        EntitlementGrant,
+        on_delete=models.PROTECT,
+        related_name="reclaims",
+        null=True,
+        blank=True,
+    )
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.PROTECT,
+        related_name="reclaims",
+    )
+    # Provider refund number (or the local deterministic reference when the
+    # provider returns none). Unique: the idempotency key for the reclaim.
+    refund_reference = models.CharField(max_length=160, unique=True)
+    refund_cents = models.PositiveBigIntegerField(default=0)
+    tokens = models.PositiveBigIntegerField(default=0)
+    monthly_limit_before = models.PositiveBigIntegerField(default=0)
+    monthly_limit_after = models.PositiveBigIntegerField(default=0)
+    reason = models.CharField(max_length=160, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Entitlement reclaims are append-only and cannot be updated.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Entitlement reclaim rows cannot be deleted through the model API.")

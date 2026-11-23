@@ -1,23 +1,41 @@
-"""WeChat Pay APIv3 adapter skeleton.
+"""WeChat Pay APIv3 adapter with real outbound HTTP and signature path.
 
-Implements the real v3 protocol shapes: the JSON下单 order payload, the
-``Wechatpay-Serial`` / ``Wechatpay-Signature`` / ``Wechatpay-Timestamp`` /
-``Wechatpay-Nonce`` header verification, AES-256-GCM resource decryption,
-order query and refund entry points. Network transport is intentionally left
-to a thin helper so the protocol surface stays testable offline.
+Request signing follows the v3 spec: the signature string is
+``METHOD\\nTARGET\\nTIMESTAMP\\nNONCE\\nBODY\\n`` signed with the merchant
+private key under RSA-SHA256 (PKCS#1 v1.5), and the result travels in a
+``WECHATPAY2-SHA256-RSA2048`` Authorization header.
 
-All credentials are ``env://`` / ``vault://`` references resolved at call
-time; missing references keep the provider out of the registry.
+Callback verification is fail-closed: the ``Wechatpay-Serial`` header must
+match the configured platform certificate serial number, the platform cert
+public key verifies ``timestamp\\nnonce\\nbody\\n``, and the ``resource``
+field is decrypted with AES-256-GCM using the api_v3 key.
+
+All credentials are ``env://`` / ``vault://`` references resolved at call time.
+Neither the private key, the api_v3 key nor any PEM material is copied into
+returned receipts, logs or audit metadata.
 """
+
+from __future__ import annotations
 
 import base64
 import json
+import time
+import uuid
 
+import httpx
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from core.payments.base import CallbackResult, PaymentProvider, resolve_credential_ref
+from core.payments.base import (
+    CallbackResult,
+    PaymentProvider,
+    PaymentProviderError,
+    ProviderOrderState,
+    resolve_credential_ref,
+)
+from core.payments.http import build_client, send_with_retry
 
 # Trade state (v3 `trade_state`) mapped to the internal order status.
 _TRADE_STATE_MAP = {
@@ -26,6 +44,8 @@ _TRADE_STATE_MAP = {
     "CLOSED": "closed",
     "REVOKED": "refunded",
 }
+
+_DEFAULT_BASE_URL = "https://api.mch.weixin.qq.com"
 
 
 class WechatPayV3Provider(PaymentProvider):
@@ -40,6 +60,8 @@ class WechatPayV3Provider(PaymentProvider):
         private_key_ref: str = "env://WECHATPAY_PRIVATE_KEY",
         platform_cert_ref: str = "env://WECHATPAY_PLATFORM_CERT",
         notify_url_ref: str = "env://WECHATPAY_NOTIFY_URL",
+        base_url_ref: str = "env://WECHATPAY_BASE_URL",
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._refs = {
             "appid": appid_ref,
@@ -49,20 +71,109 @@ class WechatPayV3Provider(PaymentProvider):
             "private_key": private_key_ref,
             "platform_cert": platform_cert_ref,
             "notify_url": notify_url_ref,
+            "base_url": base_url_ref,
         }
+        self._transport = transport
+        self._client: httpx.Client | None = None
 
     def _resolve(self, key: str) -> str | None:
         return resolve_credential_ref(self._refs[key])
 
     def is_configured(self) -> bool:
-        required = ("appid", "mchid", "api_v3_key", "serial_no", "private_key")
+        required = (
+            "appid",
+            "mchid",
+            "api_v3_key",
+            "serial_no",
+            "private_key",
+            "platform_cert",
+        )
         return all(self._resolve(key) is not None for key in required)
+
+    # ------------------------------------------------------------- internals
+
+    def _client_instance(self) -> httpx.Client:
+        if self._client is None:
+            self._client = build_client(transport=self._transport)
+        return self._client
+
+    def _base_url(self) -> str:
+        return (self._resolve("base_url") or _DEFAULT_BASE_URL).rstrip("/")
+
+    def _load_private_key(self):
+        pem = self._resolve("private_key") or ""
+        return serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
+
+    def _platform_certificate(self):
+        pem = self._resolve("platform_cert") or ""
+        return x509.load_pem_x509_certificate(pem.encode("utf-8"))
+
+    def _signed_request(
+        self,
+        method: str,
+        path: str,
+        query: str,
+        body: dict | None,
+    ) -> dict:
+        mchid = self._resolve("mchid") or ""
+        merchant_serial = self._resolve("serial_no") or ""
+        body_text = (
+            json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body else ""
+        )
+        body_bytes = body_text.encode("utf-8")
+
+        timestamp = str(int(time.time()))
+        nonce = uuid.uuid4().hex
+        target = f"{path}?{query}" if query else path
+        message = f"{method}\n{target}\n{timestamp}\n{nonce}\n{body_text}\n"
+
+        private_key = self._load_private_key()
+        signature = base64.b64encode(
+            private_key.sign(
+                message.encode("utf-8"),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+        ).decode("utf-8")
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": (
+                f'WECHATPAY2-SHA256-RSA2048 mchid="{mchid}",'
+                f'nonce_str="{nonce}",timestamp="{timestamp}",'
+                f'serial_no="{merchant_serial}",signature="{signature}"'
+            ),
+        }
+        if body_bytes:
+            headers["Content-Type"] = "application/json"
+
+        response = send_with_retry(
+            self._client_instance(),
+            method,
+            f"{self._base_url()}{target}",
+            headers=headers,
+            content=body_bytes,
+        )
+        if response.status_code >= 400:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_UPSTREAM_ERROR",
+                f"WeChat Pay returned HTTP {response.status_code}.",
+            )
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise PaymentProviderError(
+                "PAYMENT_PROVIDER_UPSTREAM_ERROR",
+                "WeChat Pay returned an unparsable response.",
+            ) from exc
 
     # ------------------------------------------------------------------ orders
 
     def create_payment(self, order) -> dict:
-        appid = self._resolve("appid")
-        mchid = self._resolve("mchid")
+        appid = self._resolve("appid") or ""
+        mchid = self._resolve("mchid") or ""
         notify_url = self._resolve("notify_url") or ""
         payload = {
             "appid": appid,
@@ -72,29 +183,52 @@ class WechatPayV3Provider(PaymentProvider):
             "notify_url": notify_url,
             "amount": {"total": order.amount_cents, "currency": order.currency},
         }
+        data = self._signed_request("POST", "/v3/pay/transactions/native", "", payload)
         return {
             "provider": "wechat_v3",
             "trade_no": str(order.id),
-            "order_payload": payload,
+            "prepay_id": data.get("prepay_id", ""),
+            "code_url": data.get("code_url", ""),
         }
 
-    def query_order(self, order) -> str:
-        trade_no = order.provider_trade_no or str(order.id)
-        # GET /v3/pay/transactions/out-trade-no/{out_trade_no}?mchid=...
-        return f"wechat://out-trade-no/{trade_no}"
+    def query_order(self, order) -> ProviderOrderState:
+        out_trade_no = str(order.id)
+        mchid = self._resolve("mchid") or ""
+        data = self._signed_request(
+            "GET",
+            f"/v3/pay/transactions/out-trade-no/{out_trade_no}",
+            f"mchid={mchid}",
+            None,
+        )
+        amount = data.get("amount") or {}
+        return ProviderOrderState(
+            status=_TRADE_STATE_MAP.get(data.get("trade_state", ""), "unknown"),
+            amount_cents=amount.get("total"),
+        )
 
-    def refund(self, order, reason: str) -> dict:
+    def refund(
+        self, order, reason: str, amount_cents: int | None = None
+    ) -> dict:
+        refund_cents = amount_cents if amount_cents is not None else order.amount_cents
         payload = {
             "out_trade_no": str(order.id),
             "out_refund_no": f"refund-{order.id}",
             "reason": reason[:200],
             "amount": {
-                "refund": order.amount_cents,
+                "refund": refund_cents,
                 "total": order.amount_cents,
                 "currency": order.currency,
             },
         }
-        return {"provider": "wechat_v3", "refund_payload": payload}
+        data = self._signed_request(
+            "POST", "/v3/refund/domestic/refunds", "", payload
+        )
+        return {
+            "provider": "wechat_v3",
+            "refund_id": data.get("refund_id", ""),
+            "status": data.get("status", ""),
+            "out_refund_no": payload["out_refund_no"],
+        }
 
     # ------------------------------------------------------------- callbacks
 
@@ -107,24 +241,36 @@ class WechatPayV3Provider(PaymentProvider):
         )
         missing = [name for name in required if not headers.get(name)]
         if missing:
-            return CallbackResult(ok=False, message=f"missing headers: {', '.join(missing)}")
+            return CallbackResult(
+                ok=False, message=f"missing headers: {', '.join(missing)}"
+            )
 
-        platform_cert_pem = self._resolve("platform_cert")
         api_v3_key = self._resolve("api_v3_key")
-        if not platform_cert_pem or not api_v3_key:
-            # Fail closed: without the platform certificate we cannot prove
-            # the callback came from WeChat Pay.
-            return CallbackResult(ok=False, message="platform certificate not configured")
+        if not api_v3_key:
+            return CallbackResult(ok=False, message="api_v3 key not configured")
+
+        try:
+            certificate = self._platform_certificate()
+        except Exception as exc:  # noqa: BLE001 - fail closed on bad cert material
+            return CallbackResult(ok=False, message=f"platform certificate invalid: {exc}")
+
+        trusted_serial = format(certificate.serial_number, "x")
+        header_serial = str(headers["Wechatpay-Serial"]).strip().lower()
+        if header_serial != trusted_serial:
+            return CallbackResult(
+                ok=False, message="untrusted platform certificate serial"
+            )
 
         timestamp = headers["Wechatpay-Timestamp"]
         nonce = headers["Wechatpay-Nonce"]
-        signature = base64.b64decode(headers["Wechatpay-Signature"])
-        message = f"{timestamp}\n{nonce}\n".encode() + body + b"\n"
-
         try:
-            public_key = serialization.load_pem_public_key(
-                platform_cert_pem.encode("utf-8")
-            )
+            signature = base64.b64decode(headers["Wechatpay-Signature"])
+        except ValueError as exc:
+            return CallbackResult(ok=False, message=f"signature decode failed: {exc}")
+
+        message = f"{timestamp}\n{nonce}\n".encode() + body + b"\n"
+        public_key = certificate.public_key()
+        try:
             public_key.verify(
                 signature,
                 message,
@@ -138,15 +284,17 @@ class WechatPayV3Provider(PaymentProvider):
             envelope = json.loads(body.decode("utf-8"))
             resource = envelope["resource"]
             plaintext = self._decrypt_resource(resource, api_v3_key)
-        except (ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - any parse/decrypt failure fails closed
             return CallbackResult(ok=False, message=f"resource decode failed: {exc}")
 
-        trade_state = plaintext.get("trade_state", "unknown")
+        amount = plaintext.get("amount") or {}
+        amount_total = amount.get("total")
         return CallbackResult(
             ok=True,
-            status=_TRADE_STATE_MAP.get(trade_state, "unknown"),
+            status=_TRADE_STATE_MAP.get(plaintext.get("trade_state", ""), "unknown"),
             order_reference=plaintext.get("out_trade_no"),
             raw=plaintext,
+            amount_cents=amount_total,
         )
 
     @staticmethod
