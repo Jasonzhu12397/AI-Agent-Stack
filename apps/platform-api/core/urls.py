@@ -594,4 +594,5 @@ urlpatterns = [
         ModelTestView.as_view(),
         name="model-test",
     ),
+    path("", __import__("django.urls", fromlist=["include"]).include("core.billing_urls")),
 ]
