@@ -8,6 +8,18 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- The backup disk verdict ignored bytes already held by in-flight `*.db.partial`
+  staging files, so a volume that fit the database alone could be refused only
+  after a half-written snapshot filled it. The pre-write check now counts staging
+  occupancy (partials plus pending-publish records registered for this cluster)
+  alongside the database size and the `min_free_bytes` floor, reports
+  `free_bytes` / `occupancy_bytes` / `required_bytes` / verdict in the `disk`
+  block, and re-measures the free floor after the write; a post-write shortfall
+  fails with `ETCD_BACKUP_DISK_POST_WRITE_LOW` before any pruning. A zero floor
+  remains measure-only. Cleanup failures are no longer swallowed: a `rm` the pod
+  refused is recorded in `cleanup_failures` with path and error, left on disk for
+  the next sweep to retry, while successful removals still report only through
+  `swept_partials`.
 - The "who must be kept" protect set is now built in exactly one place:
   `core.etcd_backup_policy.protected_entries` returns source-tagged snapshots
   (`rollback_active`, `rollback_outcome_unknown`, `upgrade_reported`), and the

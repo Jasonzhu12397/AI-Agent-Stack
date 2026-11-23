@@ -340,6 +340,22 @@ verifies the file, so a listing never shows a truncated backup. A failed verify
 removes the partial file and stops before retention, which means a broken backup
 never causes an old good one to be deleted.
 
+The pre-write disk verdict counts the bytes already held by in-flight
+`*.db.partial` files (and the pending-publish records that register them), not
+just the live database size: `required` is database + staging occupancy + the
+`min_free_bytes` floor, and the report's `disk` block carries `free_bytes`,
+`occupancy_bytes`, `required_bytes`, the verdict and its code. After the snapshot
+is written the free floor is re-measured once; a post-write shortfall stops the
+run with `ETCD_BACKUP_DISK_POST_WRITE_LOW` instead of pruning afterwards. A
+`min_free_bytes` of zero stays measure-only: measurements are reported, but no
+post-write floor is reserved.
+
+A cleanup that fails (a `rm` of a staging file or sidecar that the pod refused)
+is no longer swallowed: the failure is listed in `cleanup_failures` with its
+path and error, and the file stays on disk so the next sweep retries it. A
+successful removal still reports only in `swept_partials`, whose semantics are
+unchanged.
+
 Retention is expressed in the request, not in a config file, so the scheduler is
 the single place that decides policy: `keep_count` (default 12, floor 2, ceiling
 168), `keep_max_age_hours` (default 8760, i.e. count-only unless a caller asks
