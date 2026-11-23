@@ -2984,3 +2984,69 @@ def test_a_backup_that_cannot_be_queued_does_not_lose_the_report_of_a_change(
         _queue_change_backup(command)
 
     assert queued.call_args.kwargs["trigger"] == "change"
+
+
+@pytest.mark.django_db
+def test_a_change_without_a_queued_backup_says_why_in_the_audit_log(node_workspace):
+    from unittest.mock import patch
+
+    from core.agent_node_views import _queue_change_backup
+    from core.models import AuditEvent, ClusterDeployment
+
+    user, tenant, project, _ = node_workspace
+    eph = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="eph-for-reason",
+        node_type=AgentNode.NodeType.EPH_NODE,
+        credential_hash="e" * 64,
+    )
+    deployment = ClusterDeployment.objects.create(
+        tenant=tenant,
+        project=project,
+        eph_node=eph,
+        requested_by=user,
+        cluster_name="edge-lab",
+        kubernetes_version="v1.34.3",
+        idempotency_key="reason-audit",
+        status=ClusterDeployment.Status.SUCCEEDED,
+    )
+    command = AgentCommand.objects.create(
+        tenant=tenant,
+        project=project,
+        node=eph,
+        command_type="cluster.kubernetes.version.upgrade",
+        payload={"cluster_name": "edge-lab"},
+        status=AgentCommand.Status.SUCCEEDED,
+        result={"upgrade_performed": True},
+        requested_by=user,
+        deployment=deployment,
+    )
+
+    with patch(
+        "core.agent_node_views.queue_backup",
+        return_value=(None, False, "ETCD_BACKUP_NO_TARGET_AGENT"),
+    ):
+        _queue_change_backup(command)
+
+    event = AuditEvent.objects.get(
+        event_type="cluster.etcd_backup.change_not_queued",
+        resource_id=deployment.id,
+    )
+    assert event.metadata["reason"] == "ETCD_BACKUP_NO_TARGET_AGENT"
+
+    # A policy that deliberately switches backups off is a decision, not a
+    # failure, and must not fill the audit log.
+    AuditEvent.objects.filter(
+        event_type="cluster.etcd_backup.change_not_queued"
+    ).delete()
+    with patch(
+        "core.agent_node_views.queue_backup",
+        return_value=(None, False, "ETCD_BACKUP_DISABLED"),
+    ):
+        _queue_change_backup(command)
+
+    assert not AuditEvent.objects.filter(
+        event_type="cluster.etcd_backup.change_not_queued"
+    ).exists()

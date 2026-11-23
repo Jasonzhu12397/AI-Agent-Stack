@@ -3172,7 +3172,7 @@ def _queue_change_backup(command) -> None:
     deployment = command.deployment
     try:
         with transaction.atomic():
-            queue_backup(
+            _command, created, reason = queue_backup(
                 deployment,
                 requested_by=command.requested_by,
                 trigger="change",
@@ -3194,6 +3194,22 @@ def _queue_change_backup(command) -> None:
             )
         except Exception:  # noqa: BLE001 - the audit must not resurrect the failure
             logger.exception("could not audit the failed backup queue")
+        return
+    if created or not reason:
+        return
+    # Switched off by policy is a decision; anything else is a configuration
+    # this change just went through without a snapshot of itself.
+    if reason != "ETCD_BACKUP_DISABLED":
+        record_audit_event(
+            None,
+            deployment.tenant,
+            "cluster.etcd_backup.change_not_queued",
+            "cluster_deployment",
+            deployment.id,
+            project=deployment.project,
+            outcome="failure",
+            metadata={"command_id": str(command.id), "reason": reason},
+        )
 
 
 class AgentProjectCommandListView(APIView):

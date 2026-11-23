@@ -39,6 +39,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The staging-file sweep only removes `*.db.partial` files it can attribute to
   this cluster, so a run still writing under another cluster name in a shared
   backup directory is not deleted halfway.
+- A change that could not queue its snapshot for any reason other than the
+  policy being off is audited as `cluster.etcd_backup.change_not_queued`, so a
+  missing post-change backup is explainable later.
 - `enabled` must be a boolean: a policy request carrying `"false"` is refused with
   `ETCD_BACKUP_ENABLED_INVALID` instead of switching backups on through
   `bool("false")`, and a hand-edited spec value is reported and skipped rather
