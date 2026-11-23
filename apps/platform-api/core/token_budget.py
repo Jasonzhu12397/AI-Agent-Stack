@@ -28,15 +28,72 @@ def _period_usage(tenant_id, start, now):
     return settled + reserved
 
 
-def get_tenant_token_usage(tenant_id, now=None):
+def local_day_bounds(now=None):
+    """Return ``(day_start, day_end)`` on the local-timezone day boundary.
+
+    Shares the exact daily boundary used by :func:`get_tenant_token_usage`;
+    no second time convention is introduced for the usage payload.
+    """
     current_time = now or timezone.now()
     local_now = timezone.localtime(current_time)
     day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return day_start, day_start + timedelta(days=1)
+
+
+def get_tenant_token_usage(tenant_id, now=None):
+    current_time = now or timezone.now()
+    day_start, _ = local_day_bounds(current_time)
     month_start = day_start.replace(day=1)
     return {
         "daily_used": _period_usage(tenant_id, day_start, current_time),
         "monthly_used": _period_usage(tenant_id, month_start, current_time),
     }
+
+
+def _usage_source_ref(row: TenantTokenUsage) -> str:
+    if row.scope_ref:
+        return row.scope_ref
+    if row.agent_run_id:
+        return "agent"
+    return "workflow"
+
+
+def get_tenant_usage_history(tenant_id):
+    """Settled consumption grouped by local month and recorded source.
+
+    Only settled ledger rows contribute: reserved or released reservations
+    are not projected into the history. Every ``consumed_tokens`` value is
+    the real ledger total aggregated per ``(period, source)``; it is never
+    estimated, copied from the daily/monthly snapshot, or fabricated for an
+    empty ledger.
+    """
+    rows = (
+        TenantTokenUsage.objects.filter(
+            tenant_id=tenant_id,
+            status=TenantTokenUsage.Status.SETTLED,
+        )
+        .exclude(settled_at__isnull=True)
+        .only(
+            "scope_ref",
+            "agent_run_id",
+            "workflow_run_id",
+            "consumed_tokens",
+            "settled_at",
+        )
+    )
+    grouped: dict[tuple[str, str], int] = {}
+    for row in rows:
+        period = timezone.localtime(row.settled_at).strftime("%Y-%m")
+        source = _usage_source_ref(row)
+        grouped[(period, source)] = grouped.get((period, source), 0) + int(
+            row.consumed_tokens
+        )
+    return [
+        {"period": period, "source": source, "consumed_tokens": consumed}
+        for (period, source), consumed in sorted(
+            grouped.items(), key=lambda kv: kv[0][0], reverse=True
+        )
+    ]
 
 
 @transaction.atomic

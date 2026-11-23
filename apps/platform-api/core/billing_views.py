@@ -21,7 +21,11 @@ from core.billing_models import EntitlementGrant, Order, Plan, Subscription
 from core.models import AuditEvent, ModelProvider, Tenant, TenantTokenBudget
 from core.payments import registry
 from core.permissions import IsTenantAdmin
-from core.token_budget import get_tenant_token_usage
+from core.token_budget import (
+    get_tenant_token_usage,
+    get_tenant_usage_history,
+    local_day_bounds,
+)
 
 SUPPORTED_CHANNELS = ("wechat", "alipay")
 
@@ -173,8 +177,9 @@ class UsageView(TenantScopedView):
         tenant = self.get_tenant()
         budget, _ = TenantTokenBudget.objects.get_or_create(tenant=tenant)
         usage = get_tenant_token_usage(tenant.id)
+        day_start, day_end = local_day_bounds()
         grants = EntitlementGrant.objects.filter(tenant=tenant).order_by("-created_at")
-        history = [
+        grant_history = [
             {
                 "id": str(grant.id),
                 "order": str(grant.order_id),
@@ -191,7 +196,10 @@ class UsageView(TenantScopedView):
                 "daily_limit": budget.daily_limit,
                 "monthly_limit": budget.monthly_limit,
                 **usage,
-                "history": history,
+                "period_start": day_start.isoformat(),
+                "period_end": day_end.isoformat(),
+                "history": get_tenant_usage_history(tenant.id),
+                "grants": grant_history,
             }
         )
 
