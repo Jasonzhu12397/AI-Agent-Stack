@@ -143,3 +143,50 @@ def test_authorized_account_model_appears_in_chat_context(workspace):
     )
     assert row["account"]["linked"] is True
     assert row["account"]["remaining_today"] > 0
+
+
+def _config_for(provider):
+    model = provider.models.first() or ModelConfig.objects.create(
+        provider=provider,
+        model_name="gpt-4o-mini",
+        version=1,
+        display_name="GPT-4o mini",
+        capabilities=["chat"],
+    )
+    return model
+
+
+@pytest.mark.django_db
+def test_rejected_key_reports_the_credential_not_an_outage(workspace, monkeypatch):
+    """A 401 from the platform means "paste a new key", not "provider is down"."""
+
+    _tenant, _project, provider = workspace
+    member = _member("badkey")
+    provider_accounts.link_account(user=member, provider=provider, credential_ref="sk-revoked")
+    guard = provider_accounts.AccountTokenGuard(
+        link=provider_accounts.active_link(member, provider)
+    )
+    gateway = ModelGateway(guard=guard, account=guard)
+
+    def _raise(*_args, **_kwargs):
+        from urllib.error import HTTPError
+
+        raise HTTPError("https://api.openai.com/v1/chat/completions", 401, "Unauthorized", {}, None)
+
+    import core.model_gateway as gateway_module
+
+    monkeypatch.setattr(
+        gateway_module, "build_opener", lambda *_a, **_k: type("O", (), {"open": _raise})()
+    )
+
+    with pytest.raises(ModelGatewayError) as caught:
+        gateway.complete(
+            idempotency_key="test-credential-rejected",
+            model_config=_config_for(provider),
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=64,
+            timeout_seconds=5,
+        )
+
+    assert caught.value.code == "MODEL_CREDENTIAL_REJECTED"
+    assert caught.value.retryable is False

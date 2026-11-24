@@ -464,6 +464,16 @@ class ModelGateway:
                 )
             payload = json.loads(raw_payload.decode("utf-8"))
         except HTTPError as exc:
+            if exc.code in (401, 403):
+                # The platform answered, so the transport and URL are fine:
+                # only the member's own credential is wrong, and the fix is to
+                # paste a fresh key rather than to investigate the network.
+                raise ModelGatewayError(
+                    "MODEL_CREDENTIAL_REJECTED",
+                    f"{provider.name} rejected the account credential (HTTP {exc.code}). "
+                    "Paste a new key from the platform's API page.",
+                    retryable=False,
+                ) from exc
             raise ModelGatewayError(
                 "MODEL_PROVIDER_HTTP_ERROR",
                 f"The model provider returned HTTP {exc.code}.",

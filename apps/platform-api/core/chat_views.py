@@ -515,8 +515,15 @@ def _generate_reply(request, thread, model_config, context):
             status.HTTP_402_PAYMENT_REQUIRED,
         )
     except ModelGatewayError as exc:
+        # A rejected credential is the member's own account, not an outage, so
+        # the composer can point at the authorize flow instead of "try later".
+        http_status = (
+            status.HTTP_403_FORBIDDEN
+            if exc.code == "MODEL_CREDENTIAL_REJECTED"
+            else status.HTTP_502_BAD_GATEWAY
+        )
         return None, _failure(
-            request, thread, model_config, exc.code, str(exc), status.HTTP_502_BAD_GATEWAY
+            request, thread, model_config, exc.code, str(exc), http_status
         )
 
     usage = result.as_dict().get("usage") or {}
