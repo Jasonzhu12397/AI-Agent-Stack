@@ -32,12 +32,14 @@ from django.utils import timezone
 
 from core.agent_capability_router import CapabilityResolutionError, invoke_capability
 from core.chat_models import AgentChatThread
+from core.cluster_deployment_views import deployment_preflight, validated_spec
 from core.models import (
     AgentCommand,
     AgentNode,
     AgentPluginDefinition,
     AgentPluginInstallation,
     ClusterDeployment,
+    InfrastructureNetworkProfile,
 )
 from core.registry_models import RegistryImage
 from core.scheduled_models import ScheduledChatJob
@@ -343,6 +345,78 @@ def _local_disk_usage(thread: AgentChatThread, arguments: dict) -> dict:
     return _run_local(thread, "local.disk_usage", {"path": str(path)})
 
 
+def _plan_deployment(thread: AgentChatThread, arguments: dict) -> dict:
+    """File the same preflight a deployment form files, from a chat turn."""
+
+    node_id = arguments.get("eph_node_id")
+    node = AgentNode.objects.filter(
+        tenant=thread.tenant,
+        project=thread.project,
+        node_type=AgentNode.NodeType.EPH_NODE,
+        pk=node_id,
+    ).first()
+    if node is None:
+        raise ChatToolError("NODE_NOT_FOUND", "No EPH node with that id exists in this project.")
+    if node.status != AgentNode.Status.ONLINE or (
+        node.last_seen_at is None
+        or (timezone.now() - node.last_seen_at).total_seconds() > 60
+    ):
+        raise ChatToolError(
+            "EPH_NODE_OFFLINE", f"EPH node {node.name} must have a fresh heartbeat."
+        )
+    profile = InfrastructureNetworkProfile.objects.filter(
+        tenant=thread.tenant, project=thread.project
+    ).first()
+    spec, error = validated_spec(
+        arguments.get("cluster_spec"),
+        infra_profile=profile.profile if profile is not None else None,
+        project=thread.project,
+    )
+    if error:
+        raise ChatToolError("DEPLOYMENT_SPEC_INVALID", error)
+    readiness = deployment_preflight(thread.project, spec)["network_readiness"]
+    if readiness is not None and not readiness["ready"]:
+        raise ChatToolError(
+            "NETWORK_READINESS_GATE_FAILED",
+            "{}/{} control-plane and {}/{} worker nodes verified; collect all node "
+            "networks first.".format(
+                readiness["control_plane_ready"],
+                readiness["required_control_plane"],
+                readiness["worker_ready"],
+                readiness["required_worker"],
+            ),
+        )
+    if readiness is not None:
+        spec["network_evidence"] = readiness["evidence"]
+    preflight = deployment_preflight(thread.project, spec, readiness=readiness)
+    deployment, created = ClusterDeployment.objects.get_or_create(
+        tenant=thread.tenant,
+        idempotency_key=f"chat:{thread.id}:{uuid.uuid5(uuid.NAMESPACE_URL, spec['cluster_name'])}",
+        defaults={
+            "project": thread.project,
+            "eph_node": node,
+            "requested_by": thread.created_by,
+            "cluster_name": spec["cluster_name"],
+            "kubernetes_version": spec["kubernetes_version"],
+            "spec": spec,
+            "preflight_result": preflight,
+            "status": ClusterDeployment.Status.PREFLIGHT_QUEUED,
+        },
+    )
+    return {
+        "ok": True,
+        "created": created,
+        "deployment": {
+            "id": str(deployment.id),
+            "cluster_name": deployment.cluster_name,
+            "kubernetes_version": deployment.kubernetes_version,
+            "status": deployment.status,
+            "eph_node": node.name,
+            "network_readiness": readiness,
+        },
+    }
+
+
 LOCAL_TOOLS: tuple[ChatTool, ...] = (
     ChatTool(
         name="local_system_info",
@@ -415,6 +489,27 @@ PLATFORM_TOOLS: tuple[ChatTool, ...] = (
         description="List the scheduled turns of this project with cadence and last outcome.",
         schema=_schema({}),
         handler=_list_scheduled_jobs,
+    ),
+    ChatTool(
+        name="stack_plan_deployment",
+        kind="platform",
+        identifier="platform.plan_deployment",
+        description=(
+            "File a bare-metal cluster deployment for an online EPH node: validates the "
+            "spec, applies the network readiness gate and stores the preflight, exactly "
+            "like the deployment form. Returns the deployment id and its status."
+        ),
+        schema=_schema(
+            {
+                "eph_node_id": {"type": "string", "description": "Enrolled EPH node id"},
+                "cluster_spec": {
+                    "type": "object",
+                    "description": "Deployment spec: cluster_name, kubernetes_version and replicas",
+                },
+            },
+            ["eph_node_id", "cluster_spec"],
+        ),
+        handler=_plan_deployment,
     ),
     ChatTool(
         name="stack_create_command",

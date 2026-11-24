@@ -355,6 +355,26 @@ def _declares_emulated_bmc(spec: dict[str, Any]) -> bool:
     return isinstance(services, dict) and "vbmc" in services
 
 
+def deployment_preflight(project, spec, readiness=None):
+    """The preflight report stored beside a queued deployment."""
+
+    if readiness is None:
+        readiness = _network_readiness(project, spec)
+    ironic_section = spec.get("ironic")
+    return {
+        "network_readiness": readiness,
+        "ironic_workload": {
+            "configured": isinstance(ironic_section, dict),
+            "warnings": (
+                [] if isinstance(ironic_section, dict) else ["IRONIC_WORKLOAD_CR_REQUIRED"]
+            ),
+            "defaults_sources": spec.get("ironic_defaults_sources") or [],
+        },
+        "network_defaults": spec.get("network_defaults")
+        or {"sriov_pci_sources": {}, "warnings": []},
+    }
+
+
 def _emulated_bmc_ports(spec: dict[str, Any]) -> tuple[int, ...]:
     registry = spec.get("local_registry")
     services = registry.get("services") if isinstance(registry, dict) else None
@@ -362,7 +382,20 @@ def _emulated_bmc_ports(spec: dict[str, Any]) -> tuple[int, ...]:
 
 
 def _validated_spec(request, *, infra_profile=None, project=None):
-    spec = request.data.get("cluster_spec")
+    return validated_spec(
+        request.data.get("cluster_spec"),
+        infra_profile=infra_profile,
+        project=project,
+    )
+
+
+def validated_spec(spec, *, infra_profile=None, project=None):
+    """Validate a deployment spec without an HTTP request.
+
+    The console's chat tool files the same preflight the deployment form does,
+    so the validation lives here once instead of being re-derived by callers.
+    """
+
     if not isinstance(spec, dict):
         return None, "cluster_spec must be a JSON object."
     if spec.get("infra_network_profile") is None and infra_profile is not None:
@@ -639,19 +672,7 @@ class ClusterDeploymentListCreateView(APIView):
         if readiness is not None:
             # Bind the plan to the exact inventory revision it was validated against.
             spec["network_evidence"] = readiness["evidence"]
-        ironic_section = spec.get("ironic")
-        preflight = {
-            "network_readiness": readiness,
-            "ironic_workload": {
-                "configured": isinstance(ironic_section, dict),
-                "warnings": (
-                    [] if isinstance(ironic_section, dict) else ["IRONIC_WORKLOAD_CR_REQUIRED"]
-                ),
-                "defaults_sources": spec.get("ironic_defaults_sources") or [],
-            },
-            "network_defaults": spec.get("network_defaults")
-            or {"sriov_pci_sources": {}, "warnings": []},
-        }
+        preflight = deployment_preflight(project, spec, readiness=readiness)
         cluster_name = spec["cluster_name"]
         kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()

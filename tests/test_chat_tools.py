@@ -16,6 +16,7 @@ from core.models import (
     TenantMembership,
 )
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 
 
 @pytest.fixture
@@ -50,6 +51,7 @@ def scope(db):
         node_type=AgentNode.NodeType.EPH_NODE,
         credential_hash="x" * 64,
         status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
     )
     return {"user": user, "tenant": tenant, "project": project, "thread": thread, "node": node}
 
@@ -306,3 +308,29 @@ def test_turn_budget_is_bounded(scope, monkeypatch):
     )
     assert usage["truncated"] is True
     assert len(tool_log) == chat_tools.MAX_TOOL_STEPS
+
+
+def test_plan_deployment_rejects_an_unknown_eph_node(scope):
+    tools = chat_tools.build_tools(scope["thread"], {})
+    tool = next(item for item in tools if item.name == "stack_plan_deployment")
+    payload = chat_tools.run_tool(
+        tool,
+        {
+            "eph_node_id": "00000000-0000-0000-0000-000000000000",
+            "cluster_spec": {"cluster_name": "sample"},
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["code"] == "NODE_NOT_FOUND"
+
+
+def test_plan_deployment_reports_the_spec_error(scope):
+    tools = chat_tools.build_tools(scope["thread"], {})
+    tool = next(item for item in tools if item.name == "stack_plan_deployment")
+    payload = chat_tools.run_tool(
+        tool,
+        {"eph_node_id": str(scope["node"].id), "cluster_spec": {"cluster_name": "Sample_Cluster"}},
+    )
+    assert payload["ok"] is False
+    assert payload["code"] == "DEPLOYMENT_SPEC_INVALID"
+    assert "cluster_name" in payload["error"] or "cluster_spec" in payload["error"]

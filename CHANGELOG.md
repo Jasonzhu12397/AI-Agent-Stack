@@ -8,6 +8,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- `stack_plan_deployment`: a chat turn can file a bare-metal cluster deployment
+  for an online EPH node, validated by the same spec validator and network
+  readiness gate the deployment form uses, with the preflight stored on the
+  record.
 - Local execution: `Local computer` threads run real read-only probes on the
   enrolled `local_runner` node (`apps/local-agent`), with the command, lease
   and result recorded by the platform. Tasks: `local.system_info`,

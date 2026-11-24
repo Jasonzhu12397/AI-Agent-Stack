@@ -110,10 +110,14 @@ The selected skills and plugins are not just prompt text. `core/chat_tools.py`
 builds an OpenAI-style tool list for every turn and `chat_runtime.run_turn`
 runs the tool loop the model drives:
 
-- Platform tools always ship: `stack_list_nodes`, `stack_list_deployments`,
+- Platform tools always ship: `stack_list_nodes`, `stack_plan_deployment`,
+  `stack_list_deployments`,
   `stack_list_commands`, `stack_list_registry_images`,
-  `stack_list_scheduled_jobs` and `stack_create_command`. The first five read
-  the control plane; `stack_create_command` writes a real `AgentCommand`
+  `stack_list_scheduled_jobs` and `stack_create_command`. The read tools query
+  the control plane; `stack_plan_deployment` files the same preflight the
+  deployment form files (spec validation, network readiness gate and stored
+  `preflight_result`) for an online EPH node; `stack_create_command` writes a
+  real `AgentCommand`
   (version upgrades and rollbacks land in `waiting_approval`).
 - A selected skill opens exactly one capability of the installation that
   granted it; a selected plugin opens every capability the installation was
