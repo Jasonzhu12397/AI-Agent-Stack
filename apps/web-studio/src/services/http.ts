@@ -27,8 +27,10 @@ async function csrfToken(): Promise<string> {
   if (csrfCache) return csrfCache;
   const response = await fetch(`${apiBase}/api/v1/auth/csrf/`, { credentials: "include" });
   if (!response.ok) throw new ApiError(response.status, "CSRF_UNAVAILABLE", "Unable to obtain a CSRF token.");
-  const payload = (await response.json()) as { csrfToken?: string };
-  csrfCache = payload.csrfToken ?? "";
+  const payload = (await response.json()) as { csrf_token?: string; csrfToken?: string };
+  // The API answers snake_case; the camelCase fallback keeps older payloads working.
+  csrfCache = payload.csrf_token ?? payload.csrfToken ?? "";
+  if (!csrfCache) throw new ApiError(response.status, "CSRF_UNAVAILABLE", "The server returned an empty CSRF token.");
   return csrfCache;
 }
 
