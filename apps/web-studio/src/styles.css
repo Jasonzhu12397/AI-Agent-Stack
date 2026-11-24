@@ -116,7 +116,12 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workspace-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
 /* The conversation wants the room a chat app has: a slim rail and a tall
    transcript that reaches the bottom of the viewport. */
-.workspace-grid.chat-layout { grid-template-columns: 220px minmax(0, 1fr); align-items: stretch; }
+.grid-chat { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+/* Chat owns the viewport: no page padding, no module heading, no card border
+   around the conversation. Everything else stays a normal module page. */
+.workspace-chat { padding: 10px 0 0; border-bottom: none; }
+.workspace-chat .task-panel { padding: 0; border: none; background: transparent; }
+.context-select { width: min(180px, 32vw); }
 .workspace-sidebar, .task-panel { min-width: 0; padding: 20px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 12px; }
 .workspace-section-heading h3, .task-panel-heading h3 { margin: 0; font-size: 15px; }
 .full-width { width: 100%; }
@@ -130,12 +135,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 /* The chat layout variant has two classes, so the single-class collapse above
    never applied on a phone: call it out with matching specificity. */
 @media (max-width: 900px) {
-  .workspace-grid.chat-layout { grid-template-columns: minmax(0, 1fr); }
   .workspace-grid { grid-template-columns: minmax(0, 1fr); }
-  /* On a phone the conversation is the destination; the context pickers
-     follow it instead of pushing the transcript below the fold. */
-  .workspace-grid.chat-layout > :not(.workspace-sidebar) { order: 1; }
-  .workspace-grid.chat-layout .workspace-sidebar { order: 2; padding: 12px; }
 }
 @media (max-width: 760px) { .workspace-grid { grid-template-columns: 1fr; } .task-create { flex-direction: column; } .workspace-heading { align-items: flex-start; flex-direction: column; } }
 

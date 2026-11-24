@@ -985,4 +985,13 @@ export const zhCN: Record<string, string> = {
   "PUBLISHED v{0}": "已发布 v{0}",
   "ARCHIVED": "已归档",
   "DRAFT ONLY": "仅草稿",
+  "The server returned HTTP {0}.": "服务端返回 HTTP {0}。",
+  "How can I help?": "有什么可以帮你？",
+  "Ask about a cluster, run a skill, or wire a plugin.": "可以问集群状态、运行技能，或接入插件。",
+  "Inspect this cluster": "巡检当前集群",
+  "Run a skill": "运行一个技能",
+  "Check model routing": "检查模型路由",
+  "Summarise recent runs": "汇总最近的运行",
+  "Conversations": "会话",
+  "This workspace is no longer available. Pick another organization or project.": "该工作区已不可用，请重新选择组织或项目。",
 };

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from "vue";
+import { t } from "../i18n";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
 import AgentStudioView from "./AgentStudioView.vue";
 import ControlAgentChatView from "./ControlAgentChatView.vue";
@@ -171,8 +172,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="workspace">
-    <div class="workspace-heading">
+  <section class="workspace" :class="{ 'workspace-chat': activeSection === 'chat' }">
+    <div v-if="activeSection !== 'chat'" class="workspace-heading">
       <div>
         <p class="eyebrow">CONTROL PLANE</p>
         <h2>
@@ -208,8 +209,8 @@ onUnmounted(() => {
       <el-tag type="success" effect="plain">SESSION AUTHENTICATED</el-tag>
     </div>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
-    <div class="workspace-grid" :class="{ 'chat-layout': props.activeSection === 'chat' }">
-      <aside class="workspace-sidebar">
+    <div class="workspace-grid" :class="{ 'grid-chat': props.activeSection === 'chat' }">
+      <aside v-if="activeSection !== 'chat'" class="workspace-sidebar">
         <div class="workspace-section-heading">
           <h3>Organizations</h3>
           <el-button text type="primary" @click="showTenantForm = !showTenantForm">＋ New</el-button>
@@ -284,7 +285,16 @@ onUnmounted(() => {
           v-if="props.activeSection === 'chat'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
-        />
+        >
+          <template #context>
+            <el-select v-model="selectedTenantId" size="small" class="context-select" :placeholder="t('Organization')">
+              <el-option v-for="tenant in tenants" :key="tenant.id" :label="tenant.name" :value="tenant.id" />
+            </el-select>
+            <el-select v-model="selectedProjectId" size="small" class="context-select" :placeholder="t('Project')">
+              <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
+            </el-select>
+          </template>
+        </ControlAgentChatView>
         <ModelManagerView v-if="props.activeSection === 'models'" :tenant-id="selectedTenantId" />
         <AgentStudioView
           v-if="props.activeSection === 'agents'"

@@ -43,11 +43,14 @@ test("the workflow canvas and inspector split the viewport", () => {
   assert.match(read("styles.css"), /height: var\(--studio-canvas-height/);
 });
 
-test("the chat grid collapses on a phone despite its two-class selector", () => {
+test("the chat surface drops the sidebar and hides the rail on a phone", () => {
   const css = read("styles.css");
-  assert.match(css, /@media \(max-width: 900px\) \{\n  \.workspace-grid\.chat-layout \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   const chat = read("components/ControlAgentChatView.vue");
+  const workspace = read("components/WorkspaceView.vue");
+  assert.match(workspace, /grid-chat/, "the chat route uses a single column grid");
+  assert.match(css, /\.workspace-chat \{ padding: 10px 0 0;/);
+  assert.match(chat, /@media \(max-width: 1200px\) \{\n  \.rail-toggle/, "the thread rail collapses into a drawer");
+  assert.match(chat, /\.thread-rail\.open \{[\s\S]*position: absolute/, "the drawer overlays the transcript");
   assert.match(chat, /@media \(max-width: 900px\)/, "the composer must adapt below 900px");
-  assert.match(chat, /\.thread-rail \{[\s\S]*overflow-x: auto/, "the rail becomes a horizontal strip on a phone");
   assert.match(css, /\.main-nav \{\n    flex-wrap: nowrap;/, "phone navigation scrolls instead of stacking");
 });

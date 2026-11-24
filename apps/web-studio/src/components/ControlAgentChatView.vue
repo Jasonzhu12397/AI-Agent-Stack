@@ -30,6 +30,20 @@ const selectedSkills = ref<string[]>([]);
 const selectedPlugins = ref<string[]>([]);
 const selectedModelId = ref("");
 
+// Wide screens keep the thread rail in the grid; narrow ones show it as an
+// overlay so the transcript owns the full width, the way messenger apps do.
+const railOpen = ref(false);
+const SUGGESTIONS = [
+  "Inspect this cluster",
+  "Run a skill",
+  "Check model routing",
+  "Summarise recent runs",
+];
+
+function useSuggestion(prompt: string): void {
+  draft.value = t(prompt);
+}
+
 const activeThread = computed(() => threads.value.find((item) => item.id === activeThreadId.value) ?? null);
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value);
 
@@ -78,15 +92,34 @@ function bubbleText(message: ChatMessage): string {
 
 function reportError(cause: unknown): void {
   errorCode.value = apiErrorCode(cause) ?? "";
-  error.value = cause instanceof Error ? tServerError(apiErrorCode(cause), cause.message) : t("Request failed.");
+  if (cause instanceof Error) {
+    // Transport failures carry no backend code, only an English prose message
+    // ending in "HTTP <status>"; surface the status in the reader's language.
+    const status = cause.message.match(/HTTP (\d{3})/)?.[1];
+    error.value = status
+      ? tf("The server returned HTTP {0}.", status)
+      : tServerError(apiErrorCode(cause), cause.message);
+    return;
+  }
+  error.value = t("Request failed.");
 }
 
 function openMarketplace(): void {
   void router.push("/marketplace");
 }
 
+function isWorkspaceGone(cause: unknown): boolean {
+  const status = (cause as { status?: number } | null)?.status;
+  return status === 404;
+}
+
 async function loadContext(): Promise<void> {
-  if (!props.tenantId || !props.projectId) return;
+  if (!props.tenantId || !props.projectId) {
+    // Nothing to load yet: the chat waits for the pickers instead of firing a
+    // request that the API would answer with 404.
+    context.value = null;
+    return;
+  }
   try {
     context.value = await getChatContext(props.tenantId, props.projectId);
     if (!selectedModelId.value && context.value.models.length > 0) {
@@ -98,6 +131,11 @@ async function loadContext(): Promise<void> {
       selectedModelId.value = (recommended ?? context.value.models[0]).id;
     }
   } catch (cause) {
+    if (isWorkspaceGone(cause)) {
+      context.value = null;
+      error.value = t("This workspace is no longer available. Pick another organization or project.");
+      return;
+    }
     reportError(cause);
   }
 }
@@ -116,6 +154,7 @@ async function loadThreads(): Promise<void> {
 
 async function openThread(threadId: string): Promise<void> {
   activeThreadId.value = threadId;
+  railOpen.value = false;
   if (!threadId) {
     messages.value = [];
     return;
@@ -247,6 +286,14 @@ watch(
 <template>
   <section ref="chatRoot" class="agent-chat" :style="chatHeight ? { height: chatHeight } : undefined">
     <header class="chat-toolbar">
+      <el-button
+        class="rail-toggle"
+        text
+        :title="t('Conversations')"
+        @click="railOpen = !railOpen"
+      >
+        ☰
+      </el-button>
       <div class="chat-title">
         <span class="chat-avatar">CA</span>
         <div>
@@ -270,9 +317,6 @@ watch(
             :disabled="model.ready === false"
           />
         </el-select>
-        <el-button text size="small" @click="openProviderAccounts">
-          Platform accounts
-        </el-button>
         <el-button type="primary" plain @click="newThread">New conversation</el-button>
       </div>
     </header>
@@ -291,7 +335,7 @@ watch(
     </el-alert>
 
     <div class="chat-body">
-      <aside class="thread-rail">
+      <aside class="thread-rail" :class="{ open: railOpen }">
         <p class="rail-label">CONVERSATIONS</p>
         <article
           v-for="thread in threads"
@@ -311,9 +355,22 @@ watch(
 
       <div class="chat-column">
         <div class="transcript">
-          <p v-if="!activeThreadId" class="transcript-empty">
-            No conversation selected. Use “New conversation” to begin.
-          </p>
+          <div v-if="messages.length === 0" class="chat-welcome">
+            <span class="welcome-mark">CA</span>
+            <h2>{{ t("How can I help?") }}</h2>
+            <p class="welcome-sub">{{ t("Ask about a cluster, run a skill, or wire a plugin.") }}</p>
+            <div class="suggestions">
+              <button
+                v-for="prompt in SUGGESTIONS"
+                :key="prompt"
+                type="button"
+                class="suggestion"
+                @click="useSuggestion(prompt)"
+              >
+                {{ t(prompt) }}
+              </button>
+            </div>
+          </div>
           <article
             v-for="message in messages"
             :key="message.id"
@@ -374,9 +431,11 @@ watch(
           />
           <div class="composer-actions">
             <div class="composer-pickers">
-              <span class="picker-label" title="Project in scope">
-                {{ t("Project") }} · {{ context?.project.name ?? "—" }}
-              </span>
+              <slot name="context" />
+              <el-button text size="small" class="account-link" @click="openProviderAccounts">
+                {{ t("Platform accounts") }}
+              </el-button>
+
               <el-popover placement="top" trigger="click" :width="320">
                 <template #reference>
                   <el-button size="small" text>{{ t("Skills") }} ({{ selectedSkills.length }})</el-button>
@@ -684,28 +743,8 @@ watch(
   }
   .chat-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 8px;
-  }
-  .thread-rail {
-    display: flex;
-    gap: 8px;
-    max-height: 92px;
-    padding: 8px;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .rail-label {
-    display: none;
-  }
-  .thread-item {
-    min-width: 180px;
-    max-width: 220px;
-    border-color: #e3e8ee;
-  }
-  .rail-empty {
-    margin: 4px;
-    white-space: nowrap;
   }
   .bubble {
     max-width: 92%;
@@ -739,6 +778,145 @@ watch(
   }
   .composer-pickers {
     flex-wrap: wrap;
+  }
+}
+/* Threads live in a drawer on narrow screens and as a column on wide ones. */
+.chat-body {
+  position: relative;
+}
+.rail-toggle {
+  display: none;
+  font-size: 16px;
+  line-height: 1;
+}
+@media (max-width: 1200px) {
+  .rail-toggle {
+    display: inline-flex;
+  }
+  .thread-rail {
+    display: none;
+  }
+  .thread-rail.open {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 6;
+    width: min(320px, 84%);
+    overflow-y: auto;
+    background: #fff;
+    box-shadow: 24px 0 48px rgba(5, 8, 15, 0.18);
+  }
+  .thread-item {
+    border-color: #e3e8ee;
+  }
+}
+/* Empty thread: greet, then offer the four things the agent can actually do. */
+.chat-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: auto;
+  padding: 24px 12px;
+  text-align: center;
+}
+.welcome-mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: #0e7c86;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.chat-welcome h2 {
+  margin: 6px 0 0;
+  font-size: 20px;
+  color: #121f28;
+}
+.welcome-sub {
+  margin: 0;
+  color: #6b7785;
+  font-size: 13px;
+}
+.suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  width: min(560px, 100%);
+  margin-top: 8px;
+}
+.suggestion {
+  padding: 10px 12px;
+  border: 1px solid #e3e8ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #121f28;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.suggestion:hover {
+  border-color: #bfe8d7;
+  background: #f2fbfb;
+}
+@media (max-width: 900px) {
+  .chat-welcome h2 {
+    font-size: 17px;
+  }
+  .suggestions {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Phone header stays two rows: identity + model, then scope + new chat. */
+@media (max-width: 640px) {
+  .chat-toolbar {
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .chat-title p {
+    display: none;
+  }
+  .chat-actions {
+    width: 100%;
+    gap: 6px;
+  }
+  .context-select {
+    flex: 1 1 44%;
+    width: auto;
+    min-width: 0;
+  }
+  .model-select {
+    flex: 1 1 100%;
+  }
+  .chat-actions .el-button {
+    margin-left: 0;
+  }
+}
+
+/* Phone composer: chips wrap onto two lines and keep the send button beside them. */
+@media (max-width: 640px) {
+  .composer-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .composer-pickers {
+    flex: 1 1 auto;
+    gap: 6px;
+  }
+  .composer-pickers .el-button {
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  .composer-actions > .el-button {
+    margin-left: auto;
   }
 }
 </style>
