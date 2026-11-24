@@ -53,7 +53,7 @@ def console():
 )
 def test_empty_post_returns_error_envelope(console, path):
     client, tenant_id, project_id = console
-    url = "/api/v1/tenants/%s/%s" % (tenant_id, path.format(project=project_id))
+    url = f"/api/v1/tenants/{tenant_id}/{path.format(project=project_id)}"
 
     response = client.post(url, {}, format="json")
 
@@ -75,7 +75,7 @@ def test_empty_post_returns_error_envelope(console, path):
 )
 def test_unsupported_method_returns_error_envelope(console, path):
     client, tenant_id, project_id = console
-    url = "/api/v1/tenants/%s/%s" % (tenant_id, path.format(project=project_id))
+    url = f"/api/v1/tenants/{tenant_id}/{path.format(project=project_id)}"
 
     response = client.post(url, {}, format="json")
 
