@@ -15,7 +15,19 @@ from core.models import AuditEvent
 @require_GET
 @ensure_csrf_cookie
 def csrf_cookie(request):
-    return JsonResponse({"csrf_token": get_token(request)})
+    """Hand out a CSRF token that is never reused from a cache.
+
+    The token is tied to the cookie in the same response, so any intermediary
+    that serves a cached body pairs a stale token with a live cookie and every
+    write request fails with "CSRF token incorrect". Proxies in front of the
+    console (Codespaces, tunnels) do cache GETs, hence these headers.
+    """
+
+    response = JsonResponse({"csrf_token": get_token(request)})
+    response["Cache-Control"] = "no-store, private, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Vary"] = "Cookie"
+    return response
 
 
 class LoginView(APIView):

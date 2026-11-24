@@ -135,6 +135,8 @@ type CsrfResponse = { csrf_token: string };
 async function csrfToken(): Promise<string> {
   const response = await fetch(`${apiBase}/api/v1/auth/csrf/`, {
     credentials: "include",
+    // A cached token no longer matches the cookie the browser holds.
+    cache: "no-store",
   });
   if (!response.ok) throw new Error("Unable to initialize secure session.");
   const result = (await response.json()) as CsrfResponse;
@@ -169,12 +171,27 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
     headers.set("X-CSRFToken", await csrfToken());
   }
-  const response = await fetch(`${apiBase}${path}`, {
+  let response = await fetch(`${apiBase}${path}`, {
     ...init,
     method,
     headers,
     credentials: "include",
   });
+  if (
+    response.status === 403 &&
+    !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method) &&
+    headers.has("X-CSRFToken")
+  ) {
+    // The token can go stale when a proxy serves a cached token endpoint (or
+    // the cookie rotated); re-issue it once and retry the same write.
+    headers.set("X-CSRFToken", await csrfToken());
+    response = await fetch(`${apiBase}${path}`, {
+      ...init,
+      method,
+      headers,
+      credentials: "include",
+    });
+  }
   if (response.status === 204) return undefined as T;
   const payload = (await response.json()) as T & { detail?: string };
   if (!response.ok) {
