@@ -75,8 +75,12 @@ def runtime_env() -> dict:
         "DATABASE_URL": f"sqlite:///{DATA_DIR / 'console.db'}",
         "PYTHONPATH": f"{PLATFORM_API}:{REPO_ROOT}",
         "ALLOWED_HOSTS": "*",
+        # Any origin that may front this container: the Codespaces port proxy,
+        # the Cloudflare quick tunnel used when the proxy gate blocks XHRs, and
+        # the local dev server.
         "CSRF_TRUSTED_ORIGINS": (
-            "https://*.app.github.dev,http://localhost:5173,http://127.0.0.1:5173"
+            "https://*.app.github.dev,https://*.trycloudflare.com,"
+            "http://localhost:5173,http://127.0.0.1:5173"
         ),
     }
 
