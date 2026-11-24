@@ -11,6 +11,9 @@ in place. They consume the registry's digest-pinned catalog entry, and EPH /
 Target nodes pull from the internal registry host (or from the EPH local
 registry that mirrors it for disconnected sites).
 
+Architecture deck: [`docs/media/ai-agent-stack-overall-architecture-v2.pptx`](media/ai-agent-stack-overall-architecture-v2.pptx)
+(two pages: overall architecture and this supply chain).
+
 ```text
 code commit → CI/CD build → security scan → central registry → image promotion
             → EPH bootstrap → target Kubernetes → worker deployment → monitoring

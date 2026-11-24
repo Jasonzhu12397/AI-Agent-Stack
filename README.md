@@ -151,6 +151,9 @@ Operator-facing surface: `Image Registry` in Web Studio, backed by
 `/api/v1/tenants/<tenant>/projects/<project>/registry/`. Full contract and gates:
 [docs/container-image-registry.md](docs/container-image-registry.md).
 
+Architecture deck (two pages: overall architecture and image supply chain):
+[docs/media/ai-agent-stack-overall-architecture-v2.pptx](docs/media/ai-agent-stack-overall-architecture-v2.pptx).
+
 ## Offline image delivery
 
 The [offline image factory](deploy/offline/README.md) builds repository-owned Cloud Control, EPH and Target Agent images and packages every Metal3, IPA, Kubernetes and Calico image needed at runtime.
