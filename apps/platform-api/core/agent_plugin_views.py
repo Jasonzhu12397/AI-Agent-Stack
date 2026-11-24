@@ -174,7 +174,29 @@ def _validate_schema(value, field_name):
     return None
 
 
+def _capability_names(entries) -> list[str]:
+    """Return declared capability names from either catalog dicts or bare names.
+
+    The catalog stores full declaration dicts while older rows and API clients
+    pass bare names; the wire shape is always names, so one adapter keeps the
+    composer, marketplace and install check reading the same list.
+    """
+
+    names: list[str] = []
+    for entry in entries or []:
+        name = entry.get("name") if isinstance(entry, dict) else entry
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return names
+
+
 def _definition_data(plugin):
+    declarations = agent_plugin_manifest.declared_capabilities(plugin)
+    names = _capability_names(declarations) or _capability_names(plugin.capabilities)
+    manifest = plugin.manifest if isinstance(plugin.manifest, dict) else {}
+    declared = manifest.get("capabilities")
+    if declarations and not (isinstance(declared, list) and declared):
+        manifest = {**manifest, "capabilities": declarations}
     return {
         "id": str(plugin.id),
         "tenant_id": str(plugin.tenant_id),
@@ -185,8 +207,9 @@ def _definition_data(plugin):
         "protocol": plugin.protocol,
         "endpoint_url": plugin.endpoint_url,
         "auth_required": plugin.auth_required,
-        "capabilities": plugin.capabilities,
-        "manifest": plugin.manifest,
+        "capabilities": names,
+        "capability_definitions": declarations,
+        "manifest": manifest,
         "input_schema": plugin.input_schema,
         "output_schema": plugin.output_schema,
         "timeout_seconds": plugin.timeout_seconds,
@@ -459,7 +482,7 @@ class AgentPluginInstallationListCreateView(APIView):
         capability_error = _validate_capabilities(granted)
         if capability_error:
             return legacy_error_response(capability_error, http_status=400)
-        if not set(granted).issubset(set(plugin.capabilities)):
+        if not set(granted).issubset(set(_capability_names(plugin.capabilities))):
             return legacy_error_response(
                 "Granted capabilities must be declared by the agent plugin.", http_status=400
             )

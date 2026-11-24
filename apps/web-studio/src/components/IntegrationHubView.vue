@@ -1,533 +1,690 @@
 <script setup lang="ts">
-import { t, tf } from "../i18n";
+/**
+ * Connector hub backed by the same agent-plugin definitions the chat composer
+ * reads. The earlier screen listed a separate legacy plugin table, so a console
+ * with seven working connectors showed "0 definitions" and offered an install
+ * button for connectors the chat already had.
+ */
 import { computed, onMounted, ref, watch } from "vue";
+import { t } from "../i18n";
 import {
-  connectorTemplates,
-  buildConnectorTemplatePayload,
-  findConnectorTemplate,
-} from "../domain/connectorTemplates";
-import { validatePluginConnectionInput } from "../domain/pluginConnection";
-import {
-  approvePlugin,
-  createPluginConnection,
-  getPluginCatalog,
-  getPluginInstallations,
-  installPlugin,
-  registerPlugin,
-  setPluginInstallationStatus,
-  testPluginConnection,
-  setPluginConnectionStatus,
-  type PluginDefinition,
-  type PluginInstallation,
+  createAgentPlugin,
+  getAgentPluginDefinitions,
+  getAgentPluginInstallations,
+  getProjectAgentCapabilities,
+  installAgentPlugin,
+  setAgentPluginEnabled,
+  setAgentPluginInstallationStatus,
+  type AgentPluginDefinition,
+  type AgentPluginInstallation,
+  type AgentPluginManifestCapability,
+  type InstalledAgentCapability,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
-const catalog = ref<PluginDefinition[]>([]);
-const installations = ref<PluginInstallation[]>([]);
-const selectedPluginId = ref("");
-const selectedPermissions = ref<string[]>([]);
-const selectedInstallationId = ref("");
-const connectionName = ref("");
-const authType = ref<"none" | "credential_ref" | "oauth_ref">("none");
+
+const definitions = ref<AgentPluginDefinition[]>([]);
+const installations = ref<AgentPluginInstallation[]>([]);
+const capabilities = ref<InstalledAgentCapability[]>([]);
+const selectedId = ref("");
+const granted = ref<string[]>([]);
 const credentialRef = ref("");
 const loading = ref(false);
 const submitting = ref(false);
 const error = ref("");
 const info = ref("");
-const selectedTemplateId = ref("open-meteo");
-const pluginJson = ref(JSON.stringify({
-  plugin_key: "example-readonly",
-  name: "Example Read-only Connector",
-  description: "Example metadata-only connector registration.",
+const registerOpen = ref(false);
+const registerPlaceholders = {
+  key: "example-agent",
+  endpoint: "https://agent.example.com/v1",
+  capabilities: "records.read, records.write",
+};
+const protocolOptions = ["http_json", "mcp", "a2a", "openai_compatible"];
+const registerForm = ref({
+  plugin_key: "",
+  name: "",
+  description: "",
   version: "1.0.0",
-  connector_type: "http",
-  maintainer: "Platform Team",
-  license: "Apache-2.0",
-  source_url: "https://example.invalid/connector.json",
-  manifest: {
-    http: {
-      base_url: "https://example.invalid",
-      auth_required: false,
-      health_check: { method: "GET", path: "/health" },
-      operations: {
-        "read-status": {
-          method: "GET",
-          path: "/v1/status/{resource_id}",
-          path_params: { resource_id: "resource_id" },
-          query_params: {}
-        }
-      }
-    }
-  },
-  tools: [{
-    name: "read-status",
-    description: "Read a status document.",
-    input_schema: {
-      type: "object",
-      properties: { resource_id: { type: "string" } },
-      required: ["resource_id"],
-      additionalProperties: false
-    },
-    output_schema: {
-      type: "object",
-      properties: { status: { type: "string" } },
-      additionalProperties: false
-    },
-    required_permissions: ["example:status:read"],
-    risk_level: "low",
-    timeout_seconds: 15,
-    retry_policy: { max_attempts: 2, backoff_seconds: 2 },
-    idempotency_mode: "read_only"
-  }]
-}, null, 2));
-
-const selectedPlugin = computed(
-  () => catalog.value.find((plugin) => plugin.id === selectedPluginId.value) ?? null,
-);
-const availablePermissions = computed(() => {
-  const permissions = selectedPlugin.value?.tools.flatMap(
-    (tool) => tool.required_permissions,
-  ) ?? [];
-  return [...new Set(permissions)];
+  protocol: "http_json" as AgentPluginDefinition["protocol"],
+  endpoint_url: "",
+  auth_required: true,
+  capabilities: "",
 });
-const selectedInstallation = computed(
-  () => installations.value.find(
-    (item) => item.id === selectedInstallationId.value,
-  ) ?? installations.value[0] ?? null,
+
+const selected = computed(
+  () => definitions.value.find((item) => item.id === selectedId.value) ?? null,
 );
-const selectedConnectionTemplate = computed(() =>
-  findConnectorTemplate(selectedInstallation.value?.plugin_key),
+const selectedInstallation = computed(() => {
+  if (!selected.value) return null;
+  return (
+    installations.value.find(
+      (item) => item.plugin?.id === selected.value?.id && item.status !== "uninstalled",
+    ) ?? null
+  );
+});
+const installedCount = computed(
+  () => installations.value.filter((item) => item.status !== "uninstalled").length,
+);
+const selectedCapabilities = computed<AgentPluginManifestCapability[]>(() =>
+  selected.value?.capability_definitions?.length
+    ? selected.value.capability_definitions
+    : (selected.value?.capabilities ?? []).map((name) => ({ name })),
 );
 
-watch(selectedInstallation, (installation) => {
-  const template = findConnectorTemplate(installation?.plugin_key);
-  if (template) authType.value = template.auth;
-}, { immediate: true });
+function capabilityDetail(name: string): string {
+  return selectedCapabilities.value.find((item) => item.name === name)?.description ?? "";
+}
+
+function capabilityRisk(name: string): string {
+  return selectedCapabilities.value.find((item) => item.name === name)?.risk_level ?? "low";
+}
 
 async function refresh(): Promise<void> {
   if (!props.tenantId) {
-    catalog.value = [];
+    definitions.value = [];
     installations.value = [];
+    capabilities.value = [];
     return;
   }
   loading.value = true;
   error.value = "";
   try {
-    const catalogResponse = await getPluginCatalog(props.tenantId);
-    catalog.value = catalogResponse.results;
-    if (!catalog.value.some((plugin) => plugin.id === selectedPluginId.value)) {
-      selectedPluginId.value = catalog.value[0]?.id ?? "";
-    }
-    if (props.projectId) {
-      const installResponse = await getPluginInstallations(
-        props.tenantId,
-        props.projectId,
-      );
-      installations.value = installResponse.results;
-      if (!installations.value.some((item) => item.id === selectedInstallationId.value)) {
-        selectedInstallationId.value = installations.value[0]?.id ?? "";
-      }
-    } else {
-      installations.value = [];
+    definitions.value = await getAgentPluginDefinitions(props.tenantId);
+    installations.value = props.projectId
+      ? await getAgentPluginInstallations(props.tenantId, props.projectId)
+      : [];
+    capabilities.value = props.projectId
+      ? (await getProjectAgentCapabilities(props.tenantId, props.projectId)).capabilities
+      : [];
+    if (!definitions.value.some((item) => item.id === selectedId.value)) {
+      selectedId.value = definitions.value[0]?.id ?? "";
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to load Integration Hub.";
+    error.value = cause instanceof Error ? cause.message : "Unable to load connectors.";
   } finally {
     loading.value = false;
   }
 }
 
-function loadConnectorTemplate(): void {
-  try {
-    pluginJson.value = JSON.stringify(
-      buildConnectorTemplatePayload(selectedTemplateId.value),
-      null,
-      2,
-    );
-    const template = connectorTemplates.find((item) => item.id === selectedTemplateId.value);
-    info.value = template
-      ? template.label + " template loaded. Add " + template.host + " to PLUGIN_HTTP_ALLOWED_HOSTS before testing."
-      : "Connector template loaded.";
-    error.value = "";
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to load connector template.";
-  }
-}
+watch(selectedId, () => {
+  credentialRef.value = "";
+  granted.value = [...(selected.value?.capabilities ?? [])];
+});
 
-async function createPlugin(): Promise<void> {
-  submitting.value = true;
-  error.value = "";
-  info.value = "";
-  try {
-    const payload = JSON.parse(pluginJson.value) as Record<string, unknown>;
-    payload.tenant_id = props.tenantId;
-    const created = await registerPlugin(payload);
-    info.value = tf("Plugin {0}@{1} registered as Draft.", created.plugin_key, created.version);
-    selectedPluginId.value = created.id;
-    await refresh();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Invalid plugin JSON or registration failed.";
-  } finally {
-    submitting.value = false;
-  }
-}
+watch(
+  () => [props.tenantId, props.projectId],
+  () => void refresh(),
+);
+onMounted(() => void refresh());
 
-async function reviewPlugin(plugin: PluginDefinition): Promise<void> {
+async function toggleDefinition(): Promise<void> {
+  if (!selected.value) return;
   submitting.value = true;
   error.value = "";
   try {
-    await approvePlugin(plugin.id);
-    info.value = plugin.name + " approved. It can now be installed in a project.";
+    const updated = await setAgentPluginEnabled(selected.value.id, !selected.value.enabled);
+    info.value = updated.enabled
+      ? `${updated.name} ${t("is enabled")}.`
+      : `${updated.name} ${t("is disabled")}.`;
     await refresh();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Plugin approval failed.";
+    error.value = cause instanceof Error ? cause.message : "Unable to update the connector.";
   } finally {
     submitting.value = false;
   }
 }
 
 async function installSelected(): Promise<void> {
-  if (!selectedPlugin.value || !props.projectId) return;
-  submitting.value = true;
-  error.value = "";
-  try {
-    const installed = await installPlugin(
-      props.tenantId,
-      props.projectId,
-      selectedPlugin.value.id,
-      selectedPermissions.value,
-    );
-    selectedInstallationId.value = installed.id;
-    info.value = installed.plugin_name + " installed at pinned version " + installed.plugin_version + ".";
-    await refresh();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Plugin installation failed.";
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function updateInstallation(
-  installation: PluginInstallation,
-  status: "installed" | "disabled" | "uninstalled",
-): Promise<void> {
-  if (status === "uninstalled" && !window.confirm("Uninstall " + installation.plugin_name + "?")) {
-    return;
-  }
-  try {
-    await setPluginInstallationStatus(installation.id, status);
-    info.value = installation.plugin_name + ": " + status + ".";
-    await refresh();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to update installation.";
-  }
-}
-
-async function updateConnectionStatus(
-  connectionId: string,
-  status: "pending" | "disabled",
-): Promise<void> {
+  if (!selected.value || !props.projectId) return;
   submitting.value = true;
   error.value = "";
   info.value = "";
   try {
-    await setPluginConnectionStatus(connectionId, status);
-    info.value = status === "disabled"
-      ? "Connection disabled."
-      : "Connection re-enabled; run a health check before tool execution.";
+    const installation = await installAgentPlugin(props.tenantId, props.projectId, selected.value.id, {
+      granted_capabilities: granted.value,
+      credential_ref: selected.value.auth_required ? credentialRef.value.trim() : "",
+    });
+    info.value = `${selected.value.name} ${t("installed with")} ${installation.granted_capabilities.length} ${t("capabilities")}.`;
     await refresh();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to update connection status.";
+    error.value = cause instanceof Error ? cause.message : "Unable to install the connector.";
   } finally {
     submitting.value = false;
   }
 }
 
-async function testConnection(connectionId: string): Promise<void> {
+async function registerConnector(): Promise<void> {
+  if (!props.tenantId) return;
   submitting.value = true;
   error.value = "";
   info.value = "";
   try {
-    await testPluginConnection(connectionId);
-    info.value = t("Connection health check succeeded; this connection is now active.");
+    const capabilityNames = registerForm.value.capabilities
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const created = await createAgentPlugin(props.tenantId, {
+      plugin_key: registerForm.value.plugin_key.trim(),
+      name: registerForm.value.name.trim(),
+      description: registerForm.value.description.trim(),
+      version: registerForm.value.version.trim(),
+      protocol: registerForm.value.protocol,
+      endpoint_url: registerForm.value.endpoint_url.trim(),
+      auth_required: registerForm.value.auth_required,
+      capabilities: capabilityNames,
+    });
+    info.value = `${created.name} ${t("registered")}.`;
+    registerOpen.value = false;
+    registerForm.value = {
+      plugin_key: "",
+      name: "",
+      description: "",
+      version: "1.0.0",
+      protocol: "http_json",
+      endpoint_url: "",
+      auth_required: true,
+      capabilities: "",
+    };
     await refresh();
+    selectedId.value = created.id;
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Connection health check failed.";
-    await refresh();
+    error.value = cause instanceof Error ? cause.message : "Unable to register the connector.";
   } finally {
     submitting.value = false;
   }
 }
 
-async function addConnection(): Promise<void> {
+async function changeStatus(status: "installed" | "disabled" | "uninstalled"): Promise<void> {
   const installation = selectedInstallation.value;
   if (!installation) return;
-  const name = connectionName.value.trim();
-  const selectedAuthType = authType.value;
-  const selectedCredentialRef = credentialRef.value.trim();
-  const template = selectedConnectionTemplate.value;
-  if (template && selectedAuthType !== template.auth) {
-    error.value = template.auth === "credential_ref"
-      ? "This connector requires a Secret Manager reference; unauthenticated connections are not allowed."
-      : "This connector template does not accept credential references.";
-    info.value = "";
-    return;
-  }
-  const validationError = validatePluginConnectionInput(
-    name,
-    selectedAuthType,
-    selectedCredentialRef,
-  );
-  if (validationError) {
-    error.value = validationError;
-    info.value = "";
+  if (
+    status === "uninstalled" &&
+    !window.confirm(`${t("Uninstall")} ${installation.plugin?.name ?? ""}?`)
+  ) {
     return;
   }
   submitting.value = true;
   error.value = "";
-  info.value = "";
   try {
-    await createPluginConnection(installation.id, {
-      name,
-      auth_type: selectedAuthType,
-      credential_ref: selectedAuthType === "none" ? "" : selectedCredentialRef,
-    });
-    connectionName.value = "";
-    credentialRef.value = "";
-    info.value = selectedAuthType === "none"
-      ? "Unauthenticated connection saved. No secret value was sent to the platform."
-      : "Credential reference saved. No secret value was sent to the platform.";
+    await setAgentPluginInstallationStatus(installation.id, status);
+    info.value = `${installation.plugin?.name ?? installation.plugin_key ?? ""}: ${status}.`;
     await refresh();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to create plugin connection.";
+    error.value = cause instanceof Error ? cause.message : "Unable to update the installation.";
   } finally {
     submitting.value = false;
   }
 }
 
-function riskTag(risk: string): "success" | "warning" | "danger" | "info" {
-  if (risk === "low") return "success";
-  if (risk === "medium") return "warning";
-  if (risk === "high" || risk === "critical") return "danger";
-  return "info";
+function lastInvocation(name: string): string {
+  const entry = capabilities.value.find((item) => item.name === name);
+  if (!entry?.last_invocation) return t("never called");
+  return `${entry.last_invocation.status} · ${new Date(entry.last_invocation.created_at).toLocaleString()}`;
 }
-
-watch(() => [props.tenantId, props.projectId], () => void refresh());
-watch(selectedPluginId, () => {
-  selectedPermissions.value = [];
-});
-onMounted(() => void refresh());
 </script>
 
 <template>
-  <section class="integration-hub">
-    <header class="integration-heading">
+  <section class="connector-hub">
+    <header class="hub-head">
       <div>
-        <p class="eyebrow">CONNECTOR REGISTRY</p>
-        <h2>Integration Hub</h2>
-        <p>Register, review, install and test allowlisted HTTPS connectors. Provider hosts and credential resolvers are controlled by platform configuration.</p>
+        <p class="hub-kicker">{{ t("CONNECTOR REGISTRY") }}</p>
+        <h2>{{ t("Integration Hub") }}</h2>
+        <p class="hub-sub">
+          {{ t("Register, review and install connectors this project can call.") }}
+        </p>
       </div>
-      <el-button plain :loading="loading" @click="refresh">Refresh catalog</el-button>
+      <div class="hub-head-actions">
+        <el-button plain :loading="loading" @click="refresh">{{ t("Refresh catalog") }}</el-button>
+        <el-button type="primary" plain @click="registerOpen = true">{{ t("Register connector") }}</el-button>
+      </div>
     </header>
 
-    <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" />
-    <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" />
+    <el-alert v-if="error" :title="error" type="error" show-icon closable @close="error = ''" />
+    <el-alert v-if="info" :title="info" type="success" show-icon closable @close="info = ''" />
 
-    <div class="integration-grid">
-      <section class="integration-panel">
-        <div class="integration-panel-title">
-          <h3>Connector catalog</h3>
-          <span>{{ catalog.length }} definitions</span>
+    <div class="hub-grid">
+      <section class="hub-panel">
+        <div class="hub-panel-title">
+          <h3>{{ t("Connector catalog") }}</h3>
+          <span>{{ definitions.length }} {{ t("definitions") }}</span>
         </div>
-        <div
-          v-for="plugin in catalog"
-          :key="plugin.id"
-          class="plugin-catalog-item"
-          :class="{ selected: selectedPluginId === plugin.id }"
-          @click="selectedPluginId = plugin.id"
+        <p v-if="!loading && !definitions.length" class="hub-empty">
+          {{ t("No connector definitions registered") }}
+        </p>
+        <button
+          v-for="definition in definitions"
+          :key="definition.id"
+          type="button"
+          class="hub-row"
+          :class="{ on: definition.id === selectedId }"
+          @click="selectedId = definition.id"
         >
-          <div class="plugin-catalog-top">
-            <strong>{{ plugin.name }}</strong>
-            <el-tag
-              :type="plugin.review_status === 'approved' ? 'success' : plugin.review_status === 'rejected' ? 'danger' : 'warning'"
-              size="small"
-            >{{ plugin.review_status }}</el-tag>
-          </div>
-          <small>{{ plugin.plugin_key }} · v{{ plugin.version }} · {{ plugin.connector_type }}</small>
-          <p>{{ plugin.description }}</p>
-          <div class="plugin-tool-tags">
-            <el-tag v-for="tool in plugin.tools" :key="tool.id" size="small" effect="plain">
-              {{ tool.name }}
+          <span class="hub-row-main">
+            <strong>{{ definition.name }}</strong>
+            <small>{{ definition.plugin_key }} · v{{ definition.version }}</small>
+          </span>
+          <span class="hub-row-tags">
+            <el-tag v-if="!definition.enabled" size="small" type="info" effect="plain">
+              {{ t("disabled") }}
             </el-tag>
-          </div>
-        </div>
-        <el-empty v-if="!loading && !catalog.length" description="No connector definitions registered" :image-size="60" />
+            <el-tag
+              v-if="
+                installations.some(
+                  (item) => item.plugin?.id === definition.id && item.status !== 'uninstalled',
+                )
+              "
+              size="small"
+              type="success"
+              effect="plain"
+            >
+              {{ t("Installed") }}
+            </el-tag>
+            <el-tag size="small" effect="plain">{{ definition.protocol }}</el-tag>
+          </span>
+        </button>
       </section>
 
-      <section class="integration-panel">
-        <div class="integration-panel-title">
-          <h3>Connector details</h3>
-          <span v-if="selectedPlugin">{{ selectedPlugin.plugin_key }}@{{ selectedPlugin.version }}</span>
+      <section class="hub-panel">
+        <div class="hub-panel-title">
+          <h3>{{ t("Connector details") }}</h3>
+          <span v-if="selected">{{ selected.capabilities.length }} {{ t("capabilities") }}</span>
         </div>
-        <template v-if="selectedPlugin">
-          <div class="plugin-detail-summary">
-            <strong>{{ selectedPlugin.name }}</strong>
-            <p>{{ selectedPlugin.description }}</p>
-            <small>{{ selectedPlugin.maintainer || "No maintainer" }} · {{ selectedPlugin.license || "License not specified" }}</small>
-          </div>
-          <div v-for="tool in selectedPlugin.tools" :key="tool.id" class="plugin-tool-row">
-            <div class="plugin-tool-heading">
-              <strong>{{ tool.name }}</strong>
-              <el-tag :type="riskTag(tool.risk_level)" size="small">{{ tool.risk_level }}</el-tag>
+        <p v-if="!selected" class="hub-empty">{{ t("Select a connector to inspect its tools") }}</p>
+        <template v-else>
+          <div class="hub-detail-head">
+            <div>
+              <h4>{{ selected.name }}</h4>
+              <p>{{ selected.description }}</p>
             </div>
-            <p>{{ tool.description }}</p>
-            <small>{{ tool.idempotency_mode }} · timeout {{ tool.timeout_seconds }}s · {{ tool.required_permissions.join(", ") || "no declared permissions" }}</small>
+            <el-switch :model-value="selected.enabled" :loading="submitting" @change="toggleDefinition" />
           </div>
-          <el-button
-            v-if="selectedPlugin.review_status === 'draft'"
-            type="primary"
-            plain
-            :loading="submitting"
-            @click="reviewPlugin(selectedPlugin)"
-          >Approve connector metadata</el-button>
-          <template v-if="selectedPlugin.review_status === 'approved' && selectedPlugin.enabled">
-            <div v-if="availablePermissions.length" class="permission-grants">
-              <label>Grant tool permissions explicitly</label>
-              <el-checkbox-group v-model="selectedPermissions">
-                <el-checkbox v-for="permission in availablePermissions" :key="permission" :value="permission">
-                  {{ permission }}
-                </el-checkbox>
-              </el-checkbox-group>
+          <dl class="hub-meta">
+            <div>
+              <dt>{{ t("Protocol") }}</dt>
+              <dd>{{ selected.protocol }}</dd>
             </div>
+            <div>
+              <dt>{{ t("Endpoint") }}</dt>
+              <dd>
+                {{
+                  selected.protocol === "open_data"
+                    ? t("Built into the platform")
+                    : selected.endpoint_url || "—"
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t("Credential") }}</dt>
+              <dd>{{ selected.auth_required ? t("required") : t("not required") }}</dd>
+            </div>
+          </dl>
+
+          <div class="hub-caps">
+            <h5>{{ t("Capabilities") }}</h5>
+            <div v-for="capability in selectedCapabilities" :key="capability.name" class="hub-cap">
+              <div>
+                <code>{{ capability.name }}</code>
+                <small v-if="capabilityDetail(capability.name)">{{
+                  capabilityDetail(capability.name)
+                }}</small>
+              </div>
+              <div class="hub-cap-tags">
+                <el-tag size="small" effect="plain">{{ capabilityRisk(capability.name) }}</el-tag>
+                <small>{{ lastInvocation(capability.name) }}</small>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="selectedInstallation" class="hub-install">
+            <p class="hub-panel-label">{{ t("Installed in this project") }}</p>
+            <p class="hub-install-line">
+              <el-tag
+                size="small"
+                :type="selectedInstallation.status === 'installed' ? 'success' : 'info'"
+                effect="plain"
+              >
+                {{ selectedInstallation.status }}
+              </el-tag>
+              <span>{{ selectedInstallation.granted_capabilities.length }} {{ t("capabilities") }}</span>
+              <span>{{
+                selectedInstallation.credential_configured
+                  ? t("credential configured")
+                  : t("no credential")
+              }}</span>
+            </p>
+            <div class="hub-actions">
+              <el-button
+                v-if="selectedInstallation.status === 'installed'"
+                :loading="submitting"
+                @click="changeStatus('disabled')"
+              >
+                {{ t("Disable") }}
+              </el-button>
+              <el-button
+                v-if="selectedInstallation.status === 'disabled'"
+                :loading="submitting"
+                type="primary"
+                @click="changeStatus('installed')"
+              >
+                {{ t("Enable") }}
+              </el-button>
+              <el-button :loading="submitting" @click="changeStatus('uninstalled')">{{
+                t("Uninstall")
+              }}</el-button>
+            </div>
+          </div>
+
+          <div v-else class="hub-install">
+            <p class="hub-panel-label">{{ t("Install in this project") }}</p>
+            <el-checkbox-group v-model="granted" class="hub-grant">
+              <el-checkbox v-for="capability in selected.capabilities" :key="capability" :value="capability">
+                {{ capability }}
+              </el-checkbox>
+            </el-checkbox-group>
+            <el-input
+              v-if="selected.auth_required"
+              v-model="credentialRef"
+              class="hub-credential"
+              :placeholder="t('Secret reference, e.g. vault://acme/wecom')"
+            />
             <el-button
               type="primary"
-              :disabled="!projectId"
               :loading="submitting"
+              :disabled="!projectId || !granted.length"
               @click="installSelected"
-            >Install into selected project</el-button>
-          </template>
+            >
+              {{ t("Install") }}
+            </el-button>
+          </div>
         </template>
-        <el-empty v-else description="Select a connector to inspect its tools" :image-size="60" />
       </section>
     </div>
 
-    <section class="integration-panel registration-panel">
-      <div class="integration-panel-title">
-        <h3>Register connector definition</h3>
-        <span>Draft only · tenant administrator</span>
-      </div>
-      <div class="connection-form">
-        <el-select v-model="selectedTemplateId" placeholder="Choose a starter template">
-          <el-option v-for="template in connectorTemplates" :key="template.id" :label="template.label" :value="template.id" />
-        </el-select>
-        <el-button plain @click="loadConnectorTemplate">Load template</el-button>
-      </div>
-      <p class="integration-safety-note">Starter templates cover Open-Meteo weather, Amap Places, Baidu Map Places, Google Maps Places, GitHub and Microsoft Graph read-only operations. Templates create draft metadata only; approval, project installation, host allowlisting and server-side credential resolution are still required. No provider is represented as connected until its health check succeeds.</p>
-      <el-input v-model="pluginJson" type="textarea" :rows="14" spellcheck="false" />
-      <el-button type="primary" plain :loading="submitting" :disabled="!tenantId" @click="createPlugin">
-        Register draft
-      </el-button>
-    </section>
-
-    <section class="integration-panel installation-panel">
-      <div class="integration-panel-title">
-        <h3>Project installations</h3>
-        <span>{{ installations.length }} installed records</span>
-      </div>
-      <div v-for="installation in installations" :key="installation.id" class="installation-card">
-        <div class="plugin-catalog-top">
-          <strong>{{ installation.plugin_name }} · {{ installation.plugin_version }}</strong>
-          <el-tag :type="installation.status === 'installed' ? 'success' : 'info'" size="small">
-            {{ installation.status }}
-          </el-tag>
+    <el-dialog v-model="registerOpen" :title="t('Register connector')" width="520px">
+      <el-form label-position="top" class="hub-form">
+        <el-form-item :label="t('Plugin key')">
+          <el-input v-model="registerForm.plugin_key" :placeholder="registerPlaceholders.key" />
+        </el-form-item>
+        <el-form-item :label="t('Name')">
+          <el-input v-model="registerForm.name" />
+        </el-form-item>
+        <el-form-item :label="t('Description')">
+          <el-input v-model="registerForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+        <div class="hub-form-row">
+          <el-form-item :label="t('Version')">
+            <el-input v-model="registerForm.version" />
+          </el-form-item>
+          <el-form-item :label="t('Protocol')">
+            <el-select v-model="registerForm.protocol">
+              <el-option v-for="option in protocolOptions" :key="option" :value="option" :label="option" />
+            </el-select>
+          </el-form-item>
         </div>
-        <small>Granted: {{ installation.granted_permissions.join(", ") || "none" }}</small>
-        <div v-for="connection in installation.connections" :key="connection.id" class="connection-row">
-          <span>{{ connection.name }} · {{ connection.auth_type }}</span>
-          <el-tag :type="connection.credential_configured ? 'success' : 'info'" size="small">
-            {{ connection.credential_configured ? "Secret reference configured" : "No secret reference" }}
-          </el-tag>
-          <el-tag :type="connection.status === 'healthy' ? 'success' : connection.status === 'error' ? 'danger' : 'info'" size="small">{{ connection.status }}</el-tag>
-          <el-button
-            v-if="connection.status !== 'disabled'"
-            size="small"
-            plain
-            :loading="submitting"
-            @click="testConnection(connection.id)"
-          >Test connection</el-button>
-          <el-button
-            v-if="connection.status !== 'disabled'"
-            size="small"
-            text
-            @click="updateConnectionStatus(connection.id, 'disabled')"
-          >Disable</el-button>
-          <el-button
-            v-else
-            size="small"
-            text
-            type="primary"
-            @click="updateConnectionStatus(connection.id, 'pending')"
-          >Enable</el-button>
-        </div>
-        <div class="installation-actions">
-          <el-button
-            v-if="installation.status === 'installed'"
-            text
-            size="small"
-            @click="selectedInstallationId = installation.id"
-          >Configure connection</el-button>
-          <el-button
-            v-if="installation.status === 'installed'"
-            text
-            size="small"
-            @click="updateInstallation(installation, 'disabled')"
-          >Disable</el-button>
-          <el-button
-            v-if="installation.status === 'disabled'"
-            text
-            size="small"
-            @click="updateInstallation(installation, 'installed')"
-          >Enable</el-button>
-          <el-button
-            v-if="installation.status !== 'uninstalled'"
-            text
-            type="danger"
-            size="small"
-            @click="updateInstallation(installation, 'uninstalled')"
-          >Uninstall</el-button>
-        </div>
-      </div>
-      <el-empty v-if="!installations.length" description="No connector installed in this project" :image-size="56" />
-    </section>
-
-    <section
-      v-if="selectedInstallation && selectedInstallation.status === 'installed'"
-      class="integration-panel connection-panel"
-    >
-      <div class="integration-panel-title">
-        <h3>Connection reference</h3>
-        <span>{{ selectedInstallation.plugin_name }}</span>
-      </div>
-      <div class="connection-form">
-        <el-input v-model="connectionName" placeholder="Connection name" />
-        <el-select v-model="authType" :disabled="Boolean(selectedConnectionTemplate)">
-          <el-option label="Credential reference" value="credential_ref" />
-          <el-option label="OAuth reference" value="oauth_ref" />
-          <el-option label="No authentication" value="none" />
-        </el-select>
-        <el-input
-          v-if="authType !== 'none'"
-          v-model="credentialRef"
-          placeholder="vault://path/to/credential"
-        />
-        <el-button type="primary" plain :loading="submitting" @click="addConnection">
-          {{ authType === "none" ? "Save connection" : "Save credential reference" }}
+        <el-form-item :label="t('Endpoint')">
+          <el-input v-model="registerForm.endpoint_url" :placeholder="registerPlaceholders.endpoint" />
+        </el-form-item>
+        <el-form-item :label="t('Capabilities')">
+          <el-input v-model="registerForm.capabilities" :placeholder="registerPlaceholders.capabilities" />
+        </el-form-item>
+        <el-form-item :label="t('Credential')">
+          <el-switch v-model="registerForm.auth_required" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="registerOpen = false">{{ t("Cancel") }}</el-button>
+        <el-button type="primary" :loading="submitting" @click="registerConnector">
+          {{ t("Create") }}
         </el-button>
+      </template>
+    </el-dialog>
+
+    <section class="hub-panel hub-installations">
+      <div class="hub-panel-title">
+        <h3>{{ t("Project installations") }}</h3>
+        <span>{{ installedCount }} {{ t("installed records") }}</span>
       </div>
-      <p v-if="selectedConnectionTemplate" class="integration-safety-note">
-        {{ selectedConnectionTemplate.summary }} Allowed host: {{ selectedConnectionTemplate.host }}; add this host to PLUGIN_HTTP_ALLOWED_HOSTS. {{ selectedConnectionTemplate.credentialHint }} Store only a Secret Manager reference here, never the API key, access token or webhook URL itself.
-      </p>
-      <p v-else class="integration-safety-note">Only a reference URI is stored. Secret values, OAuth tokens and API keys must stay in a Secret Manager. HTTP/OpenAPI tool calls are sent only to hosts in PLUGIN_HTTP_ALLOWED_HOSTS; credential-backed connections require a configured PLUGIN_CREDENTIAL_RESOLVER. Only GET and explicitly read-only POST operations are currently executable; connector mutations remain disabled pending approval and idempotency support.</p>
+      <p v-if="!installedCount" class="hub-empty">{{ t("No connector installed in this project") }}</p>
+      <table v-else class="hub-table">
+        <thead>
+          <tr>
+            <th>{{ t("Connector") }}</th>
+            <th>{{ t("Status") }}</th>
+            <th>{{ t("Granted capabilities") }}</th>
+            <th>{{ t("Credential") }}</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="installation in installations.filter((item) => item.status !== 'uninstalled')"
+            :key="installation.id"
+          >
+            <td>
+              <strong>{{ installation.plugin?.name ?? installation.plugin_key }}</strong>
+              <small>{{ installation.plugin?.plugin_key }} · v{{ installation.plugin_version }}</small>
+            </td>
+            <td>
+              <el-tag size="small" effect="plain">{{ installation.status }}</el-tag>
+            </td>
+            <td>{{ installation.granted_capabilities.join(", ") || "—" }}</td>
+            <td>{{ installation.credential_configured ? t("configured") : t("not configured") }}</td>
+            <td>
+              <el-button link @click="selectedId = installation.plugin?.id ?? selectedId">
+                {{ t("Inspect") }}
+              </el-button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   </section>
 </template>
+
+<style scoped>
+.connector-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.hub-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.hub-kicker {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--el-text-color-secondary);
+}
+.hub-head h2 {
+  margin: 4px 0 6px;
+  font-size: 26px;
+}
+.hub-sub {
+  margin: 0;
+  color: var(--el-text-color-regular);
+}
+.hub-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(380px, 1.6fr);
+  gap: 18px;
+}
+.hub-panel {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 14px;
+  padding: 16px;
+  background: var(--el-bg-color);
+}
+.hub-head-actions {
+  display: flex;
+  gap: 8px;
+}
+.hub-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.hub-panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.hub-panel-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.hub-panel-title span,
+.hub-empty {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.hub-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  text-align: left;
+  cursor: pointer;
+}
+.hub-row.on {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.hub-row-main {
+  display: flex;
+  flex-direction: column;
+}
+.hub-row-main small {
+  color: var(--el-text-color-secondary);
+}
+.hub-row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hub-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.hub-detail-head h4 {
+  margin: 0 0 4px;
+}
+.hub-detail-head p {
+  margin: 0;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+.hub-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.hub-meta div {
+  background: var(--el-fill-color-lighter);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.hub-meta dt {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+.hub-meta dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  word-break: break-all;
+}
+.hub-caps h5,
+.hub-panel-label {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--el-text-color-secondary);
+}
+.hub-cap {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+.hub-cap div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hub-cap code {
+  font-size: 12px;
+}
+.hub-cap small {
+  color: var(--el-text-color-secondary);
+}
+.hub-cap-tags {
+  align-items: flex-end;
+  text-align: right;
+}
+.hub-install {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.hub-install-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.hub-grant {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+}
+.hub-credential {
+  margin-bottom: 10px;
+}
+.hub-actions {
+  display: flex;
+  gap: 8px;
+}
+.hub-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.hub-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  padding: 6px 8px;
+}
+.hub-table td {
+  padding: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  vertical-align: top;
+}
+.hub-table td small {
+  display: block;
+  color: var(--el-text-color-secondary);
+}
+@media (max-width: 960px) {
+  .hub-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hub-meta {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>

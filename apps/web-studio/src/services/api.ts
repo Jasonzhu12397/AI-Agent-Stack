@@ -1982,7 +1982,12 @@ export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDoc
   });
 }
 
-export type AgentPluginProtocol = "http_json" | "mcp" | "a2a" | "openai_compatible";
+export type AgentPluginProtocol =
+  | "http_json"
+  | "mcp"
+  | "a2a"
+  | "openai_compatible"
+  | "open_data";
 
 export type AgentPluginInstallationStatus = "installed" | "disabled" | "uninstalled";
 
@@ -2006,6 +2011,7 @@ export type AgentPluginDefinition = {
   endpoint_url: string;
   auth_required: boolean;
   capabilities: string[];
+  capability_definitions?: AgentPluginManifestCapability[];
   input_schema: Record<string, unknown> | null;
   output_schema: Record<string, unknown> | null;
   timeout_seconds: number | null;
@@ -2057,6 +2063,38 @@ export function getAgentPluginDefinitions(tenantId: string): Promise<AgentPlugin
   return request(
     "/api/v1/tenants/" + tenantId + "/agent-plugins/",
   );
+}
+
+/** Register a new connector definition owned by the tenant. */
+export function createAgentPlugin(
+  tenantId: string,
+  payload: {
+    plugin_key: string;
+    name: string;
+    description: string;
+    version: string;
+    protocol: AgentPluginProtocol;
+    endpoint_url: string;
+    auth_required: boolean;
+    capabilities: string[];
+  },
+): Promise<AgentPluginDefinition> {
+  return request("/api/v1/tenants/" + tenantId + "/agent-plugins/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Turn a connector definition on or off for the whole tenant. */
+export function setAgentPluginEnabled(
+  pluginId: string,
+  enabled: boolean,
+): Promise<AgentPluginDefinition> {
+  return request("/api/v1/agent-plugins/" + pluginId + "/", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 export function getAgentPluginInstallations(

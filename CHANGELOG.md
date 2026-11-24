@@ -8,6 +8,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- The Integration Hub now reads agent-plugin definitions instead of the legacy
+  plugin table, so it lists the connectors chat actually has and can install,
+  disable and uninstall them.
+- Connector definitions expose `capability_definitions`; `capabilities` is a
+  name list for every client.
 - The chat console requires sign-in on every workspace route, reloads the
   route after sign-in, and no longer shows "session expired" for the
   unauthenticated probe a fresh browser makes.

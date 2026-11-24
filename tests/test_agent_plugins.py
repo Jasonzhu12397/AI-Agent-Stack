@@ -235,3 +235,37 @@ def test_project_member_cannot_register_tenant_agent_plugin(agent_plugin_workspa
 
     assert response.status_code == 403
     assert not AgentPluginDefinition.objects.filter(tenant=tenant).exists()
+
+
+@pytest.mark.django_db
+def test_definition_payload_flattens_catalog_capability_dicts():
+    """Catalog rows store full declarations; the API keeps names plus details."""
+
+    user = get_user_model().objects.create_user(username="catalog-owner", password="x")
+    tenant = Tenant.objects.create(name="Catalog tenant", slug="catalog-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=user, role=TenantMembership.Role.OWNER)
+    definition = AgentPluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="weather",
+        name="Weather",
+        description="Built-in weather",
+        version="1.0.0",
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=[
+            {"name": "weather.current", "description": "Current conditions"},
+            {"name": "weather.forecast", "description": "Short forecast"},
+        ],
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.get(f"/api/v1/tenants/{tenant.id}/agent-plugins/")
+
+    assert response.status_code == 200
+    entry = next(item for item in response.data if item["id"] == str(definition.id))
+    assert entry["capabilities"] == ["weather.current", "weather.forecast"]
+    assert entry["capability_definitions"][0]["name"] == "weather.current"
+    assert entry["manifest"]["capabilities"][0]["name"] == "weather.current"

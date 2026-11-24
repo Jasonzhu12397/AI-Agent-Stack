@@ -2,7 +2,12 @@
 // fetch dependency; it only transforms records that mirror the frozen backend
 // contract. Fields the backend may omit are treated as optional.
 
-export type AgentProtocol = "http_json" | "mcp" | "a2a" | "openai_compatible";
+export type AgentProtocol =
+  | "http_json"
+  | "mcp"
+  | "a2a"
+  | "openai_compatible"
+  | "open_data";
 
 export type InstallationStatus = "installed" | "disabled" | "uninstalled";
 
