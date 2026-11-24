@@ -31,10 +31,22 @@ def head_commit() -> str:
 
 
 def sync_checkout() -> None:
-    """Follow main so the address always serves the deployed commit."""
+    """Follow main so the address always serves the deployed commit.
 
-    run(["git", "fetch", "-q", "origin"], check=False)
-    run(["git", "reset", "-q", "--hard", "origin/main"], check=False)
+    A silent fetch failure used to leave the checkout on an older commit while
+    the marker still matched, so the console served a stale bundle. The retry
+    makes a transient network error visible instead of invisible.
+    """
+
+    for attempt in range(2):
+        fetched = run(["git", "fetch", "-q", "origin"], check=False)
+        if fetched.returncode == 0:
+            break
+        print(f"fetch attempt {attempt + 1} failed: {fetched.stderr.decode()[-400:]}", flush=True)
+    reset = run(["git", "reset", "-q", "--hard", "origin/main"], check=False)
+    if reset.returncode != 0:
+        print(f"reset to origin/main failed: {reset.stderr.decode()[-400:]}", flush=True)
+    print(f"console checkout at {head_commit()}", flush=True)
 
 
 def main() -> None:
@@ -44,19 +56,18 @@ def main() -> None:
         sync_checkout()
 
     commit = head_commit() if (REPO_ROOT / ".git").exists() else ""
-    prepared = (
-        DB_PATH.exists() and BUILT_COMMIT.exists() and BUILT_COMMIT.read_text().strip() == commit
+    # A deploy is a deliberate act, so the environment is prepared every time
+    # instead of trusting a marker: a marker left over from a commit whose
+    # bundle was never rebuilt is exactly how a stale console happens.
+    print("preparing environment", flush=True)
+    subprocess.run(
+        [sys.executable, str(HERE / "bootstrap.py")],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
     )
-    if not prepared:
-        print("preparing environment", flush=True)
-        subprocess.run(
-            [sys.executable, str(HERE / "bootstrap.py")],
-            cwd=str(REPO_ROOT),
-            env=env,
-            check=True,
-        )
-        BUILT_COMMIT.parent.mkdir(parents=True, exist_ok=True)
-        BUILT_COMMIT.write_text(commit + "\n")
+    BUILT_COMMIT.parent.mkdir(parents=True, exist_ok=True)
+    BUILT_COMMIT.write_text(commit + "\n")
 
     subprocess.run(
         [sys.executable, str(HERE / "start.py")], cwd=str(REPO_ROOT), env=env, check=True
