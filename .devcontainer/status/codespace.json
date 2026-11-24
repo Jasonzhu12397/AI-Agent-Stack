@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T15:34:54Z",
+  "checked_at": "2026-11-24T15:59:42Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -13,23 +13,23 @@
   },
   "workflow": {
     "status": "succeeded",
-    "run_id": "2601821c",
+    "run_id": "8af4fa65",
     "error": null
   },
   "ok": true,
   "api_log": [
-    "127.0.0.1:44748 - - [24/Nov/2026:23:34:52] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
-    "127.0.0.1:44770 - - [24/Nov/2026:23:34:52] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:44774 - - [24/Nov/2026:23:34:52] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44780 - - [24/Nov/2026:23:34:53] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:44786 - - [24/Nov/2026:23:34:53] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44794 - - [24/Nov/2026:23:34:53] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:44804 - - [24/Nov/2026:23:34:53] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:44816 - - [24/Nov/2026:23:34:53] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:44832 - - [24/Nov/2026:23:34:53] \"POST /api/v1/workflows/39f49459-fd21-47f8-b955-f50e92b6d096/publish/\" 201 318",
-    "127.0.0.1:44840 - - [24/Nov/2026:23:34:53] \"POST /api/v1/workflows/39f49459-fd21-47f8-b955-f50e92b6d096/runs/\" 202 435",
-    "127.0.0.1:44844 - - [24/Nov/2026:23:34:54] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
-    "127.0.0.1:44846 - - [24/Nov/2026:23:34:54] \"GET /api/v1/workflows/39f49459-fd21-47f8-b955-f50e92b6d096/runs/\" 200 1553"
+    "127.0.0.1:40922 - - [24/Nov/2026:23:59:39] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:40936 - - [24/Nov/2026:23:59:40] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:40950 - - [24/Nov/2026:23:59:40] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:40956 - - [24/Nov/2026:23:59:40] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:40964 - - [24/Nov/2026:23:59:40] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:40966 - - [24/Nov/2026:23:59:40] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:40976 - - [24/Nov/2026:23:59:40] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:40984 - - [24/Nov/2026:23:59:40] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:40988 - - [24/Nov/2026:23:59:41] \"POST /api/v1/workflows/e2982005-53a8-4a5b-9425-077430a05600/publish/\" 201 318",
+    "127.0.0.1:40994 - - [24/Nov/2026:23:59:41] \"POST /api/v1/workflows/e2982005-53a8-4a5b-9425-077430a05600/runs/\" 202 435",
+    "127.0.0.1:41004 - - [24/Nov/2026:23:59:41] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:41020 - - [24/Nov/2026:23:59:42] \"GET /api/v1/workflows/e2982005-53a8-4a5b-9425-077430a05600/runs/\" 200 1553"
   ],
   "web_log": [
     "",
@@ -39,9 +39,6 @@
     "sh: 1: vite: not found"
   ],
   "worker_log": [
-    "    return super().execute(query, params)",
-    "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
-    "django.db.utils.OperationalError: database is locked",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-46113, poll_seconds=1.0)",
@@ -50,6 +47,9 @@
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-46706, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-48455, poll_seconds=1.0)"
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-48455, poll_seconds=1.0)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-51916, poll_seconds=1.0)"
   ]
 }
