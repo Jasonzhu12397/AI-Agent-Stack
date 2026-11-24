@@ -233,7 +233,31 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
  * 640px box, so a taller screen shows more of the DAG. */
 .workflow-canvas-scroll { display: flex; align-items: center; justify-content: center; overflow: auto; height: var(--studio-canvas-height, calc(100dvh - 380px)); min-height: 360px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 10px; }
 .workflow-node-inspector { max-height: var(--studio-canvas-height, calc(100dvh - 380px)); overflow: auto; }
+/* Workflow editing gives the canvas the room; the module chrome above it goes. */
+.workflow-canvas-grid.solo { grid-template-columns: minmax(0, 1fr); }
+.workspace-focus .workspace-heading { display: none; }
+.workspace-focus .workspace { padding-top: 10px; }
+.workflow-pipeline .workflow-run-heading { padding: 6px 0 2px; }
+.workflow-pipeline .workflow-run-heading h4 { font-size: 12px; }
+.workflow-pipeline .workflow-run-heading .task-note { display: none; }
+.workflow-canvas-shell { position: relative; min-width: 0; }
 .workflow-canvas-frame { position: relative; }
+
+/* Canvas controls float over the sheet so the graph keeps the whole box. */
+.canvas-toolbar { position: absolute; top: 10px; left: 10px; z-index: 4; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 20px); overflow-x: auto; padding: 4px; background: #ffffffdd; border: 1px solid #e3eaf2; border-radius: 10px; backdrop-filter: blur(6px); box-shadow: 0 6px 18px #05080f14; }
+.canvas-tool { display: grid; place-items: center; flex: 0 0 auto; min-width: 28px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #16232d; font: inherit; font-size: 12px; cursor: pointer; }
+.canvas-tool:hover { border-color: #d5e2ee; background: #f2f7fb; }
+.canvas-tool.on { border-color: #8fd3b4; background: #effbf5; color: #0a6b4a; }
+.canvas-tool-text { font-size: 11px; }
+.canvas-zoom { min-width: 40px; padding: 0 2px; color: #566976; font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
+
+/* Minimap: the whole sheet as a box, plus the part of it currently on screen. */
+.canvas-minimap { position: absolute; right: 12px; bottom: 12px; z-index: 4; width: 148px; height: 96px; overflow: hidden; background: #f7fafdcc; border: 1px solid #dbe4ec; border-radius: 10px; box-shadow: 0 6px 18px #05080f14; cursor: crosshair; }
+.minimap-node { position: absolute; height: 4px; border-radius: 2px; background: #4b6b8a; }
+.minimap-view { position: absolute; border: 1.5px solid #0e7c86; border-radius: 3px; background: #0e7c8612; pointer-events: none; }
+.workflow-studio:fullscreen { padding: 10px 16px 16px; overflow: auto; background: #ffffff; }
+.workflow-studio:fullscreen .workflow-canvas-scroll { height: calc(100dvh - 190px); }
+
 .workflow-canvas { position: relative; transform-origin: top left; background-image: radial-gradient(ellipse at 75% 0%, #ffffff 0, #f5f9fc 48%); background-size: 22px 22px; }
 .workflow-canvas-edges { position: absolute; inset: 0; pointer-events: none; }
 .workflow-canvas-node { position: absolute; display: grid; gap: 3px; padding: 10px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 9px; box-shadow: 0 8px 20px #05080f88; cursor: grab; user-select: none; }
@@ -933,4 +957,16 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   .main-nav a { flex: 0 0 auto; white-space: nowrap; }
   .topbar { height: 68px; }
   .account-actions { gap: 8px; }
+}
+
+/* Phones: the padding chain around the canvas is worth more than the gap. */
+@media (max-width: 760px) {
+  .workspace-focus .task-panel { padding-left: 6px; padding-right: 6px; }
+  .workspace-focus .workflow-studio { padding-left: 4px; padding-right: 4px; }
+  .workspace-focus .workflow-pipeline { padding-left: 2px; padding-right: 2px; }
+  .workspace-focus .workflow-canvas-grid { gap: 8px; }
+  .workspace-focus .canvas-minimap { width: 104px; height: 68px; }
+  /* Node buttons stay on one swipeable row instead of stacking above the graph. */
+  .workspace-focus .workflow-node-toolbar { flex-wrap: nowrap; overflow-x: auto; margin: 6px 0 8px; padding-bottom: 2px; }
+  .workspace-focus .workflow-node-toolbar .task-note { flex: 0 0 auto; }
 }

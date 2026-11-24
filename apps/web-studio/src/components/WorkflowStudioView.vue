@@ -32,12 +32,28 @@ const canvasScale = ref(1);
 const paintWidth = ref(0);
 const paintHeight = ref(0);
 let resizeObserver: ResizeObserver | null = null;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 2.5;
+const VIEWPORT_PREFIX = "studio.viewport.v1";
+const canvasFrame = ref<HTMLElement | null>(null);
+const viewLeft = ref(0);
+const viewTop = ref(0);
+const viewWidth = ref(0);
+const viewHeight = ref(0);
+// Once the user zooms or restores a stored viewport, automatic fit must stop
+// fighting them: resizing the window may re-measure the box but not the view.
+const viewLocked = ref(false);
+const minimapOpen = ref(true);
+const isFullscreen = ref(false);
+const inspectorOpen = ref(false);
+let viewportTimer: number | undefined;
+
 const scaledWidth = computed(() => Math.round((paintWidth.value || canvasLayout.value.width) * canvasScale.value));
 const scaledHeight = computed(() => Math.round((paintHeight.value || canvasLayout.value.height) * canvasScale.value));
 
-function fitCanvas(): void {
+function fitCanvas(force = false): void {
   const box = canvasScroll.value;
-  if (!box) return;
+  if (!box || (viewLocked.value && !force)) return;
   const width = box.clientWidth - 16;
   const height = box.clientHeight - 16;
   const layout = canvasLayout.value;
@@ -64,10 +80,200 @@ function fitStudio(): void {
   fitCanvas();
 }
 
+function paintScale(scale: number): void {
+  const box = canvasScroll.value;
+  canvasScale.value = scale;
+  paintWidth.value = Math.max(
+    canvasLayout.value.width,
+    Math.round((box?.clientWidth ?? 0) / scale),
+  );
+  paintHeight.value = Math.max(
+    canvasLayout.value.height,
+    Math.round((box?.clientHeight ?? 0) / scale),
+  );
+}
+
+function zoomTo(next: number): void {
+  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(next.toFixed(3))));
+  paintScale(scale);
+  viewLocked.value = true;
+  void nextTick(syncViewport);
+  scheduleSaveViewport();
+}
+
+function zoomBy(step: number): void {
+  zoomTo(canvasScale.value * step);
+}
+
+function fitView(): void {
+  viewLocked.value = false;
+  fitCanvas(true);
+  void nextTick(() => {
+    syncViewport();
+    scheduleSaveViewport();
+  });
+}
+
+function syncViewport(): void {
+  const el = canvasScroll.value;
+  if (!el) return;
+  viewLeft.value = el.scrollLeft;
+  viewTop.value = el.scrollTop;
+  viewWidth.value = el.clientWidth;
+  viewHeight.value = el.clientHeight;
+}
+
+function viewportKey(): string {
+  if (!selectedWorkflowId.value) return "";
+  return `${VIEWPORT_PREFIX}:${props.projectId || "no-project"}:${selectedWorkflowId.value}`;
+}
+
+function scheduleSaveViewport(): void {
+  if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
+  viewportTimer = window.setTimeout(saveViewport, 250);
+}
+
+function saveViewport(): void {
+  const key = viewportKey();
+  if (!key) return;
+  try {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({ scale: canvasScale.value, left: viewLeft.value, top: viewTop.value }),
+    );
+  } catch {
+    /* storage can be full or disabled; the viewport is a convenience, not state */
+  }
+}
+
+// Restore the stored view of this workflow once its sheet has been painted.
+// A workflow without a stored viewport is fitted to the whole graph instead.
+function restoreViewport(): void {
+  const key = viewportKey();
+  const stored = key ? window.localStorage.getItem(key) : null;
+  if (!stored) {
+    viewLocked.value = false;
+    void nextTick(() => {
+      fitCanvas(true);
+      void nextTick(() => {
+        syncViewport();
+        scheduleSaveViewport();
+      });
+    });
+    return;
+  }
+  try {
+    const parsed = JSON.parse(stored) as { scale?: number; left?: number; top?: number };
+    if (!parsed.scale) throw new Error("no scale");
+    paintScale(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, parsed.scale)));
+    viewLocked.value = true;
+    window.requestAnimationFrame(() => {
+      const el = canvasScroll.value;
+      if (el) {
+        el.scrollLeft = Math.max(0, parsed.left ?? 0);
+        el.scrollTop = Math.max(0, parsed.top ?? 0);
+      }
+      syncViewport();
+    });
+  } catch {
+    window.localStorage.removeItem(key);
+    fitView();
+  }
+}
+
+function onCanvasScroll(): void {
+  syncViewport();
+  scheduleSaveViewport();
+}
+
+function jumpFromMinimap(event: MouseEvent): void {
+  const map = event.currentTarget as HTMLElement;
+  const box = map.getBoundingClientRect();
+  const ratioX = (event.clientX - box.left) / box.width;
+  const ratioY = (event.clientY - box.top) / box.height;
+  const el = canvasScroll.value;
+  if (!el) return;
+  el.scrollLeft = Math.max(0, ratioX * scaledWidth.value - el.clientWidth / 2);
+  el.scrollTop = Math.max(0, ratioY * scaledHeight.value - el.clientHeight / 2);
+  syncViewport();
+  scheduleSaveViewport();
+}
+
+const zoomLabel = computed(() => `${Math.round(canvasScale.value * 100)}%`);
+
+// The minimap draws the sheet as a percentage box, so it stays correct at any
+// zoom level without a second coordinate system.
+function minimapNodeStyle(node: { x: number; y: number }): Record<string, string> {
+  const width = Math.max(1, canvasLayout.value.width);
+  const height = Math.max(1, canvasLayout.value.height);
+  return {
+    left: `${(node.x / width) * 100}%`,
+    top: `${(node.y / height) * 100}%`,
+    width: `${(NODE_WIDTH / width) * 100}%`,
+  };
+}
+
+const minimapViewStyle = computed(() => {
+  const width = Math.max(1, scaledWidth.value);
+  const height = Math.max(1, scaledHeight.value);
+  const left = Math.min(100, (viewLeft.value / width) * 100);
+  const top = Math.min(100, (viewTop.value / height) * 100);
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${Math.min(100 - left, (viewWidth.value / width) * 100)}%`,
+    height: `${Math.min(100 - top, (viewHeight.value / height) * 100)}%`,
+  };
+});
+
+function toggleFocus(): void {
+  const root = studioRoot.value;
+  if (!root) return;
+  if (document.fullscreenElement) {
+    void document.exitFullscreen();
+    return;
+  }
+  void root.requestFullscreen?.();
+}
+
+function onFullscreenChange(): void {
+  isFullscreen.value = Boolean(document.fullscreenElement);
+  void nextTick(() => {
+    fitStudio();
+    if (!viewLocked.value) fitCanvas(true);
+    syncViewport();
+  });
+  window.setTimeout(fitStudio, 120);
+}
+
+function onCanvasKeydown(event: KeyboardEvent): void {
+  const target = event.target as HTMLElement | null;
+  if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+  const meta = event.ctrlKey || event.metaKey;
+  if (meta && event.key === "1") {
+    event.preventDefault();
+    fitView();
+  } else if (meta && (event.key === "=" || event.key === "+")) {
+    event.preventDefault();
+    zoomBy(1.2);
+  } else if (meta && event.key === "-") {
+    event.preventDefault();
+    zoomBy(1 / 1.2);
+  } else if (event.shiftKey && event.key === "1") {
+    event.preventDefault();
+    zoomTo(1);
+  } else if (event.shiftKey && event.key === "5") {
+    event.preventDefault();
+    zoomTo(0.5);
+  } else if (event.key === "Escape" && document.fullscreenElement) {
+    void document.exitFullscreen();
+  }
+}
+
 onMounted(() => {
   fitStudio();
   window.addEventListener("resize", fitStudio);
-  window.addEventListener("resize", fitCanvas);
+  window.addEventListener("resize", () => fitCanvas());
   // The scroll box only has a height once the measured CSS variable lands,
   // so fit again after paint and whenever the graph changes.
   // Fonts, the workflow toolbar and the draft panel all settle over the first
@@ -88,12 +294,17 @@ onMounted(() => {
     for (const child of Array.from(root.children)) observer.observe(child);
   }
   resizeObserver = observer;
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  window.addEventListener("keydown", onCanvasKeydown);
 });
 
 onUnmounted(() => {
   window.removeEventListener("resize", fitStudio);
-  window.removeEventListener("resize", fitCanvas);
+  window.removeEventListener("resize", () => fitCanvas());
   resizeObserver?.disconnect();
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
+  window.removeEventListener("keydown", onCanvasKeydown);
+  if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
 });
 const workflows = ref<WorkflowDraft[]>([]);
 const selectedWorkflowId = ref("");
@@ -112,6 +323,13 @@ const notice = ref("");
 const validating = ref(false);
 const decidingNode = ref("");
 const selectedNodeId = ref("");
+watch(selectedNodeId, (id) => {
+  if (id) inspectorOpen.value = true;
+});
+const toggleInspector = () => {
+  inspectorOpen.value = !inspectorOpen.value;
+  nextTick(() => fitCanvas());
+};
 const nodeIdDraft = ref("");
 const nodeTypeDraft = ref("llm");
 const nodeConfigText = ref("{}");
@@ -723,6 +941,7 @@ function selectWorkflow(workflowId: string): void {
   } else {
     definitionText.value = "";
   }
+  restoreViewport();
   runs.value = [];
   validationResult.value = null;
   if (workflowId) void loadRuns();
@@ -956,9 +1175,10 @@ onUnmounted(() => {
           <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
-        <div v-else class="workflow-canvas-grid">
-          <div ref="canvasScroll" class="workflow-canvas-scroll">
-          <div class="workflow-canvas-frame" :style="{ width: scaledWidth + 'px', height: scaledHeight + 'px' }">
+        <div v-else class="workflow-canvas-grid" :class="{ solo: !inspectorOpen }">
+          <div class="workflow-canvas-shell">
+          <div ref="canvasScroll" class="workflow-canvas-scroll" @scroll.passive="onCanvasScroll">
+          <div ref="canvasFrame" class="workflow-canvas-frame" :style="{ width: scaledWidth + 'px', height: scaledHeight + 'px' }">
           <div
             class="workflow-canvas"
             :style="{ width: (paintWidth || canvasLayout.width) + 'px', height: (paintHeight || canvasLayout.height) + 'px', transform: 'scale(' + canvasScale + ')' }"
@@ -1021,7 +1241,48 @@ onUnmounted(() => {
           </div>
           </div>
           </div>
-          <aside class="workflow-node-inspector">
+          <div class="canvas-toolbar">
+            <button type="button" class="canvas-tool" :title="t('Zoom out')" @click="zoomBy(1 / 1.2)">－</button>
+            <span class="canvas-zoom">{{ zoomLabel }}</span>
+            <button type="button" class="canvas-tool" :title="t('Zoom in')" @click="zoomBy(1.2)">＋</button>
+            <button type="button" class="canvas-tool canvas-tool-text" :title="t('Fit view')" @click="fitView">
+              {{ t("Fit") }}
+            </button>
+            <button type="button" class="canvas-tool canvas-tool-text" @click="zoomTo(1)">100%</button>
+            <button type="button" class="canvas-tool canvas-tool-text" @click="zoomTo(0.5)">50%</button>
+            <button
+              type="button"
+              class="canvas-tool canvas-tool-text"
+              :class="{ on: minimapOpen }"
+              :title="t('Minimap')"
+              @click="minimapOpen = !minimapOpen"
+            >
+              ▦
+            </button>
+            <button
+              type="button"
+              class="canvas-tool"
+              :class="{ on: inspectorOpen }"
+              :title="t('Inspector')"
+              @click="toggleInspector()"
+            >
+              ▤
+            </button>
+            <button type="button" class="canvas-tool" :title="t('Fullscreen')" @click="toggleFocus">
+              {{ isFullscreen ? "⤡" : "⤢" }}
+            </button>
+          </div>
+          <div v-if="minimapOpen" class="canvas-minimap" :title="t('Minimap')" @click="jumpFromMinimap">
+            <span
+              v-for="node in canvasLayout.nodes"
+              :key="'map-' + node.id"
+              class="minimap-node"
+              :style="minimapNodeStyle(node)"
+            />
+            <span class="minimap-view" :style="minimapViewStyle" />
+          </div>
+          </div>
+          <aside v-if="inspectorOpen" class="workflow-node-inspector">
             <div class="workflow-run-heading">
               <h4>Node inspector</h4>
               <el-tag v-if="selectedNodeId" size="small" effect="plain">{{ selectedNodeId }}</el-tag>

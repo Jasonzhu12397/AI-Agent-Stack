@@ -1005,4 +1005,11 @@ export const zhCN: Record<string, string> = {
   "No model is available yet.": "暂无可用模型。",
   "No messages yet": "还没有消息",
   "Browse the plugin marketplace": "去插件市场浏览",
+  "Fit": "适配",
+  "Fit view": "适配全部节点",
+  "Zoom in": "放大",
+  "Zoom out": "缩小",
+  "Minimap": "缩略图",
+  "Fullscreen": "全屏",
+  "Inspector": "检查器",
 };

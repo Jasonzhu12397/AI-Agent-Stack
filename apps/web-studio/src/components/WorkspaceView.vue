@@ -172,7 +172,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="workspace" :class="{ 'workspace-chat': activeSection === 'chat' }">
+  <section
+    class="workspace"
+    :class="{ 'workspace-chat': activeSection === 'chat', 'workspace-focus': activeSection === 'workflows' }"
+  >
     <div v-if="activeSection !== 'chat'" class="workspace-heading">
       <div>
         <p class="eyebrow">CONTROL PLANE</p>
