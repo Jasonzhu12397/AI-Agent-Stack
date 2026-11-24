@@ -18,7 +18,7 @@ import uuid
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from core.models import ModelProvider, ProviderAccountLink, ProviderAccountUsage
@@ -191,7 +191,7 @@ def link_account(
             "This provider is billed to the tenant; account linking does not apply.",
             http_status=409,
         )
-    reference = (credential_ref or "").strip()
+    reference = _storable_reference(credential_ref, user)
     if not reference:
         raise ProviderAccountError(
             "PROVIDER_ACCOUNT_CREDENTIAL_REQUIRED",
@@ -215,6 +215,49 @@ def link_account(
         credential_ref=reference,
         account_label=label,
     )
+
+
+_MEMBER_REF_PREFIX = "member://"
+_MEMBER_SCOPE = "member-credential-secret"
+
+
+def _storable_reference(value: str | None, user) -> str:
+    """Turn whatever the member pasted into a reference that can be resolved.
+
+    A key pasted straight from the platform has no scheme, so it is sealed into
+    a member secret and stored as ``member://<id>``. An explicit ``env://`` or
+    ``vault://`` reference is kept as-is, because an operator who injects
+    credentials at boot stays authoritative.
+    """
+
+    reference = (value or "").strip()
+    if not reference:
+        return ""
+    if "://" in reference or reference.startswith("env:"):
+        return reference
+    from core.field_crypto import seal
+
+    secret = MemberCredentialSecret.objects.create(
+        user=user, sealed_value=seal(reference, _MEMBER_SCOPE)
+    )
+    return f"{_MEMBER_REF_PREFIX}{secret.id}"
+
+
+def resolve_member_secret(reference: str, user=None) -> str | None:
+    """Plaintext behind a ``member://`` reference, scoped to its owner."""
+
+    if not reference.startswith(_MEMBER_REF_PREFIX):
+        return None
+    secret_id = reference[len(_MEMBER_REF_PREFIX) :]
+    queryset = MemberCredentialSecret.objects.filter(pk=secret_id)
+    if user is not None:
+        queryset = queryset.filter(user=user)
+    secret = queryset.first()
+    if secret is None:
+        return None
+    from core.field_crypto import open_sealed
+
+    return open_sealed(secret.sealed_value, _MEMBER_SCOPE)
 
 
 @transaction.atomic
@@ -430,3 +473,29 @@ class AccountTokenGuard:
 
     def settle(self, *, reservation, consumed_tokens):
         return settle_account_tokens(usage=reservation, consumed_tokens=consumed_tokens)
+
+
+class MemberCredentialSecret(models.Model):
+    """A platform credential a member typed into the console, sealed at rest.
+
+    Members paste an API key from OpenAI, DeepSeek or Qwen; storing it in a
+    provider setting would put plaintext on the row, so the key is sealed and
+    referenced as ``member://<id>``. The gateway resolves that scheme at call
+    time, which means a linked account is usable without any environment setup.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="member_credential_secrets",
+    )
+    sealed_value = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at",)
+
+    def __str__(self) -> str:
+        return f"member-secret:{self.id}"

@@ -92,7 +92,8 @@ async function connect(): Promise<void> {
     providers.value = providers.value.map((item) =>
       item.id === provider?.id ? { ...item, account } : item,
     );
-    info.value = "Account linked. Models on this platform now run on your own account and free allowance.";
+    info.value =
+      "Account authorized. Pick a model from this platform in Control Agent chat \u2014 calls now run on your own account and free allowance.";
     dialogOpen.value = false;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to link the account.";
@@ -182,8 +183,12 @@ defineExpose({ openPreset: openDialog });
             v-model="credential"
             type="password"
             show-password
-            placeholder="API key or account token issued by the platform"
+            placeholder="API key issued by the platform, e.g. sk-..."
           />
+          <p class="hint">
+            The key is sealed with AES-GCM before it touches the database and only your own
+            session can read it back. Paste a fresh key from the platform's API page.
+          </p>
         </el-form-item>
         <el-form-item label="Account label (optional)">
           <el-input v-model="accountLabel" placeholder="e.g. jason@example.com" />

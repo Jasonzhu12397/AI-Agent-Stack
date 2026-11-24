@@ -50,11 +50,21 @@ class EmbeddingResponse:
         return asdict(self)
 
 
-def resolve_credential(credential_ref):
+def resolve_credential(credential_ref, user=None):
+    if credential_ref.startswith("member://"):
+        from core.provider_accounts import resolve_member_secret
+
+        secret = resolve_member_secret(credential_ref, user)
+        if not secret:
+            raise ModelGatewayError(
+                "MODEL_CREDENTIAL_MISSING",
+                "Your saved platform credential could not be read. Link the account again.",
+            )
+        return secret
     if not credential_ref.startswith("env:"):
         raise ModelGatewayError(
             "CREDENTIAL_REFERENCE_UNSUPPORTED",
-            "Only environment-backed credential references are enabled.",
+            "Only environment and saved member credentials are enabled.",
         )
     variable_name = credential_ref.removeprefix("env:")
     secret = os.getenv(variable_name)
@@ -84,6 +94,9 @@ class ModelGateway:
     def __init__(self, guard=None, account=None):
         self._guard = guard
         self._account = account
+        #: Owner of the linked account, so a sealed member credential is only
+        #: readable by the member who typed it.
+        self._account_user = getattr(getattr(account, "link", None), "user", None)
 
     def _guard_for(self, provider):
         """Pick the billed pool for this provider.
@@ -426,7 +439,7 @@ class ModelGateway:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         credential_ref = credential_ref or provider.credential_ref
         if credential_ref:
-            credential = resolve_credential(credential_ref)
+            credential = resolve_credential(credential_ref, self._account_user)
             headers["Authorization"] = f"Bearer {credential}"
         elif not is_local_http:
             raise ModelGatewayError(
