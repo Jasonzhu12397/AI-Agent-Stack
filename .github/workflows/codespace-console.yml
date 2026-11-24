@@ -35,6 +35,25 @@ jobs:
         run: |
           gh codespace ports visibility 8000:public -c "$CS"
           gh codespace ports -c "$CS"
+      - name: Open a gate-free tunnel for the console
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          set -o pipefail
+          gh codespace ssh -c "$CS" -- 'set -e
+            cd /workspaces/AI-Agent-Stack
+            pkill -f cloudflared || true
+            curl -fsSL -o /tmp/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+            chmod +x /tmp/cloudflared
+            setsid nohup /tmp/cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate >/tmp/cf.log 2>&1 &
+            sleep 25
+            grep -o "https://[a-z0-9-]*\.trycloudflare\.com" /tmp/cf.log | head -1' | tee /tmp/tunnel-url.txt
+          URL=$(tail -1 /tmp/tunnel-url.txt)
+          echo "console=$URL" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS -o /dev/null -w "tunnel=%{http_code}\n" "$URL/health/ready"
+          curl -fsS "$URL/" | grep -o "<title>[^<]*" || true
+
       - name: Smoke test the public console
         env:
           CS: ${{ inputs.codespace }}
