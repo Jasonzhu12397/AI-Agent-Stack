@@ -25,13 +25,6 @@ jobs:
         run: gh --version
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
-      - name: Probe model credential resolution
-        if: ${{ inputs.probe == '1' }}
-        env:
-          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
-          CS: ${{ inputs.codespace }}
-        run: |
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/probe_credentials.py' 2>&1 | tail -40
       - name: Prepare and start the console inside the codespace
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
@@ -39,6 +32,13 @@ jobs:
         run: |
           set -o pipefail
           gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -80
+      - name: Probe model credential resolution
+        if: ${{ inputs.probe == '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/probe_credentials.py' 2>&1 | tail -40
       - name: Publish the console ports
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
