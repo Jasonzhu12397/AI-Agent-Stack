@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -109,16 +110,75 @@ def _coordinate(params: dict[str, list[str]], key: str) -> float:
 
 GEOCODE_CACHE: dict[str, tuple[float, dict]] = {}
 GEOCODE_TTL_SECONDS = 600
+GEOCODE_CANDIDATE_LIMIT = 8
+
+
+_FILLER_PREFIX = re.compile(
+    r"^(?:请|帮我|帮忙|麻烦|我想|想|查一下|查查|查询|查|看一下|看看|看|告诉我一下|告诉我|一下|给我)"
+)
+_FILLER_SUFFIX = re.compile(
+    r"(?:的)?(?:天气|气温|温度|预报|怎么样|怎样|如何|好不好|咋样|呢|吗|啊|吧|？|\?|。|！|!)+$"
+)
+
+
+def _strip_fillers(query: str) -> str:
+    value = query.strip()
+    for _ in range(3):
+        before = value
+        value = _FILLER_PREFIX.sub("", value)
+        value = _FILLER_SUFFIX.sub("", value)
+        if value == before:
+            break
+    return value.strip()
+
+
+def _place_candidates(query: str) -> list[str]:
+    """The query itself, then inner substrings.
+
+    A chat turn usually arrives as a sentence ("帮我查一下西安天气"), and
+    sending that whole sentence to a geocoder returns nothing. Try the raw
+    query first, then progressively shorter inner substrings so the place
+    inside the sentence can still resolve.
+    """
+
+    value = query.strip()
+    candidates = [value]
+    stripped = _strip_fillers(value)
+    if stripped and stripped != value:
+        candidates.append(stripped)
+    if not value:
+        return candidates
+    if len(value) <= 3:
+        return candidates
+    per_length = 2
+    for length in range(len(value) - 1, 1, -1):
+        taken = 0
+        for start in range(0, len(value) - length + 1):
+            candidate = value[start : start + length].strip()
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+                taken += 1
+            if taken >= per_length or len(candidates) >= GEOCODE_CANDIDATE_LIMIT:
+                break
+        if len(candidates) >= GEOCODE_CANDIDATE_LIMIT:
+            return candidates
+    return candidates
 
 
 def _geocode(place: str) -> dict:
     cached = GEOCODE_CACHE.get(place)
     if cached is not None and time.monotonic() - cached[0] < GEOCODE_TTL_SECONDS:
         return cached[1]
-    body = _fetch_json(
-        GEOCODE_URL, {"name": place, "count": "1", "language": "zh", "format": "json"}
-    )
-    rows = body.get("results") if isinstance(body, dict) else None
+    rows = None
+    for candidate in _place_candidates(place):
+        body = _fetch_json(
+            GEOCODE_URL,
+            {"name": candidate, "count": "1", "language": "zh", "format": "json"},
+        )
+        rows = body.get("results") if isinstance(body, dict) else None
+        if rows:
+            place = candidate
+            break
     if not rows:
         raise ConnectorError("PLACE_NOT_FOUND", f"No place matched {place!r}.", 404)
     row = rows[0]

@@ -108,3 +108,14 @@ def test_unknown_place_is_reported(monkeypatch):
     with pytest.raises(connector.ConnectorError) as excinfo:
         connector.CAPABILITIES["map.place.search"]({"query": ["zzzz"]})
     assert excinfo.value.code == "PLACE_NOT_FOUND"
+
+
+def test_place_inside_a_sentence_still_resolves(monkeypatch):
+    def fake_fetch(url, params=None):
+        if "search" in url:
+            return _geocode_payload() if params.get("name") == "西安" else {"results": []}
+        return _weather_payload()
+
+    monkeypatch.setattr(connector, "_fetch_json", fake_fetch)
+    payload = connector.CAPABILITIES["weather.current"]({"place": ["帮我查一下西安天气"]})
+    assert payload["place"]["name"] == "西安"

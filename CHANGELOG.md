@@ -8,6 +8,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- `manage.py install_builtin_connectors` installs enabled built-in connectors
+  into every project, run by bootstrap and `start.py` after the catalog sync.
 - Built-in map and weather connectors (`open_data` protocol): place search via
   the Open-Meteo geocoder, driving routes via OSRM, current conditions and
   forecast via wttr.in. They need no endpoint or API key and declare typed

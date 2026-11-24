@@ -129,6 +129,12 @@ def main() -> None:
         env=env,
         check=False,
     )
+    subprocess.run(
+        [sys.executable, "manage.py", "install_builtin_connectors"],
+        cwd=PLATFORM_API,
+        env=env,
+        check=False,
+    )
     runner_output = subprocess.run(
         [
             sys.executable,

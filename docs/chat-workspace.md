@@ -192,7 +192,10 @@ driving routes and wttr.in for current conditions and the daily forecast — so
 they are enabled without an operator endpoint or API key. The catalog declares
 each capability's real `input_schema`, `query_params` and `output_schema`, so
 the chat tool carries typed arguments (`place`, `origin`, `destination`, `days`)
-rather than one opaque prompt string.
+rather than one opaque prompt string. A place named inside a sentence ("帮我查
+一下西安天气") is resolved by stripping the request words before geocoding, and
+each upstream call retries a couple of times because these public services
+answer 503 for bursty datacenter traffic.
 
 ## Session tokens for proxied consoles
 

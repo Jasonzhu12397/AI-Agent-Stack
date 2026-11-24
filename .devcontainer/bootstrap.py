@@ -109,7 +109,13 @@ def migrate() -> None:
 
 
 def sync_catalog() -> None:
-    run([sys.executable, "manage.py", "sync_plugin_catalog"], cwd=PLATFORM_API, env=runtime_env())
+    env = runtime_env()
+    run([sys.executable, "manage.py", "sync_plugin_catalog"], cwd=PLATFORM_API, env=env)
+    run(
+        [sys.executable, "manage.py", "install_builtin_connectors"],
+        cwd=PLATFORM_API,
+        env=env,
+    )
 
 
 def seed() -> None:
