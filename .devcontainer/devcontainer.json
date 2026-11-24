@@ -11,7 +11,10 @@
     "memory": "8gb",
     "storage": "32gb"
   },
-  "forwardPorts": [5173, 8000],
+  "forwardPorts": [
+    5173,
+    8000
+  ],
   "portsAttributes": {
     "5173": {
       "label": "web-studio",
@@ -26,5 +29,6 @@
   },
   "postCreateCommand": "python3 .devcontainer/bootstrap.py",
   "postStartCommand": "python3 .devcontainer/start.py",
-  "remoteUser": "vscode"
+  "remoteUser": "vscode",
+  "postAttachCommand": "python3 .devcontainer/ensure_console.py"
 }

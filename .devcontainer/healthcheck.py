@@ -169,8 +169,55 @@ def publish(status: dict) -> None:
         )
         print("status published")
     except RuntimeError as exc:
-        # A publishing failure must not fail the deployment itself.
-        print(f"status publish failed: {exc}")
+        print(f"gh publish failed: {exc}")
+        publish_via_git(payload)
+
+
+def publish_via_git(payload: str) -> None:
+    """Fallback channel: git works in codespaces even without gh credentials."""
+
+    worktree = Path("/tmp/codespace-status")
+    try:
+        subprocess.run(
+            ["git", "worktree", "add", "--force", "--detach", str(worktree), f"origin/{BRANCH}"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        target = worktree / STATUS_PATH
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(payload)
+        subprocess.run(["git", "add", STATUS_PATH], cwd=str(worktree), check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=codespace",
+                "-c",
+                "user.email=codespace@users.noreply.github.com",
+                "commit",
+                "-q",
+                "-m",
+                "codespace status",
+            ],
+            cwd=str(worktree),
+            check=True,
+        )
+        subprocess.run(
+            ["git", "push", "-q", "origin", f"HEAD:refs/heads/{BRANCH}"],
+            cwd=str(worktree),
+            check=True,
+        )
+        print("status published via git")
+    except subprocess.CalledProcessError as exc:
+        print(f"git publish failed: {(exc.stderr or '').strip()[-500:]}")
+    finally:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+        )
 
 
 def main() -> None:
