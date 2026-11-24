@@ -1,0 +1,42 @@
+name: codespace-console
+
+on:
+  workflow_dispatch:
+    inputs:
+      codespace:
+        description: Codespace name
+        required: true
+        default: bookish-space-computing-machine-q74qrqrgppr6f4w5v
+
+permissions:
+  contents: read
+
+jobs:
+  bring-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GitHub CLI
+        run: gh --version
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+      - name: Prepare and start the console inside the codespace
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -60
+      - name: Publish the console ports
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          gh codespace ports visibility 5173:public 8000:public -c "$CS"
+          gh codespace ports -c "$CS"
+      - name: Smoke test the public console
+        env:
+          CS: ${{ inputs.codespace }}
+        run: |
+          curl -s -o /dev/null -w "web=%{http_code}\n" "https://${CS}-5173.app.github.dev/"
+          curl -s -o /dev/null -w "api=%{http_code}\n" "https://${CS}-8000.app.github.dev/health/ready"
