@@ -124,6 +124,7 @@ from core.tool_approval_views import (
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.token_budget_views import TenantTokenBudgetView
 from core.views import TenantListView, TenantProjectListView, liveness, readiness
+from core.workflow_catalog_views import WorkflowCatalogView
 from core.workflow_views import (
     WorkflowDetailView,
     WorkflowListCreateView,
@@ -492,6 +493,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/workflows/",
         WorkflowListCreateView.as_view(),
         name="workflow-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/workflow-catalog/",
+        WorkflowCatalogView.as_view(),
+        name="workflow-catalog",
     ),
     path(
         "api/v1/workflows/<uuid:workflow_id>/",

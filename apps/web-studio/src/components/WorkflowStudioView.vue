@@ -5,10 +5,12 @@ import {
   createWorkflowRun,
   decideWorkflowStep,
   getWorkflowRuns,
+  getWorkflowCatalog,
   getWorkflows,
   publishWorkflow,
   validateWorkflow,
   updateWorkflow,
+  type WorkflowCatalog,
   type WorkflowDraft,
   type WorkflowRun,
 } from "../services/api";
@@ -45,6 +47,13 @@ const dragState = ref<{
   originX: number;
   originY: number;
 } | null>(null);
+const catalog = ref<WorkflowCatalog>({
+  models: [],
+  knowledge_bases: [],
+  tools: [],
+  agents: [],
+});
+const catalogError = ref("");
 const validationResult = ref<{
   is_valid: boolean;
   errors: string[];
@@ -373,7 +382,38 @@ type InsertableNodeType =
   | "approval"
   | "loop";
 
-function nodeConfigFor(type: InsertableNodeType): Record<string, unknown> {
+async function loadCatalog(): Promise<void> {
+  if (!props.tenantId || !props.projectId) return;
+  catalogError.value = "";
+  try {
+    catalog.value = await getWorkflowCatalog(props.tenantId, props.projectId);
+  } catch (cause) {
+    catalogError.value =
+      cause instanceof Error ? cause.message : "Unable to load workflow references.";
+  }
+}
+
+/** Config as an object, so a picker writes one key instead of hand-editing JSON. */
+const nodeConfig = computed<Record<string, unknown>>(() => {
+  try {
+    const parsed = JSON.parse(nodeConfigText.value || "{}");
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+});
+
+function configValue(key: string): unknown {
+  return nodeConfig.value[key];
+}
+
+function setConfigValue(key: string, value: unknown): void {
+  nodeConfigText.value = JSON.stringify({ ...nodeConfig.value, [key]: value }, null, 2);
+}
+
+function insertableConfigFor(type: InsertableNodeType): Record<string, unknown> {
   if (type === "llm") return { model_config_id: "", prompt_template: "{{input}}" };
   if (type === "knowledge_search") {
     return { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 };
@@ -488,32 +528,40 @@ function addWorkflowNode(type: InsertableNodeType): void {
     error.value = "The end node has no incoming path; add an edge from a node to " + endId + " first.";
     return;
   }
-  const conditional = incoming.filter((edge) => {
-    const sourceId = String(edge.source ?? "");
-    const source = nodes.find((node) => String(node.id ?? "") === sourceId);
-    return source?.type === "condition" || typeof edge.when === "boolean";
-  });
-  if (conditional.length > 0 && incoming.length > 1) {
-    error.value =
-      "The end node " + endId + " is reached from condition branches; insert the node on one branch instead of before the end.";
-    return;
+  // Every incoming branch gets its own processing node. A single join node
+  // cannot be used here: a condition node may not send both guarded branches
+  // to the same target, so two rewired edges would be a duplicate edge and the
+  // draft would be rejected at validation.
+  const insertedIds: string[] = [];
+  const newNodes: Record<string, unknown>[] = [];
+  for (const edge of incoming) {
+    const nodeId = type + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    const node = { id: nodeId, type, config: insertableConfigFor(type) };
+    edge.target = nodeId;
+    edges.push({ source: nodeId, target: endId });
+    insertedIds.push(nodeId);
+    newNodes.push(node);
   }
-  const nodeId = type + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-  const node = { id: nodeId, type, config: nodeConfigFor(type) };
-  for (const edge of incoming) edge.target = nodeId;
-  edges.push({ source: nodeId, target: endId });
-  nodes.splice(nodes.indexOf(endNode), 0, node);
+  nodes.splice(nodes.indexOf(endNode), 0, ...newNodes);
   definition.nodes = nodes;
   definition.edges = edges;
   definitionText.value = JSON.stringify(definition, null, 2);
   validationResult.value = null;
   const prefix = repairs.length > 0 ? "Draft repaired (" + repairs.join("; ") + "). " : "";
+  const multiple = incoming.length > 1
+    ? " One node was inserted on each of the " + String(incoming.length) +
+      " branches into " + endId + ", because guarded branches cannot share a single join node."
+    : "";
   notice.value =
     prefix +
     type.toUpperCase() +
     " node inserted before " +
     endId +
-    ". Configure its IDs and settings in the definition before validation.";
+    " (" +
+    insertedIds.join(", ") +
+    ")." +
+    multiple +
+    " Pick its references in Node inspector, then validate.";
   error.value = "";
 }
 
@@ -740,11 +788,15 @@ watch(definitionText, () => {
 
 watch(
   () => [props.tenantId, props.projectId],
-  () => void loadWorkflows(),
+  () => {
+    void loadWorkflows();
+    void loadCatalog();
+  },
 );
 
 onMounted(() => {
   void loadWorkflows();
+  void loadCatalog();
   window.addEventListener("pointermove", onCanvasPointerMove);
   window.addEventListener("pointerup", onCanvasPointerUp);
   refreshTimer = window.setInterval(() => void loadRuns(), 5000);
@@ -884,6 +936,58 @@ onUnmounted(() => {
                 <span>Node type</span>
                 <el-select v-model="nodeTypeDraft" size="small">
                   <el-option v-for="type in ['start','llm','condition','knowledge_search','tool','agent','approval','loop','end']" :key="type" :label="type" :value="type" />
+                </el-select>
+              </label>
+              <div v-if="catalogError" class="task-note">{{ catalogError }}</div>
+              <label v-if="nodeTypeDraft === 'llm' || nodeTypeDraft === 'loop'" class="workflow-field">
+                <span>Model config</span>
+                <el-select
+                  :model-value="String(configValue('model_config_id') ?? '')"
+                  size="small"
+                  filterable
+                  placeholder="Select a model"
+                  @update:model-value="(value: unknown) => setConfigValue('model_config_id', value)"
+                >
+                  <el-option v-for="model in catalog.models" :key="model.id" :label="model.label + ' · ' + model.provider" :value="model.id" />
+                </el-select>
+                <span v-if="catalog.models.length === 0" class="task-note">No model config in this tenant yet; add one in Model Manager.</span>
+              </label>
+              <label v-if="nodeTypeDraft === 'knowledge_search'" class="workflow-field">
+                <span>Knowledge bases</span>
+                <el-select
+                  :model-value="(configValue('knowledge_base_ids') as string[]) ?? []"
+                  size="small"
+                  multiple
+                  filterable
+                  placeholder="Select 1-8 knowledge bases"
+                  @update:model-value="(value: unknown) => setConfigValue('knowledge_base_ids', value)"
+                >
+                  <el-option v-for="base in catalog.knowledge_bases" :key="base.id" :label="base.name" :value="base.id" />
+                </el-select>
+              </label>
+              <label v-if="nodeTypeDraft === 'tool'" class="workflow-field">
+                <span>Connector tool</span>
+                <el-select
+                  :model-value="String(configValue('tool_id') ?? '')"
+                  size="small"
+                  filterable
+                  placeholder="Select an installed tool"
+                  @update:model-value="(value: unknown) => setConfigValue('tool_id', value)"
+                >
+                  <el-option v-for="tool in catalog.tools" :key="tool.id" :label="tool.name + ' · ' + tool.plugin + ' · ' + tool.risk_level" :value="tool.id" />
+                </el-select>
+                <span v-if="catalog.tools.length === 0" class="task-note">No approved tool is installed in this project.</span>
+              </label>
+              <label v-if="nodeTypeDraft === 'agent'" class="workflow-field">
+                <span>Agent version</span>
+                <el-select
+                  :model-value="String(configValue('agent_version_id') ?? '')"
+                  size="small"
+                  filterable
+                  placeholder="Select a published agent"
+                  @update:model-value="(value: unknown) => setConfigValue('agent_version_id', value)"
+                >
+                  <el-option v-for="agent in catalog.agents" :key="agent.id" :label="agent.name + ' · v' + agent.version" :value="agent.id" />
                 </el-select>
               </label>
               <label class="workflow-field">

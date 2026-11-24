@@ -478,6 +478,14 @@ export function testModel(
 export { apiBase };
 
 
+export type WorkflowCatalogEntry = { id: string; label?: string; name?: string };
+export type WorkflowCatalog = {
+  models: { id: string; label: string; provider: string; model_name: string }[];
+  knowledge_bases: { id: string; name: string }[];
+  tools: { id: string; name: string; risk_level: string; plugin: string }[];
+  agents: { id: string; name: string; version: number }[];
+};
+
 export type WorkflowDraft = {
   id: string;
   name: string;
@@ -530,6 +538,15 @@ export type WorkflowVersion = {
   definition_snapshot: Record<string, unknown>;
   published_at: string;
 };
+
+export function getWorkflowCatalog(
+  tenantId: string,
+  projectId: string,
+): Promise<WorkflowCatalog> {
+  return request<WorkflowCatalog>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/workflow-catalog/`,
+  );
+}
 
 export function getWorkflows(tenantId: string, projectId: string): Promise<WorkflowDraft[]> {
   return request<WorkflowDraft[]>(
