@@ -17,7 +17,8 @@ def user_factory(db):
 @pytest.mark.django_db
 def test_unauthenticated_user_cannot_list_tenants():
     response = APIClient().get("/api/v1/tenants/")
-    assert response.status_code == 403
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
 @pytest.mark.django_db

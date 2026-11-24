@@ -73,11 +73,19 @@ function onAuthenticated(user: CurrentUser): void {
   void router.push(next);
 }
 
+function onSessionExpired(): void {
+  resetAuthCache();
+  authError.value = "Your session expired. Sign in again to continue.";
+  if (route.path !== "/login") void router.push({ path: "/login", query: { next: route.path } });
+}
+
 onMounted(() => {
   void checkHealth();
   timer = window.setInterval(() => void checkHealth(), 10000);
+  window.addEventListener("agent-stack:session-expired", onSessionExpired);
 });
 onUnmounted(() => {
+  window.removeEventListener("agent-stack:session-expired", onSessionExpired);
   if (timer !== undefined) window.clearInterval(timer);
 });
 </script>

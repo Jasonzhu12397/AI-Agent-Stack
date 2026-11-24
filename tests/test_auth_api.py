@@ -36,7 +36,11 @@ def test_session_login_current_user_and_logout():
         HTTP_X_CSRFTOKEN=refreshed_csrf,
     )
     assert logout_response.status_code == 204
-    assert client.get("/api/v1/auth/me/").status_code == 403
+    # After logout the request carries no credentials: the API answers 401 so a
+    # client can tell "signed out" apart from "signed in but not allowed".
+    anonymous = client.get("/api/v1/auth/me/")
+    assert anonymous.status_code == 401
+    assert anonymous.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
 
 
 @pytest.mark.django_db

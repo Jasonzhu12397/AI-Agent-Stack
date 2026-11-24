@@ -167,7 +167,7 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "core.api_errors.contract_exception_handler",
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
+        "core.api_auth.SessionAuthentication401",
         "rest_framework.authentication.BasicAuthentication",
     ],
 }

@@ -145,11 +145,13 @@ async function csrfToken(): Promise<string> {
 
 export class ApiError extends Error {
   data: Record<string, unknown>;
+  readonly status: number;
 
-  constructor(message: string, data: Record<string, unknown>) {
+  constructor(message: string, data: Record<string, unknown>, status = 0) {
     super(message);
     this.name = "ApiError";
     this.data = data;
+    this.status = status;
   }
 }
 
@@ -192,6 +194,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: "include",
     });
   }
+  if (response.status === 401) {
+    // Credentials are gone (expired cookie, restarted database, proxy gate).
+    // Every view would otherwise show one unrelated error each, so the shell
+    // listens for one event and sends the user back to the sign-in page.
+    window.dispatchEvent(new Event("agent-stack:session-expired"));
+  }
   if (response.status === 204) return undefined as T;
   // An access proxy in front of this origin answers with HTML, not the API
   // envelope. Parsing it as JSON would bury the real reason in a syntax error,
@@ -212,14 +220,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         typeof (body.error as { message?: unknown }).message === "string" &&
         (body.error as { message: string }).message) ||
       null;
-    if (detail) throw new ApiError(detail, body);
+    if (detail) throw new ApiError(detail, body, response.status);
     if (response.status === 403 && payload === null) {
       throw new ApiError(
         "This origin is behind an access proxy and rejected the request. Reload the page and sign in to the proxy, then try again.",
         { status: response.status },
+        response.status,
       );
     }
-    throw new ApiError(`Request failed with HTTP ${response.status}`, body);
+    throw new ApiError(`Request failed with HTTP ${response.status}`, body, response.status);
   }
   return (payload ?? ({} as T)) as T;
 }
