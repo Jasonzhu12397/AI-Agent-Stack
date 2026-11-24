@@ -21,4 +21,9 @@ class CoreConfig(AppConfig):
 
         # Importing the module connects the login/logout receivers and defines
         # the SessionActivity model; a broken import must fail startup loudly.
-        from core import session_activity  # noqa: F401
+        # SQLite (development console) needs WAL and a busy timeout so the API
+        # and the worker can write to the same file without "database is locked".
+        from core import (
+            session_activity,  # noqa: F401
+            sqlite_tuning,  # noqa: F401
+        )

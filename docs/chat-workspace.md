@@ -104,6 +104,14 @@ effort are expressed; `ChatRuntimeError` carries the error code the API and the
 worker both persist. Keeping one runtime means a scheduled turn behaves exactly
 like a turn the operator typed.
 
+## Local development database
+
+The single-host console runs one daphne process and one worker against the same
+SQLite file, and both write: the worker advances `next_run_at`, the API persists
+turns. `core/sqlite_tuning.py` switches such connections to WAL and sets a 20 s
+busy timeout, so a turn no longer fails with "database is locked" while the
+worker claims a job. Production runs PostgreSQL, where this does not apply.
+
 ## Quality gates
 
 - `apps/web-studio`: `npx vue-tsc --noEmit`, `node --experimental-strip-types

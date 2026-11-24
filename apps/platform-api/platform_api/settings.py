@@ -104,6 +104,10 @@ DATABASES = {
         conn_health_checks=True,
     )
 }
+if "sqlite" in str(DATABASES["default"].get("ENGINE", "")):
+    # The development console keeps API and worker on one SQLite file; neither
+    # may fail a write just because the other holds the lock for a moment.
+    DATABASES["default"].setdefault("OPTIONS", {}).setdefault("timeout", 20)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 CLOUD_CONTROL_API_URL = os.getenv("CLOUD_CONTROL_API_URL", "").strip()
