@@ -34,5 +34,16 @@ export default defineConfig({
       ],
     },
   },
-  server: { host: "0.0.0.0", port: 5173 },
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    // The console and the API share one origin in hosted previews, which
+    // removes CORS and keeps session cookies first-party.
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000",
+        changeOrigin: false,
+      },
+    },
+  },
 });

@@ -25,3 +25,6 @@ deploy/offline/output/
 
 # Runtime export payloads written by the data-controls worker.
 media/
+
+# Codespace runtime data
+.devdata/

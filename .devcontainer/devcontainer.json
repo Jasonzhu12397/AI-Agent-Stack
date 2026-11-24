@@ -1,0 +1,30 @@
+{
+  "name": "AI-Agent-Stack web console",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": {
+      "label": "web-studio",
+      "visibility": "public",
+      "onAutoForward": "openBrowserOnce"
+    },
+    "8000": {
+      "label": "platform-api",
+      "visibility": "public",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "python3 .devcontainer/bootstrap.py",
+  "postStartCommand": "python3 .devcontainer/start.py",
+  "remoteUser": "vscode"
+}
