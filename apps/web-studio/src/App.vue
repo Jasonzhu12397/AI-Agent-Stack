@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import en from "element-plus/es/locale/lang/en";
@@ -33,6 +33,7 @@ const navItems = [
   { to: "/integrations", label: "Integration Hub" },
   { to: "/marketplace", label: "Agent Marketplace" },
   { to: "/knowledge", label: "Knowledge Bases" },
+  { to: "/registry", label: "Image Registry" },
   { to: "/infrastructure", label: "Metal3 Fleet" },
   { to: "/governance", label: "Governance" },
   { to: "/audit", label: "Audit & Activity" },
@@ -101,6 +102,13 @@ function evidenceText(item: RoadmapItem): string {
 let timer: number | undefined;
 
 const isLogin = computed(() => route.path === "/login");
+// The shell owns the viewport so a workbench page can size itself; the login
+// screen keeps normal document scrolling.
+watch(
+  isLogin,
+  (value) => document.body.classList.toggle("app-shell", !value),
+  { immediate: true },
+);
 const roadmapSummary = computed(() => {
   const items = roadmap.value.length ? roadmap.value : ROADMAP_FALLBACK;
   if (!items.length) return "delivery roadmap unavailable";

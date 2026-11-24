@@ -679,6 +679,7 @@ urlpatterns = [
         PlatformRoadmapView.as_view(),
         name="platform-roadmap",
     ),
+    path("", include("core.registry_urls")),
     path("", include("core.settings_urls")),
     path("", include("core.billing_urls")),
     path("", include("core.data_controls_urls")),

@@ -2341,3 +2341,162 @@ export type RoadmapItem = {
 export function getPlatformRoadmap(): Promise<{ items: RoadmapItem[] }> {
   return request<{ items: RoadmapItem[] }>("/api/v1/platform/roadmap/");
 }
+
+// ---------------------------------------------------------------------------
+// Central container image registry
+//
+// The catalog is the only place an agent or cluster learns where an image
+// lives; deployments consume digest-pinned internal references from here.
+// ---------------------------------------------------------------------------
+export type RegistryCategory =
+  | "platform"
+  | "agent"
+  | "infrastructure"
+  | "kubernetes"
+  | "network"
+  | "observability"
+  | "workload";
+
+export type RegistryImage = {
+  id: string;
+  name: string;
+  category: RegistryCategory;
+  source_repository: string;
+  build_ref: string;
+  digest: string;
+  internal_ref: string;
+  size_bytes: number;
+  status: "building" | "scanning" | "ready" | "blocked" | "retired";
+  stage: "dev" | "staging" | "production";
+  scan_status: "pending" | "passed" | "failed";
+  scan_findings: number;
+  sbom_ref: string;
+  signed: boolean;
+  promoted_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RegistrySummary = {
+  total: number;
+  by_category: Record<string, number>;
+  by_stage: Record<string, number>;
+  by_status: Record<string, number>;
+  signed: number;
+  scan_passed: number;
+  registry_host: string;
+};
+
+export type RegistryPullPlan = {
+  registry_host: string;
+  digest_pinned: boolean;
+  images: {
+    name: string;
+    category: string;
+    digest: string;
+    internal_ref: string;
+    stage: string;
+  }[];
+};
+
+export type RegistryEvent = {
+  id: string;
+  action: string;
+  actor: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+};
+
+function registryBase(tenantId: string, projectId: string): string {
+  return "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/registry";
+}
+
+export function getRegistryImages(
+  tenantId: string,
+  projectId: string,
+  filters: { category?: string; stage?: string; status?: string } = {},
+): Promise<{ images: RegistryImage[] }> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) query.set(key, value);
+  }
+  const suffix = query.toString() ? "?" + query.toString() : "";
+  return request(registryBase(tenantId, projectId) + "/images/" + suffix);
+}
+
+export function registerRegistryImage(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    digest: string;
+    category: RegistryCategory;
+    source_repository?: string;
+    build_ref?: string;
+    size_bytes?: number;
+  },
+): Promise<RegistryImage> {
+  return request(registryBase(tenantId, projectId) + "/images/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function scanRegistryImage(
+  tenantId: string,
+  projectId: string,
+  imageId: string,
+  payload: { scan_status: "passed" | "failed"; findings?: number; sbom_ref?: string },
+): Promise<RegistryImage> {
+  return request(registryBase(tenantId, projectId) + "/images/" + imageId + "/scan/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function signRegistryImage(
+  tenantId: string,
+  projectId: string,
+  imageId: string,
+): Promise<RegistryImage> {
+  return request(registryBase(tenantId, projectId) + "/images/" + imageId + "/sign/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function promoteRegistryImage(
+  tenantId: string,
+  projectId: string,
+  imageId: string,
+  stage: "dev" | "staging" | "production",
+): Promise<RegistryImage> {
+  return request(registryBase(tenantId, projectId) + "/images/" + imageId + "/promote/", {
+    method: "POST",
+    body: JSON.stringify({ stage }),
+  });
+}
+
+export function getRegistrySummary(
+  tenantId: string,
+  projectId: string,
+): Promise<RegistrySummary> {
+  return request(registryBase(tenantId, projectId) + "/summary/");
+}
+
+export function getRegistryPullPlan(
+  tenantId: string,
+  projectId: string,
+  category?: string,
+): Promise<RegistryPullPlan> {
+  const suffix = category ? "?category=" + encodeURIComponent(category) : "";
+  return request(registryBase(tenantId, projectId) + "/pull-plan/" + suffix);
+}
+
+export function getRegistryImageEvents(
+  tenantId: string,
+  projectId: string,
+  imageId: string,
+): Promise<{ events: RegistryEvent[] }> {
+  return request(registryBase(tenantId, projectId) + "/images/" + imageId + "/events/");
+}

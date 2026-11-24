@@ -37,10 +37,23 @@ test("the chat is a reading column, not a stretched canvas", () => {
   assert.match(chat, /\.bubble-body \{[\s\S]*font-size: 14px/, "bubble copy must match chat-client sizing");
 });
 
-test("the workflow canvas and inspector split the viewport", () => {
+test("the workflow canvas fills the shell instead of a measured offset", () => {
   const studio = read("components/WorkflowStudioView.vue");
-  assert.match(studio, /--studio-canvas-height/, "canvas height must be a measured variable");
-  assert.match(read("styles.css"), /height: var\(--studio-canvas-height/);
+  const css = read("styles.css");
+  const app = read("App.vue");
+  const workspace = read("components/WorkspaceView.vue");
+  // The shell owns the viewport height, so the canvas needs no pixel math.
+  assert.match(app, /app-shell/, "the shell must mark the body as viewport sized");
+  assert.match(css, /#app \{ height: 100%; \}/, "the mount root must pass the height down");
+  assert.match(css, /\.shell \{[\s\S]*flex: 1; min-height: 0/, "the shell must fill the viewport column");
+  assert.match(workspace, /workspace-workbench/, "the workflow route must declare the workbench layout");
+  assert.match(css, /\.workflow-canvas-viewport \{[\s\S]*flex: 1/, "the canvas viewport takes the remainder");
+  // One transform drives zoom and pan; scrollbars must not come back.
+  assert.match(studio, /class="workflow-canvas-viewport"/);
+  assert.match(studio, /class="workflow-canvas-plane"/);
+  assert.match(studio, /translate\(\$\{view\.value\.x\}px/);
+  assert.doesNotMatch(studio, /fitStudio|--studio-canvas-height/, "no measured canvas offset");
+  assert.doesNotMatch(css, /--studio-canvas-height/, "no measured canvas offset in css");
 });
 
 test("the chat surface drops the sidebar and hides the rail on a phone", () => {

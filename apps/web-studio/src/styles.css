@@ -63,7 +63,20 @@ a { color: inherit; text-decoration: none; }
   --el-box-shadow-light: 0 6px 18px rgba(18, 31, 40, 0.06);
 }
 
-.shell { width: min(1400px, calc(100% - 40px)); margin: 0 auto; }
+/* The shell is the viewport: header and nav keep their size, the workspace
+ * takes the rest and scrolls inside itself. Pages never push the body taller
+ * than the screen, so a workbench can size a canvas without measuring pixels. */
+html, body { height: 100%; }
+body.app-shell { height: 100dvh; overflow: hidden; }
+/* Vue mounts into #app, so the height chain has to pass through it too. */
+#app { height: 100%; }
+body.app-shell #app { display: flex; flex-direction: column; }
+.shell { display: flex; flex-direction: column; flex: 1; min-height: 0; width: min(1400px, calc(100% - 40px)); margin: 0 auto; }
+.workspace { flex: 1; min-height: 0; overflow-y: auto; }
+/* Workbench: no page padding, no card chrome, the canvas is the page. */
+.workspace-workbench { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.workspace-workbench .workspace-grid { flex: 1; min-height: 0; align-items: stretch; gap: 0; }
+.workspace-workbench .task-panel { display: flex; flex-direction: column; min-height: 0; padding: 0; border: none; border-radius: 0; background: transparent; }
 /* Working canvases take the viewport: a chat column or a DAG pinned into a
  * 1400px strip leaves the right half of a wide screen empty. */
 .shell-wide { width: calc(100% - 32px); max-width: none; }
@@ -109,6 +122,8 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 @media (max-width: 440px) { .shell { width: calc(100% - 32px); } .milestone-grid { grid-template-columns: 1fr; } h1 { letter-spacing: -2px; } .login-card { padding: 26px; } .topbar { gap: 8px; } .account-actions { gap: 6px; } }
 
 .workspace { padding: 42px 0; border-bottom: 1px solid #e3eaf2; }
+/* A workbench is not a reading page: it keeps the shell height and hugs the edges. */
+.workspace-workbench { padding: 0; }
 .workspace-heading, .task-panel-heading, .workspace-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .workspace-heading { margin-bottom: 22px; }
 .workspace-heading .eyebrow, .task-panel-heading .eyebrow { margin-bottom: 7px; }
@@ -229,27 +244,35 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-step-list .workflow-step-entry { display: inline-flex; align-items: center; gap: 6px; }
 
 .workflow-canvas-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 12px; align-items: stretch; }
-/* The canvas and the inspector split the remaining viewport instead of a fixed
- * 640px box, so a taller screen shows more of the DAG. */
-.workflow-canvas-scroll { display: flex; align-items: center; justify-content: center; overflow: auto; height: var(--studio-canvas-height, calc(100dvh - 380px)); min-height: 360px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 10px; }
-.workflow-node-inspector { max-height: var(--studio-canvas-height, calc(100dvh - 380px)); overflow: auto; }
-/* Workflow editing gives the canvas the room; the module chrome above it goes. */
+/* The canvas owns the leftover height of the section: the app shell gives the
+ * page a fixed viewport, the section and the pipeline pass it down with
+ * min-height: 0, and the viewport box fills whatever is left. */
+.workflow-studio { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; }
+.workflow-pipeline { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; border: none; background: transparent; }
+.workflow-canvas-viewport { position: relative; flex: 1; min-height: 240px; overflow: hidden; border-radius: 0; background-color: #fbfdfe; background-image: radial-gradient(#dfe8f1 1px, transparent 1px); background-repeat: repeat; cursor: grab; touch-action: none; }
+.workflow-canvas-viewport:active { cursor: grabbing; }
+.workflow-canvas-plane { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.workflow-node-inspector { min-height: 0; max-height: none; overflow: auto; }
+/* The workflow route renders as a workbench: no module heading, and the canvas
+ * grid stretches to the section height instead of collapsing to its content. */
 .workflow-canvas-grid.solo { grid-template-columns: minmax(0, 1fr); }
-.workspace-focus .workspace-heading { display: none; }
-.workspace-focus .workspace { padding-top: 10px; }
-.workflow-pipeline .workflow-run-heading { padding: 6px 0 2px; }
-.workflow-pipeline .workflow-run-heading h4 { font-size: 12px; }
-.workflow-pipeline .workflow-run-heading .task-note { display: none; }
-.workflow-canvas-shell { position: relative; min-width: 0; }
-.workflow-canvas-frame { position: relative; }
+.workflow-canvas-shell { position: relative; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.workflow-canvas-grid { flex: 1; min-height: 0; }
 
 /* Canvas controls float over the sheet so the graph keeps the whole box. */
-/* The bar sits on its own row: floating over the graph would hide the first nodes. */
-.canvas-toolbar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto; margin: 0 0 6px; padding: 3px 4px; background: #f8fbfe; border: 1px solid #e3eaf2; border-radius: 10px; }
+/* Canvas controls float bottom-left, the way Dify and Figma dock canvas tools:
+ * the graph keeps every pixel, and the fit inset leaves room for the dock. */
+.canvas-dock { position: absolute; left: 14px; bottom: 14px; z-index: 6; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 180px); overflow-x: auto; padding: 5px; background: #ffffffe6; border: 1px solid #dbe4ec; border-radius: 12px; box-shadow: 0 10px 26px #05080f1f; backdrop-filter: blur(8px); }
 .canvas-tool { display: grid; place-items: center; flex: 0 0 auto; min-width: 28px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #16232d; font: inherit; font-size: 12px; cursor: pointer; }
 .canvas-tool:hover { border-color: #d5e2ee; background: #f2f7fb; }
 .canvas-tool.on { border-color: #8fd3b4; background: #effbf5; color: #0a6b4a; }
 .canvas-tool-text { font-size: 11px; }
+.canvas-count { margin-left: auto; flex: 0 0 auto; }
+.canvas-count:empty { display: none; }
+.canvas-node-menu { display: grid; gap: 6px; }
+.canvas-node-menu .el-button { margin: 0; justify-content: flex-start; }
+.workflow-selector { flex: 0 0 auto; margin: 8px 12px; }
+.workflow-definition-panel { flex: 0 1 42%; margin: 0 12px 12px; border-radius: 10px; background: #ffffff; min-height: 0; margin-top: 8px; padding-top: 10px; overflow: auto; border-top: 1px solid #e3eaf2; }
 .canvas-zoom { min-width: 40px; padding: 0 2px; color: #566976; font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
 
 /* Minimap: the whole sheet as a box, plus the part of it currently on screen. */
@@ -257,9 +280,9 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .minimap-node { position: absolute; height: 4px; border-radius: 2px; background: #4b6b8a; }
 .minimap-view { position: absolute; border: 1.5px solid #0e7c86; border-radius: 3px; background: #0e7c8612; pointer-events: none; }
 .workflow-studio:fullscreen { padding: 10px 16px 16px; overflow: auto; background: #ffffff; }
-.workflow-studio:fullscreen .workflow-canvas-scroll { height: calc(100dvh - 190px); }
+.workflow-studio:fullscreen { display: flex; flex-direction: column; height: 100dvh; }
 
-.workflow-canvas { position: relative; transform-origin: top left; background-image: radial-gradient(ellipse at 75% 0%, #ffffff 0, #f5f9fc 48%); background-size: 22px 22px; }
+
 .workflow-canvas-edges { position: absolute; inset: 0; pointer-events: none; }
 .workflow-canvas-node { position: absolute; display: grid; gap: 3px; padding: 10px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 9px; box-shadow: 0 8px 20px #05080f88; cursor: grab; user-select: none; }
 .workflow-canvas-node strong { overflow: hidden; color: #121f28; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -278,7 +301,6 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-edge-remove { padding: 0 3px; color: #d92d20; background: transparent; border: 0; cursor: pointer; }
 @media (max-width: 1100px) {
   .workflow-canvas-grid { grid-template-columns: minmax(0, 1fr); }
-  .workflow-canvas-scroll { height: var(--studio-canvas-height, calc(100dvh - 320px)); min-height: 280px; }
   .workflow-node-inspector { max-height: none; }
 }
 @media (max-width: 900px) { .workflow-editor-grid { grid-template-columns: 1fr; } }
@@ -443,6 +465,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 
 
 .workflow-pipeline { margin: 16px 0; padding: 16px; border: 1px solid #e3eaf2; border-radius: 12px; background: #ffffff; }
+.workspace-workbench .workflow-pipeline { margin: 0; padding: 0; border: none; border-radius: 0; background: transparent; }
 .workflow-pipeline-row { display: flex; align-items: center; gap: 10px; overflow-x: auto; padding: 18px 2px; }
 .workflow-node-card { display: grid; gap: 7px; flex: 0 0 170px; min-height: 112px; padding: 12px; border: 1px solid #e3eaf2; border-radius: 10px; background: #ffffff; }
 .workflow-node-card strong { color: #121f28; font-size: 12px; }
@@ -962,14 +985,13 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 
 /* Phones: the padding chain around the canvas is worth more than the gap. */
 @media (max-width: 760px) {
-  .workspace-focus .task-panel { padding-left: 6px; padding-right: 6px; }
-  .workspace-focus .workflow-studio { padding-left: 4px; padding-right: 4px; }
-  .workspace-focus .workflow-pipeline { padding-left: 2px; padding-right: 2px; }
-  .workspace-focus .workflow-canvas-grid { gap: 8px; }
-  .workspace-focus .canvas-minimap { width: 104px; height: 68px; }
+  .workspace-workbench .task-panel { padding-left: 6px; padding-right: 6px; }
+  .workspace-workbench .workflow-studio { padding-left: 4px; padding-right: 4px; }
+  .workspace-workbench .workflow-canvas-grid { gap: 8px; }
+  .workspace-workbench .canvas-minimap { width: 104px; height: 68px; }
   /* Phones keep zoom, fit and view toggles; the fixed presets are overflow. */
-  .workspace-focus .canvas-tool-preset { display: none; }
+  .workspace-workbench .canvas-tool-preset { display: none; }
   /* Node buttons stay on one swipeable row instead of stacking above the graph. */
-  .workspace-focus .workflow-node-toolbar { flex-wrap: nowrap; overflow-x: auto; margin: 6px 0 8px; padding-bottom: 2px; }
-  .workspace-focus .workflow-node-toolbar .task-note { flex: 0 0 auto; }
+  .workspace-workbench .workflow-node-toolbar { flex-wrap: nowrap; overflow-x: auto; margin: 6px 0 8px; padding-bottom: 2px; }
+  .workspace-workbench .workflow-node-toolbar .task-note { flex: 0 0 auto; }
 }

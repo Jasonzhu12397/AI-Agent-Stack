@@ -209,3 +209,10 @@ BMC_VAULT_JWT_PROJECT_CLAIM = os.getenv("BMC_VAULT_JWT_PROJECT_CLAIM", "project_
 BMC_VAULT_NAMESPACE = os.getenv("BMC_VAULT_NAMESPACE", "").strip()
 BMC_VAULT_CA_BUNDLE = os.getenv("BMC_VAULT_CA_BUNDLE", "").strip()
 BMC_VAULT_TIMEOUT_SECONDS = _positive_float_env("BMC_VAULT_TIMEOUT_SECONDS", "5")
+
+# Every deployment pulls from one internal registry; agents never reach a public
+# mirror. The host is injected by the deployment, and the catalog API pins
+# digests against this value.
+PLATFORM_REGISTRY_HOST = os.getenv(
+    "PLATFORM_REGISTRY_HOST", "registry.ai-agent-stack.internal"
+).strip()

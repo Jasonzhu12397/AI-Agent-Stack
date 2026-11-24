@@ -23,6 +23,7 @@ type WorkspaceSection =
   | "integrations"
   | "marketplace"
   | "knowledge"
+  | "registry"
   | "governance"
   | "audit"
   | "organization"
@@ -38,6 +39,7 @@ const WORKSPACE_SECTIONS: { path: string; section: WorkspaceSection }[] = [
   { path: "/integrations", section: "integrations" },
   { path: "/marketplace", section: "marketplace" },
   { path: "/knowledge", section: "knowledge" },
+  { path: "/registry", section: "registry" },
   { path: "/governance", section: "governance" },
   { path: "/audit", section: "audit" },
   { path: "/organization", section: "organization" },

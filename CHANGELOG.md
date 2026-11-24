@@ -6,6 +6,23 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Central Container Image Registry** — a mandatory platform capability for the
+  image supply chain. `RegistryImage` / `RegistryEvent` model the catalog; the
+  API refuses mutable tags, gates readiness on a passed security scan, requires
+  a signature before production, walks `dev → staging → production` without
+  skipping, and returns a digest-pinned pull plan on
+  `PLATFORM_REGISTRY_HOST` (default `registry.ai-agent-stack.internal`). Web
+  Studio exposes it as `Image Registry`. See `docs/container-image-registry.md`.
+- **Workflow canvas viewport engine** — the canvas is now a real viewport: a
+  single `translate(x, y) scale(k)` transform over a fixed-size plane, pointer
+  anchored zoom, drag panning, `fitView()` with dock insets, minimap slice
+  derived from the transform, per-workflow persistence, fullscreen and a
+  bottom floating dock holding node creation, validate and the definition
+  drawer. The app shell is a fixed-height flex layout, so the canvas fills the
+  worksheet instead of being measured and resized from JavaScript.
+
 ### Fixed
 
 - The backup disk verdict ignored bytes already held by in-flight `*.db.partial`

@@ -10,6 +10,7 @@ import DashboardView from "./DashboardView.vue";
 import IntegrationHubView from "./IntegrationHubView.vue";
 import AgentMarketplaceView from "./AgentMarketplaceView.vue";
 import KnowledgeBaseView from "./KnowledgeBaseView.vue";
+import RegistryView from "./RegistryView.vue";
 import GovernanceView from "./GovernanceView.vue";
 import AuditView from "./AuditView.vue";
 import OrganizationView from "./OrganizationView.vue";
@@ -29,7 +30,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "chat" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "governance" | "audit" | "organization" | "docs";
+    activeSection?: "overview" | "chat" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "registry" | "governance" | "audit" | "organization" | "docs";
   }>(),
   { activeSection: "overview" },
 );
@@ -174,9 +175,12 @@ onUnmounted(() => {
 <template>
   <section
     class="workspace"
-    :class="{ 'workspace-chat': activeSection === 'chat', 'workspace-focus': activeSection === 'workflows' }"
+    :class="{
+      'workspace-chat': activeSection === 'chat',
+      'workspace-workbench': activeSection === 'workflows',
+    }"
   >
-    <div v-if="activeSection !== 'chat'" class="workspace-heading">
+    <div v-if="activeSection !== 'chat' && activeSection !== 'workflows'" class="workspace-heading">
       <div>
         <p class="eyebrow">CONTROL PLANE</p>
         <h2>
@@ -197,6 +201,8 @@ onUnmounted(() => {
                       ? "Agent Marketplace"
                     : props.activeSection === "knowledge"
                       ? "Knowledge Bases"
+                      : props.activeSection === "registry"
+                        ? "Image Registry"
                       : props.activeSection === "governance"
                         ? "Governance Center"
                         : props.activeSection === "audit"
@@ -326,6 +332,11 @@ onUnmounted(() => {
         />
         <KnowledgeBaseView
           v-if="props.activeSection === 'knowledge'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
+        <RegistryView
+          v-if="props.activeSection === 'registry'"
           :tenant-id="selectedTenantId"
           :project-id="selectedProjectId"
         />

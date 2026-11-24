@@ -18,114 +18,147 @@ import {
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 
-// The DAG claims the remaining viewport instead of a fixed 640px box: measure
-// where the canvas starts and expose it as a CSS variable for the stylesheet.
+// ---------------------------------------------------------------------------
+// Canvas engine
+//
+// The graph is one plane moved by one transform: translate(x, y) scale(k).
+// Zoom, pan, fit, minimap and the stored viewport all read and write that
+// single state, so nothing here depends on scrollbars, on a second width
+// bookkeeping, or on measuring how far down the page the canvas starts.
+// ---------------------------------------------------------------------------
 const studioRoot = ref<HTMLElement | null>(null);
-const canvasScroll = ref<HTMLElement | null>(null);
-const studioVars = ref<Record<string, string>>({});
-// The DAG is drawn at fixed node sizes, so a wide screen would leave it tiny in
-// the corner. Fit it to the viewport box instead, clamped so a two-node draft
-// does not turn into billboards.
-const canvasScale = ref(1);
-// The painted sheet never shrinks below the visible box, otherwise the dot grid
-// stops mid-air and the draft looks pasted into the corner of a blank panel.
-const paintWidth = ref(0);
-const paintHeight = ref(0);
-let resizeObserver: ResizeObserver | null = null;
-const MIN_ZOOM = 0.25;
+const viewportEl = ref<HTMLElement | null>(null);
+const MIN_ZOOM = 0.15;
 const MAX_ZOOM = 2.5;
+// Room for the floating dock and the minimap, so a fitted graph never sits under them.
+const FIT_INSET = { left: 24, right: 24, top: 24, bottom: 96 };
+const DOT_STEP = 24;
 const VIEWPORT_PREFIX = "studio.viewport.v1";
-const canvasFrame = ref<HTMLElement | null>(null);
-const viewLeft = ref(0);
-const viewTop = ref(0);
-const viewWidth = ref(0);
-const viewHeight = ref(0);
-// Once the user zooms or restores a stored viewport, automatic fit must stop
-// fighting them: resizing the window may re-measure the box but not the view.
+const view = ref({ x: 0, y: 0, k: 1 });
+// A view created by the user (zoom, pan, stored) outranks automatic fitting
+// until Fit is pressed again.
 const viewLocked = ref(false);
 const minimapOpen = ref(true);
 const isFullscreen = ref(false);
 const inspectorOpen = ref(false);
+// Definition and run history are a drawer, not a second page: the DAG keeps the
+// viewport until someone opens them.
+const definitionOpen = ref(false);
 let viewportTimer: number | undefined;
+let resizeObserver: ResizeObserver | null = null;
+let pan: { clientX: number; clientY: number; x: number; y: number } | null = null;
 
-const scaledWidth = computed(() => Math.round((paintWidth.value || canvasLayout.value.width) * canvasScale.value));
-const scaledHeight = computed(() => Math.round((paintHeight.value || canvasLayout.value.height) * canvasScale.value));
+const canvasScale = computed(() => view.value.k);
+const zoomLabel = computed(() => `${Math.round(view.value.k * 100)}%`);
+const canvasTransform = computed(
+  () => `translate(${view.value.x}px, ${view.value.y}px) scale(${view.value.k})`,
+);
+// The dot grid lives on the viewport and follows the same transform, so the
+// sheet stays continuous at every zoom and pan position.
+const canvasBackdrop = computed(() => ({
+  backgroundSize: `${DOT_STEP * view.value.k}px ${DOT_STEP * view.value.k}px`,
+  backgroundPosition: `${view.value.x}px ${view.value.y}px`,
+}));
 
-function fitCanvas(force = false): void {
-  const box = canvasScroll.value;
-  if (!box || (viewLocked.value && !force)) return;
-  const width = box.clientWidth - 16;
-  const height = box.clientHeight - 16;
-  const layout = canvasLayout.value;
-  if (!width || !height || !layout.width || !layout.height) return;
-  const raw = Math.min(width / layout.width, height / layout.height);
-  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(raw.toFixed(3))));
-  canvasScale.value = scale;
-  paintWidth.value = Math.max(layout.width, Math.round(width / scale));
-  paintHeight.value = Math.max(layout.height, Math.round(height / scale));
+function viewportSize(): { width: number; height: number } {
+  const el = viewportEl.value;
+  return { width: el?.clientWidth ?? 0, height: el?.clientHeight ?? 0 };
 }
 
-function fitStudio(): void {
-  const root = studioRoot.value;
-  if (!root) return;
-  // Measure the canvas box itself once it exists; the +150 estimate drifts
-  // because the toolbar above the canvas wraps at narrow widths.
-  const boxTop = canvasScroll.value?.getBoundingClientRect().top;
-  const offset = Math.round(
-    typeof boxTop === "number" && boxTop > 0
-      ? boxTop
-      : root.getBoundingClientRect().top + 150,
-  );
-  studioVars.value = { "--studio-canvas-height": `calc(100dvh - ${offset}px - 16px)` };
-  fitCanvas();
+function clampZoom(value: number): number {
+  return Number(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)).toFixed(3));
 }
 
-function paintScale(scale: number): void {
-  const box = canvasScroll.value;
-  canvasScale.value = scale;
-  paintWidth.value = Math.max(
-    canvasLayout.value.width,
-    Math.round((box?.clientWidth ?? 0) / scale),
-  );
-  paintHeight.value = Math.max(
-    canvasLayout.value.height,
-    Math.round((box?.clientHeight ?? 0) / scale),
-  );
+function setView(next: { x: number; y: number; k: number }): void {
+  view.value = { x: Math.round(next.x), y: Math.round(next.y), k: clampZoom(next.k) };
 }
 
-function zoomTo(next: number): void {
-  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(next.toFixed(3))));
-  paintScale(scale);
+// Zoom around a point in viewport coordinates: the pointer when the wheel
+// drives it, the centre when a toolbar button does.
+function zoomAt(nextK: number, clientX?: number, clientY?: number): void {
+  const el = viewportEl.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const px = (clientX ?? rect.left + rect.width / 2) - rect.left;
+  const py = (clientY ?? rect.top + rect.height / 2) - rect.top;
+  const k = clampZoom(nextK);
+  const ratio = k / view.value.k;
+  setView({ x: px - (px - view.value.x) * ratio, y: py - (py - view.value.y) * ratio, k });
   viewLocked.value = true;
-  void nextTick(syncViewport);
   scheduleSaveViewport();
 }
 
+function zoomTo(next: number): void {
+  zoomAt(next);
+}
+
 function zoomBy(step: number): void {
-  zoomTo(canvasScale.value * step);
+  zoomAt(view.value.k * step);
 }
 
 function fitView(): void {
+  const { width, height } = viewportSize();
+  const layout = canvasLayout.value;
+  const inner = {
+    width: width - FIT_INSET.left - FIT_INSET.right,
+    height: height - FIT_INSET.top - FIT_INSET.bottom,
+  };
+  if (!width || !height || !layout.width || !layout.height || inner.width <= 0 || inner.height <= 0) return;
+  const k = clampZoom(Math.min(inner.width / layout.width, inner.height / layout.height));
+  setView({
+    k,
+    x: FIT_INSET.left + (inner.width - layout.width * k) / 2,
+    y: FIT_INSET.top + (inner.height - layout.height * k) / 2,
+  });
   viewLocked.value = false;
-  fitCanvas(true);
-  void nextTick(() => {
-    const box = canvasScroll.value;
-    if (box) {
-      box.scrollLeft = 0;
-      box.scrollTop = 0;
-    }
-    syncViewport();
-    scheduleSaveViewport();
+  scheduleSaveViewport();
+}
+
+// A resize must not hide the graph: keep a hand-made view inside the box.
+function clampIntoView(): void {
+  const { width, height } = viewportSize();
+  const layout = canvasLayout.value;
+  if (!width || !height || !layout.width || !layout.height) return;
+  const spanX = layout.width * view.value.k;
+  const spanY = layout.height * view.value.k;
+  const x =
+    spanX <= width
+      ? (width - spanX) / 2
+      : Math.min(FIT_INSET.left, Math.max(width - spanX - FIT_INSET.right, view.value.x));
+  const y =
+    spanY <= height
+      ? (height - spanY) / 2
+      : Math.min(FIT_INSET.top, Math.max(height - spanY - FIT_INSET.bottom, view.value.y));
+  if (x !== view.value.x || y !== view.value.y) setView({ x, y, k: view.value.k });
+}
+
+function onCanvasWheel(event: WheelEvent): void {
+  // Canvas tools zoom on wheel; holding a modifier only makes the step coarser
+  // so a trackpad flick does not jump two zoom levels.
+  const factor = Math.exp(-event.deltaY / (event.ctrlKey || event.metaKey ? 240 : 480));
+  zoomAt(view.value.k * factor, event.clientX, event.clientY);
+}
+
+function startPan(event: PointerEvent): void {
+  selectedNodeId.value = "";
+  pan = { clientX: event.clientX, clientY: event.clientY, x: view.value.x, y: view.value.y };
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  viewLocked.value = true;
+}
+
+function onViewportPointerMove(event: PointerEvent): void {
+  if (!pan) return;
+  setView({
+    x: pan.x + (event.clientX - pan.clientX),
+    y: pan.y + (event.clientY - pan.clientY),
+    k: view.value.k,
   });
 }
 
-function syncViewport(): void {
-  const el = canvasScroll.value;
-  if (!el) return;
-  viewLeft.value = el.scrollLeft;
-  viewTop.value = el.scrollTop;
-  viewWidth.value = el.clientWidth;
-  viewHeight.value = el.clientHeight;
+function onViewportPointerUp(): void {
+  if (!pan) return;
+  pan = null;
+  scheduleSaveViewport();
 }
 
 function viewportKey(): string {
@@ -142,73 +175,37 @@ function saveViewport(): void {
   const key = viewportKey();
   if (!key) return;
   try {
-    window.localStorage.setItem(
-      key,
-      JSON.stringify({ scale: canvasScale.value, left: viewLeft.value, top: viewTop.value }),
-    );
+    window.localStorage.setItem(key, JSON.stringify({ x: view.value.x, y: view.value.y, k: view.value.k }));
   } catch {
     /* storage can be full or disabled; the viewport is a convenience, not state */
   }
 }
 
-// Restore the stored view of this workflow once its sheet has been painted.
-// A workflow without a stored viewport is fitted to the whole graph instead.
+// A stored view belongs to the workflow it was made on; anything unreadable
+// falls back to fitting the graph.
 function restoreViewport(): void {
   const key = viewportKey();
-  const stored = key ? window.localStorage.getItem(key) : null;
+  if (!key) {
+    fitView();
+    return;
+  }
+  const stored = window.localStorage.getItem(key);
   if (!stored) {
-    viewLocked.value = false;
-    void nextTick(() => {
-      fitCanvas(true);
-      void nextTick(() => {
-        syncViewport();
-        scheduleSaveViewport();
-      });
-    });
+    fitView();
     return;
   }
   try {
-    const parsed = JSON.parse(stored) as { scale?: number; left?: number; top?: number };
-    if (!parsed.scale) throw new Error("no scale");
-    paintScale(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, parsed.scale)));
+    const parsed = JSON.parse(stored) as { x?: number; y?: number; k?: number };
+    if (!parsed.k) throw new Error("no zoom");
+    setView({ x: parsed.x ?? 0, y: parsed.y ?? 0, k: parsed.k });
     viewLocked.value = true;
-    window.requestAnimationFrame(() => {
-      const el = canvasScroll.value;
-      if (el) {
-        el.scrollLeft = Math.max(0, parsed.left ?? 0);
-        el.scrollTop = Math.max(0, parsed.top ?? 0);
-      }
-      syncViewport();
-    });
   } catch {
     window.localStorage.removeItem(key);
     fitView();
   }
 }
 
-function onCanvasScroll(): void {
-  syncViewport();
-  scheduleSaveViewport();
-}
-
-function jumpFromMinimap(event: MouseEvent): void {
-  const map = event.currentTarget as HTMLElement;
-  const box = map.getBoundingClientRect();
-  const ratioX = (event.clientX - box.left) / box.width;
-  const ratioY = (event.clientY - box.top) / box.height;
-  const el = canvasScroll.value;
-  if (!el) return;
-  el.scrollLeft = Math.max(0, ratioX * scaledWidth.value - el.clientWidth / 2);
-  el.scrollTop = Math.max(0, ratioY * scaledHeight.value - el.clientHeight / 2);
-  syncViewport();
-  scheduleSaveViewport();
-}
-
-const zoomLabel = computed(() => `${Math.round(canvasScale.value * 100)}%`);
-
-// The minimap draws the sheet as a percentage box, so it stays correct at any
-// zoom level without a second coordinate system.
-function minimapNodeStyle(node: { x: number; y: number }): Record<string, string> {
+const minimapNodeStyle = computed(() => (node: { x: number; y: number }): Record<string, string> => {
   const width = Math.max(1, canvasLayout.value.width);
   const height = Math.max(1, canvasLayout.value.height);
   return {
@@ -216,20 +213,43 @@ function minimapNodeStyle(node: { x: number; y: number }): Record<string, string
     top: `${(node.y / height) * 100}%`,
     width: `${(NODE_WIDTH / width) * 100}%`,
   };
-}
+});
 
+// The minimap shows the sheet box and the slice of graph space now on screen,
+// both derived from the same transform as the canvas itself.
 const minimapViewStyle = computed(() => {
-  const width = Math.max(1, scaledWidth.value);
-  const height = Math.max(1, scaledHeight.value);
-  const left = Math.min(100, (viewLeft.value / width) * 100);
-  const top = Math.min(100, (viewTop.value / height) * 100);
+  const layout = canvasLayout.value;
+  const { width, height } = viewportSize();
+  if (!layout.width || !layout.height || !width || !height) return {};
+  const k = view.value.k;
+  const graphLeft = Math.min(layout.width, Math.max(0, -view.value.x / k));
+  const graphTop = Math.min(layout.height, Math.max(0, -view.value.y / k));
+  const graphWidth = Math.max(0, Math.min(layout.width - graphLeft, width / k));
+  const graphHeight = Math.max(0, Math.min(layout.height - graphTop, height / k));
   return {
-    left: `${left}%`,
-    top: `${top}%`,
-    width: `${Math.min(100 - left, (viewWidth.value / width) * 100)}%`,
-    height: `${Math.min(100 - top, (viewHeight.value / height) * 100)}%`,
+    left: `${(graphLeft / layout.width) * 100}%`,
+    top: `${(graphTop / layout.height) * 100}%`,
+    width: `${(graphWidth / layout.width) * 100}%`,
+    height: `${(graphHeight / layout.height) * 100}%`,
   };
 });
+
+function jumpFromMinimap(event: MouseEvent): void {
+  const map = event.currentTarget as HTMLElement;
+  const box = map.getBoundingClientRect();
+  const layout = canvasLayout.value;
+  const { width, height } = viewportSize();
+  if (!box.width || !box.height || !width || !height) return;
+  const ratioX = (event.clientX - box.left) / box.width;
+  const ratioY = (event.clientY - box.top) / box.height;
+  setView({
+    x: width / 2 - ratioX * layout.width * view.value.k,
+    y: height / 2 - ratioY * layout.height * view.value.k,
+    k: view.value.k,
+  });
+  viewLocked.value = true;
+  scheduleSaveViewport();
+}
 
 function toggleFocus(): void {
   const root = studioRoot.value;
@@ -243,12 +263,11 @@ function toggleFocus(): void {
 
 function onFullscreenChange(): void {
   isFullscreen.value = Boolean(document.fullscreenElement);
+  // The box changes size with the mode, so refit only if the view is untouched.
   void nextTick(() => {
-    fitStudio();
-    if (!viewLocked.value) fitCanvas(true);
-    syncViewport();
+    if (viewLocked.value) clampIntoView();
+    else fitView();
   });
-  window.setTimeout(fitStudio, 120);
 }
 
 function onCanvasKeydown(event: KeyboardEvent): void {
@@ -276,41 +295,27 @@ function onCanvasKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  fitStudio();
-  window.addEventListener("resize", fitStudio);
-  window.addEventListener("resize", () => fitCanvas());
-  // The scroll box only has a height once the measured CSS variable lands,
-  // so fit again after paint and whenever the graph changes.
-  // Fonts, the workflow toolbar and the draft panel all settle over the first
-  // frames and each of them moves the canvas box, so measure a few times.
-  void nextTick(() => fitStudio());
-  window.setTimeout(() => fitStudio(), 150);
-  window.setTimeout(() => fitStudio(), 450);
   const observer = new ResizeObserver(() => {
-    fitStudio();
-    fitCanvas();
+    if (viewLocked.value) clampIntoView();
+    else fitView();
   });
-  if (canvasScroll.value) observer.observe(canvasScroll.value);
-  // Loading a draft grows the toolbar above the canvas, which moves the box
-  // down; observing the section keeps the measured height honest.
-  const root = studioRoot.value;
-  if (root) {
-    observer.observe(root);
-    for (const child of Array.from(root.children)) observer.observe(child);
-  }
+  if (viewportEl.value) observer.observe(viewportEl.value);
   resizeObserver = observer;
   document.addEventListener("fullscreenchange", onFullscreenChange);
   window.addEventListener("keydown", onCanvasKeydown);
+  window.addEventListener("pointermove", onViewportPointerMove);
+  window.addEventListener("pointerup", onViewportPointerUp);
 });
 
 onUnmounted(() => {
-  window.removeEventListener("resize", fitStudio);
-  window.removeEventListener("resize", () => fitCanvas());
   resizeObserver?.disconnect();
   document.removeEventListener("fullscreenchange", onFullscreenChange);
   window.removeEventListener("keydown", onCanvasKeydown);
+  window.removeEventListener("pointermove", onViewportPointerMove);
+  window.removeEventListener("pointerup", onViewportPointerUp);
   if (viewportTimer !== undefined) window.clearTimeout(viewportTimer);
 });
+
 const workflows = ref<WorkflowDraft[]>([]);
 const selectedWorkflowId = ref("");
 const selectedWorkflow = ref<WorkflowDraft | null>(null);
@@ -333,7 +338,10 @@ watch(selectedNodeId, (id) => {
 });
 const toggleInspector = () => {
   inspectorOpen.value = !inspectorOpen.value;
-  nextTick(() => fitCanvas());
+  nextTick(() => {
+    if (viewLocked.value) clampIntoView();
+    else fitView();
+  });
 };
 const nodeIdDraft = ref("");
 const nodeTypeDraft = ref("llm");
@@ -485,16 +493,14 @@ const canvasLayout = computed(() => {
   };
 });
 
-// The graph (and its scroll box) can appear after the first paint, e.g. once
-// the draft finishes loading, so refit whenever either one becomes measurable.
-watch(canvasLayout, () => nextTick(fitCanvas));
-watch(canvasScroll, (el) => {
+// The graph can arrive after the first paint, e.g. once the draft finishes
+// loading, so a new layout is fitted only while the view is still automatic.
+watch(canvasLayout, () => nextTick(() => {
+  if (!viewLocked.value) fitView();
+}));
+watch(viewportEl, (el) => {
   if (!el) return;
-  nextTick(() => {
-    fitStudio();
-    fitCanvas();
-  });
-  resizeObserver?.observe(el);
+  nextTick(() => restoreViewport());
 });
 
 function commitDefinition(definition: Record<string, unknown>): void {
@@ -1131,16 +1137,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section ref="studioRoot" class="workflow-studio" :style="studioVars">
-    <div class="workflow-heading">
-      <div>
-        <p class="eyebrow">WORKFLOW ORCHESTRATION</p>
-        <h3>Workflow Studio</h3>
-      </div>
-      <el-button type="primary" plain :disabled="!props.projectId" :loading="saving" @click="createDraft">
-        ＋ New workflow
-      </el-button>
-    </div>
+  <section ref="studioRoot" class="workflow-studio">
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="notice" :title="notice" type="success" :closable="true" @close="notice = ''" />
     <el-empty v-if="!props.projectId" description="Select a project to manage workflows" :image-size="72" />
@@ -1158,67 +1155,27 @@ onUnmounted(() => {
         <el-tag type="info" effect="plain">
           {{ selectedWorkflow.is_archived ? t("ARCHIVED") : selectedWorkflow.current_version ? tf("PUBLISHED v{0}", selectedWorkflow.current_version) : t("DRAFT ONLY") }}
         </el-tag>
+        <el-button type="primary" plain size="small" :loading="saving" @click="createDraft">
+          ＋ {{ t("New workflow") }}
+        </el-button>
       </div>
       <section class="workflow-pipeline">
-        <div class="workflow-run-heading">
-          <div>
-            <h4>Workflow DAG</h4>
-            <p class="task-note">Live visual preview of the editable draft. Server validation remains authoritative.</p>
-          </div>
-          <el-tag type="info" effect="plain">{{ tf("{0} nodes · {1} edges", previewGraph.nodes.length, previewGraph.edges.length) }}</el-tag>
-        </div>
-        <div class="workflow-node-toolbar">
-          <span class="task-note">
-            {{ selectedWorkflowId ? "Insert node before the end node:" : "Select or create a draft to insert nodes:" }}
-          </span>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('llm')">＋ LLM</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('condition')">＋ Condition</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('agent')">＋ Agent</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
-          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
-        </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-canvas-grid" :class="{ solo: !inspectorOpen }">
           <div class="workflow-canvas-shell">
-<div class="canvas-toolbar">
-            <button type="button" class="canvas-tool" :title="t('Zoom out')" @click="zoomBy(1 / 1.2)">－</button>
-            <span class="canvas-zoom">{{ zoomLabel }}</span>
-            <button type="button" class="canvas-tool" :title="t('Zoom in')" @click="zoomBy(1.2)">＋</button>
-            <button type="button" class="canvas-tool canvas-tool-text" :title="t('Fit view')" @click="fitView">
-              {{ t("Fit") }}
-            </button>
-            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(1)">100%</button>
-            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(0.5)">50%</button>
-            <button
-              type="button"
-              class="canvas-tool canvas-tool-text"
-              :class="{ on: minimapOpen }"
-              :title="t('Minimap')"
-              @click="minimapOpen = !minimapOpen"
-            >
-              ▦
-            </button>
-            <button
-              type="button"
-              class="canvas-tool"
-              :class="{ on: inspectorOpen }"
-              :title="t('Inspector')"
-              @click="toggleInspector()"
-            >
-              ▤
-            </button>
-            <button type="button" class="canvas-tool" :title="t('Fullscreen')" @click="toggleFocus">
-              {{ isFullscreen ? "⤡" : "⤢" }}
-            </button>
-          </div>
-          <div ref="canvasScroll" class="workflow-canvas-scroll" @scroll.passive="onCanvasScroll">
-          <div ref="canvasFrame" class="workflow-canvas-frame" :style="{ width: scaledWidth + 'px', height: scaledHeight + 'px' }">
           <div
-            class="workflow-canvas"
-            :style="{ width: (paintWidth || canvasLayout.width) + 'px', height: (paintHeight || canvasLayout.height) + 'px', transform: 'scale(' + canvasScale + ')' }"
-            @pointerdown.self="selectedNodeId = ''"
+            ref="viewportEl"
+            class="workflow-canvas-viewport"
+            :style="canvasBackdrop"
+            @wheel.prevent="onCanvasWheel"
+            @pointerdown.self="startPan"
+            @pointerup.self="onViewportPointerUp"
+          >
+          <div
+            class="workflow-canvas-plane"
+            :style="{ width: canvasLayout.width + 'px', height: canvasLayout.height + 'px', transform: canvasTransform }"
+            @pointerdown.self="startPan"
+            @pointerup.self="onViewportPointerUp"
           >
             <svg
               class="workflow-canvas-edges"
@@ -1276,8 +1233,73 @@ onUnmounted(() => {
             </article>
           </div>
           </div>
+<div class="canvas-dock">
+            <el-popover placement="bottom-start" :width="200" trigger="click" :disabled="!selectedWorkflowId">
+              <template #reference>
+                <button type="button" class="canvas-tool canvas-tool-text" :disabled="!selectedWorkflowId">
+                  ＋ {{ t("Node") }}
+                </button>
+              </template>
+              <div class="canvas-node-menu">
+                <el-button size="small" @click="addWorkflowNode('llm')">{{ t("LLM") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('knowledge_search')">{{ t("Knowledge Search") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('tool')">{{ t("Connector Tool") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('condition')">{{ t("Condition") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('agent')">{{ t("Agent") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('approval')">{{ t("Approval Gate") }}</el-button>
+                <el-button size="small" @click="addWorkflowNode('loop')">{{ t("Bounded Loop") }}</el-button>
+              </div>
+            </el-popover>
+            <button type="button" class="canvas-tool" :title="t('Zoom out')" @click="zoomBy(1 / 1.2)">－</button>
+            <span class="canvas-zoom">{{ zoomLabel }}</span>
+            <button type="button" class="canvas-tool" :title="t('Zoom in')" @click="zoomBy(1.2)">＋</button>
+            <button type="button" class="canvas-tool canvas-tool-text" :title="t('Fit view')" @click="fitView">
+              {{ t("Fit") }}
+            </button>
+            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(1)">100%</button>
+            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(0.5)">50%</button>
+            <button
+              type="button"
+              class="canvas-tool canvas-tool-text"
+              :class="{ on: minimapOpen }"
+              :title="t('Minimap')"
+              @click="minimapOpen = !minimapOpen"
+            >
+              ▦
+            </button>
+            <button
+              type="button"
+              class="canvas-tool"
+              :class="{ on: inspectorOpen }"
+              :title="t('Inspector')"
+              @click="toggleInspector()"
+            >
+              ▤
+            </button>
+            <button type="button" class="canvas-tool" :title="t('Fullscreen')" @click="toggleFocus">
+              {{ isFullscreen ? "⤡" : "⤢" }}
+            </button>
+            <button
+              type="button"
+              class="canvas-tool canvas-tool-text"
+              :class="{ on: definitionOpen }"
+              :title="t('Definition and runs')"
+              @click="definitionOpen = !definitionOpen"
+            >
+              {{ t("Definition") }}
+            </button>
+            <button
+              type="button"
+              class="canvas-tool canvas-tool-text canvas-tool-preset"
+              :disabled="!selectedWorkflowId || validating"
+              @click="validateDraft"
+            >
+              {{ t("Validate") }}
+            </button>
+            <el-tag class="canvas-count" type="info" effect="plain" size="small">
+              {{ tf("{0} nodes · {1} edges", previewGraph.nodes.length, previewGraph.edges.length) }}
+            </el-tag>
           </div>
-          
           <div v-if="minimapOpen" class="canvas-minimap" :title="t('Minimap')" @click="jumpFromMinimap">
             <span
               v-for="node in canvasLayout.nodes"
@@ -1405,11 +1427,8 @@ onUnmounted(() => {
           </div>
           <el-alert v-for="(item, index) in validationResult.errors" :key="index" :title="item" type="error" :closable="false" />
         </div>
-        <div class="workflow-actions">
-          <el-button :loading="validating" :disabled="!selectedWorkflowId" @click="validateDraft">Validate DAG</el-button>
-        </div>
       </section>
-      <div class="workflow-editor-grid">
+      <div v-if="definitionOpen" class="workflow-editor-grid workflow-definition-panel">
         <div class="workflow-editor-form">
           <h4>Definition</h4>
           <el-input v-model="workflowName" placeholder="Workflow name" />

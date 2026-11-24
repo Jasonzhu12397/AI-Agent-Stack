@@ -21,6 +21,7 @@ AI Agent Stack is not a single chatbot or a collection of disconnected Agent dem
 | Usage governance | Per-tenant token budget reservation, settlement and overspend protection | Pending validation under real concurrency |
 | Audit | Tenant and global chained-hash audit records with verification APIs | Code baseline |
 | Infrastructure delivery | Cloud Control, EPH and Target Agents for CAPI/Metal3/Ironic bare metal | Pending real hardware validation |
+| Image supply chain | Central Container Image Registry: digest-only registration, scan and signature gates, staged promotion, digest-pinned pull plans for EPH and Target | Code baseline; registry is a mandatory capability, see [docs/container-image-registry.md](docs/container-image-registry.md) |
 | BMC firmware lifecycle | Redfish `UpdateService` inventory, administrator-only `SimpleUpdate`, idempotent jobs, task-monitor polling and audit | Code baseline; physical BMC validation pending |
 | Control workspace | Installation-scoped projects with versioned skills, referenced plugins, tasks, DAG workflows and leased work claimed by Agents | Code baseline; control plane stores manifests, Agents execute |
 | Software engineering agent | Static project understanding, approved multi-file patches, review, static and measured (cProfile) performance, tests, debugging, git, security, OpenAPI, docs, deployment drafts, schema-validated model planning and concurrent role collaboration | Code baseline; provider calls require explicit environment configuration |
@@ -34,7 +35,7 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 ### 1. Application multi-Agent runtime
 
 - **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
-- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio (visual DAG canvas with node inspector and edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet with Redfish firmware management, Governance, Audit and Organization. The whole SaaS interface switches between English and Chinese through the central locale engine, persisted per browser and backed by Element Plus locale packs.
+- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio (visual DAG canvas with node inspector and edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet with Redfish firmware management, Image Registry, Governance, Audit and Organization. The whole SaaS interface switches between English and Chinese through the central locale engine, persisted per browser and backed by Element Plus locale packs.
 - **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent, Workflow and Agent Team tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
 - **Agent Teams**: a project-scoped team publishes a versioned roster and one strategy: `sequential`, `coordinator`, `parallel` fan-out or `router` dispatch. Publishing materializes an immutable Workflow version made of `agent` and routing nodes, so every team run reuses the same lease, token-budget, retry and audit machinery as ordinary Workflows. Runs are idempotent by `Idempotency-Key` and expose per-member step records. See `docs/agent-teams.md`; members with plugin tools are rejected until per-member tool approvals exist.
 - **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.
@@ -127,6 +128,28 @@ deb https://pkgs.k8s.io/core:/stable:/v1.37/deb/ /
 ```
 
 The OS images must already contain compatible containerd, kubeadm, kubelet and kubectl binaries at Kubernetes **`v1.37.2`**. EPH cloud-init and Target CAPI verify and enable them; they never execute online `apt update` or `apt install`. Bare-metal deployment, cluster expansion and remote image pulls do not depend on public OS repositories or an external container registry.
+
+## Central image registry
+
+Every image the platform runs is catalogued in one internal registry, and
+deployments consume digest-pinned references from it. Agents and Kubernetes
+clusters never resolve images from the public internet in place.
+
+- **Registration** requires an immutable `sha256` digest; tags are refused.
+- **Gates**: a passed security scan makes an image `ready`; production
+  promotion additionally requires a signature; promotion walks
+  `dev → staging → production` with no skipping.
+- **Pull plan**: `pull-plan` lists only ready images as
+  `<PLATFORM_REGISTRY_HOST>/<name>@<digest>`, so EPH bootstrap and the target
+  control plane resolve one internal host.
+- **Ownership**: Cloud Control Agent coordinates build and release, EPH-Agent
+  and Target-Agent report usage state for their stage.
+- **Configuration**: `PLATFORM_REGISTRY_HOST` (default
+  `registry.ai-agent-stack.internal`).
+
+Operator-facing surface: `Image Registry` in Web Studio, backed by
+`/api/v1/tenants/<tenant>/projects/<project>/registry/`. Full contract and gates:
+[docs/container-image-registry.md](docs/container-image-registry.md).
 
 ## Offline image delivery
 
@@ -230,7 +253,7 @@ npm run build
 - `deploy/agents`: three-Agent images and Kubernetes deployment assets.
 - `deploy/offline`: offline image factory and version manifest.
 - `eph-iso`: Debian 12 EPH Live OS bootstrap assets.
-- `docs`: architecture, Agent Teams, threat model, verification matrix and delivery plans.
+- `docs`: architecture, Agent Teams, image registry, threat model, verification matrix and delivery plans.
 
 ## Security baseline
 
