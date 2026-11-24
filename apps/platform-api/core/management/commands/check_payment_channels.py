@@ -34,22 +34,18 @@ class Command(BaseCommand):
                 self.stdout.write(f"{entry['channel']}: configured")
             else:
                 self.stdout.write(
-                    f"{entry['channel']}: not configured, missing "
-                    f"{', '.join(entry['missing'])}"
+                    f"{entry['channel']}: not configured, missing {', '.join(entry['missing'])}"
                 )
 
         providers = build_providers()
         self.stdout.write(f"usable channels: {', '.join(sorted(providers)) or 'none'}")
-        self.stdout.write(
-            "environment prefixes: " + ", ".join(payment_env_prefixes())
-        )
+        self.stdout.write("environment prefixes: " + ", ".join(payment_env_prefixes()))
 
         if providers or options["allow_none"]:
             return
 
         gaps = "; ".join(
-            f"{entry['channel']} missing {', '.join(entry['missing'])}"
-            for entry in entries
+            f"{entry['channel']} missing {', '.join(entry['missing'])}" for entry in entries
         )
         raise CommandError(
             "PAYMENT_PROVIDER_NOT_CONFIGURED: no payment channel resolves its "

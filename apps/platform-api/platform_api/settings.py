@@ -158,6 +158,10 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
 STATIC_URL = "static/"
+
+# The web console bundle is served by this process, so a deployment only needs
+# one public port. Override when the bundle is built outside the repository.
+CONSOLE_DIST_DIR = os.getenv("CONSOLE_DIST_DIR", str(BASE_DIR / "apps" / "web-studio" / "dist"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "core.api_errors.contract_exception_handler",
@@ -182,17 +186,13 @@ PLUGIN_HTTP_ALLOWED_HOSTS = [
 PLUGIN_CREDENTIAL_RESOLVER = os.getenv(
     "PLUGIN_CREDENTIAL_RESOLVER", "core.plugin_credentials.resolve"
 ).strip()
-PLUGIN_CREDENTIAL_ENV_PREFIX = os.getenv(
-    "PLUGIN_CREDENTIAL_ENV_PREFIX", "PLUGIN_SECRET_"
-).strip()
+PLUGIN_CREDENTIAL_ENV_PREFIX = os.getenv("PLUGIN_CREDENTIAL_ENV_PREFIX", "PLUGIN_SECRET_").strip()
 # Payment channels resolve secrets through the same credential resolver, limited
 # to these environment prefixes so an unrelated process variable cannot become a
 # merchant key. Comma-separated override for deployments with other naming.
 PAYMENT_CREDENTIAL_ENV_PREFIXES = tuple(
     prefix.strip()
-    for prefix in os.getenv(
-        "PAYMENT_CREDENTIAL_ENV_PREFIXES", "WECHATPAY_,ALIPAY_"
-    ).split(",")
+    for prefix in os.getenv("PAYMENT_CREDENTIAL_ENV_PREFIXES", "WECHATPAY_,ALIPAY_").split(",")
     if prefix.strip()
 )
 BMC_CREDENTIAL_RESOLVER = os.getenv("BMC_CREDENTIAL_RESOLVER", "").strip()

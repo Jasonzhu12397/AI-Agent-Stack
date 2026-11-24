@@ -222,9 +222,7 @@ class Order(models.Model):
         if target == self.status:
             return
         if not self.can_transition(target):
-            raise ValueError(
-                f"Order {self.id} cannot transition from {self.status} to {target}"
-            )
+            raise ValueError(f"Order {self.id} cannot transition from {self.status} to {target}")
         self.status = target
         if target == self.Status.PAID and self.paid_at is None:
             self.paid_at = timezone.now()

@@ -177,9 +177,7 @@ def _operation_config(context, tool):
         and tool.risk_level in {"high", "critical"}
         and tool.idempotency_mode in {"none", "idempotent"}
     )
-    if method.upper() == "POST" and not (
-        read_only_post or approved_side_effect_post
-    ):
+    if method.upper() == "POST" and not (read_only_post or approved_side_effect_post):
         raise ToolExecutionError(
             "POST requires an explicitly read-only operation or a "
             "high-risk approval-gated operation."
@@ -214,9 +212,20 @@ def _operation_config(context, tool):
     static_headers = {}
     static_header_names = set()
     forbidden_headers = {
-        "authorization", "proxy-authorization", "cookie", "set-cookie",
-        "host", "content-length", "transfer-encoding", "connection",
-        "upgrade", "te", "trailer", "expect", "x-goog-api-key", "x-api-key",
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "upgrade",
+        "te",
+        "trailer",
+        "expect",
+        "x-goog-api-key",
+        "x-api-key",
     }
     for name, value in configured_headers.items():
         if (
@@ -244,12 +253,10 @@ def _operation_config(context, tool):
         not isinstance(path_params, dict)
         or not isinstance(query_params, dict)
         or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in path_params.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in path_params.items()
         )
         or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in query_params.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in query_params.items()
         )
     ):
         raise ToolExecutionError("Connector HTTP parameter mapping is invalid.")
@@ -408,15 +415,9 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                 if not 200 <= status < 300:
                     raise ToolExecutionError("Connector returned a non-success HTTP status.")
                 content_type = (
-                    response.headers.get("content-type", "")
-                    .split(";", 1)[0]
-                    .strip()
-                    .lower()
+                    response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
                 )
-                if not (
-                    content_type == "application/json"
-                    or content_type.endswith("+json")
-                ):
+                if not (content_type == "application/json" or content_type.endswith("+json")):
                     raise ToolExecutionError(
                         "Connector response content type must be JSON.",
                         code=FAULT_INVALID_RESPONSE,

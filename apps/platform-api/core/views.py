@@ -75,9 +75,7 @@ class TenantListView(ListCreateAPIView):
 
     def get_queryset(self):
         return (
-            Tenant.objects.filter(memberships__user=self.request.user)
-            .order_by("name")
-            .distinct()
+            Tenant.objects.filter(memberships__user=self.request.user).order_by("name").distinct()
         )
 
     @transaction.atomic

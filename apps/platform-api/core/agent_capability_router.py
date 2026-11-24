@@ -133,9 +133,7 @@ def _diagnose(installations: list[AgentPluginInstallation], capability_name: str
 
 def _manifest_hash(manifest: Any) -> str:
     """Stable digest of a manifest dictionary for definition signature checks."""
-    canonical = json.dumps(
-        manifest or {}, sort_keys=True, separators=(",", ":"), default=str
-    )
+    canonical = json.dumps(manifest or {}, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -144,9 +142,7 @@ def _definition_signature(plugin: AgentPluginDefinition) -> tuple[Any, ...]:
     return (plugin.version, plugin.enabled, _manifest_hash(plugin.manifest))
 
 
-def _verify_entry(
-    tenant_id: str, project_id: str, entry: dict[str, Any]
-) -> bool:
+def _verify_entry(tenant_id: str, project_id: str, entry: dict[str, Any]) -> bool:
     """Re-check a cached entry against a lightweight live database query.
 
     Only installation status/revision and definition version/enabled/manifest
@@ -180,11 +176,7 @@ def _verify_entry(
         return False
     if _definition_signature(row.plugin) != entry["definition_signature"]:
         return False
-    active_ids = {
-        str(row.id)
-        for row in rows
-        if row.status == _INSTALLED and row.plugin.enabled
-    }
+    active_ids = {str(row.id) for row in rows if row.status == _INSTALLED and row.plugin.enabled}
     if active_ids != set(entry.get("active_installation_ids", [])):
         return False
     return True
@@ -260,9 +252,7 @@ def resolve_capability(
     if entry is not None:
         if _verify_entry(tenant_id, project_id, entry):
             return entry["resolved"]
-        agent_capability_cache.invalidate_installation_id(
-            entry["installation_id"]
-        )
+        agent_capability_cache.invalidate_installation_id(entry["installation_id"])
 
     resolved, active_ids = _resolve_uncached(tenant_id, project_id, capability_name)
     agent_capability_cache.store(
@@ -378,14 +368,10 @@ def _ensure_active(installation: AgentPluginInstallation, in_flight: bool) -> No
     installation.refresh_from_db()
     installation.plugin.refresh_from_db()
     if installation.status == _UNINSTALLED:
-        code = (
-            CAPABILITY_UNINSTALLED_IN_FLIGHT if in_flight else CAPABILITY_NOT_INSTALLED
-        )
+        code = CAPABILITY_UNINSTALLED_IN_FLIGHT if in_flight else CAPABILITY_NOT_INSTALLED
         raise CapabilityResolutionError(code, "The agent plugin installation was uninstalled.")
     if installation.status == _DISABLED or not installation.plugin.enabled:
-        code = (
-            CAPABILITY_UNINSTALLED_IN_FLIGHT if in_flight else CAPABILITY_DISABLED
-        )
+        code = CAPABILITY_UNINSTALLED_IN_FLIGHT if in_flight else CAPABILITY_DISABLED
         raise CapabilityResolutionError(code, "The agent plugin installation is disabled.")
 
 
@@ -442,8 +428,12 @@ def invoke_capability(
         validate_arguments(arguments, input_schema)
     except ArgumentValidationError as exc:
         _record_invocation(
-            installation, capability_name, plugin.protocol,
-            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, 0,
+            installation,
+            capability_name,
+            plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED,
+            CAPABILITY_INVOCATION_FAILED,
+            0,
         )
         raise CapabilityResolutionError(
             CAPABILITY_INVOCATION_FAILED, "Capability arguments are invalid."
@@ -451,8 +441,12 @@ def invoke_capability(
 
     if risk_level in {"high", "critical"} and not approved:
         _record_invocation(
-            installation, capability_name, plugin.protocol,
-            AgentCapabilityInvocation.Status.REJECTED, "approval_required", 0,
+            installation,
+            capability_name,
+            plugin.protocol,
+            AgentCapabilityInvocation.Status.REJECTED,
+            "approval_required",
+            0,
         )
         raise ToolApprovalRequired("This capability requires explicit approval before execution.")
 
@@ -464,15 +458,23 @@ def invoke_capability(
     except CapabilityResolutionError:
         latency = int((time.monotonic() - started) * 1000)
         _record_invocation(
-            installation, capability_name, plugin.protocol,
-            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, latency,
+            installation,
+            capability_name,
+            plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED,
+            CAPABILITY_INVOCATION_FAILED,
+            latency,
         )
         raise
     except Exception as exc:  # noqa: BLE001 - normalized to a stable failure code
         latency = int((time.monotonic() - started) * 1000)
         _record_invocation(
-            installation, capability_name, plugin.protocol,
-            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, latency,
+            installation,
+            capability_name,
+            plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED,
+            CAPABILITY_INVOCATION_FAILED,
+            latency,
         )
         raise CapabilityResolutionError(
             CAPABILITY_INVOCATION_FAILED, "Capability invocation failed."
@@ -485,9 +487,12 @@ def invoke_capability(
         _ensure_active(installation, in_flight=True)
     except CapabilityResolutionError:
         _record_invocation(
-            installation, capability_name, plugin.protocol,
+            installation,
+            capability_name,
+            plugin.protocol,
             AgentCapabilityInvocation.Status.FAILED,
-            CAPABILITY_UNINSTALLED_IN_FLIGHT, latency,
+            CAPABILITY_UNINSTALLED_IN_FLIGHT,
+            latency,
         )
         raise
 
@@ -495,15 +500,23 @@ def invoke_capability(
         validate_schema(result, output_schema)
     except ToolExecutionError as exc:
         _record_invocation(
-            installation, capability_name, plugin.protocol,
-            AgentCapabilityInvocation.Status.FAILED, CAPABILITY_INVOCATION_FAILED, latency,
+            installation,
+            capability_name,
+            plugin.protocol,
+            AgentCapabilityInvocation.Status.FAILED,
+            CAPABILITY_INVOCATION_FAILED,
+            latency,
         )
         raise CapabilityResolutionError(
             CAPABILITY_INVOCATION_FAILED, "Capability result is invalid."
         ) from exc
 
     _record_invocation(
-        installation, capability_name, plugin.protocol,
-        AgentCapabilityInvocation.Status.SUCCESS, "", latency,
+        installation,
+        capability_name,
+        plugin.protocol,
+        AgentCapabilityInvocation.Status.SUCCESS,
+        "",
+        latency,
     )
     return result

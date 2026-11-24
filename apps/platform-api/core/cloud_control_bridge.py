@@ -89,10 +89,7 @@ def build_cloud_control_spec(
             require_credentials=False,
             pxe_boot_ports=_pxe_boot_ports(spec),
         )
-        fleet = [
-            dataclasses.asdict(machine.spec)
-            for machine in machines
-        ]
+        fleet = [dataclasses.asdict(machine.spec) for machine in machines]
     if not fleet:
         raise FleetInventoryEmpty()
     if not all(isinstance(item, dict) for item in fleet):

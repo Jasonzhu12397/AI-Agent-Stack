@@ -22,9 +22,7 @@ DEFAULT_PAYMENT_ENV_PREFIXES = ("WECHATPAY_", "ALIPAY_")
 def payment_env_prefixes() -> tuple[str, ...]:
     """Environment variable prefixes a payment channel may read."""
 
-    configured = getattr(
-        settings, "PAYMENT_CREDENTIAL_ENV_PREFIXES", DEFAULT_PAYMENT_ENV_PREFIXES
-    )
+    configured = getattr(settings, "PAYMENT_CREDENTIAL_ENV_PREFIXES", DEFAULT_PAYMENT_ENV_PREFIXES)
     prefixes = tuple(str(prefix) for prefix in configured if str(prefix))
     return prefixes or DEFAULT_PAYMENT_ENV_PREFIXES
 
@@ -140,9 +138,7 @@ class PaymentProvider(ABC):
         """Return the provider-side trade state for an existing order."""
 
     @abstractmethod
-    def refund(
-        self, order, reason: str, amount_cents: int | None = None
-    ) -> dict[str, Any]:
+    def refund(self, order, reason: str, amount_cents: int | None = None) -> dict[str, Any]:
         """Issue a refund for a paid order; returns the provider receipt.
 
         ``amount_cents`` is the slice being refunded; ``None`` means the full

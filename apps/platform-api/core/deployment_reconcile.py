@@ -94,9 +94,7 @@ def store_snapshot(deployment, key: str, snapshot: dict[str, Any]) -> bool:
     """Write one snapshot section unless the stored one is already current."""
 
     preflight = (
-        dict(deployment.preflight_result)
-        if isinstance(deployment.preflight_result, dict)
-        else {}
+        dict(deployment.preflight_result) if isinstance(deployment.preflight_result, dict) else {}
     )
     if not _is_stale(preflight.get(key) or {}, snapshot):
         return False

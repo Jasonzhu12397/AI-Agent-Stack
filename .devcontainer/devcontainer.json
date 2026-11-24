@@ -12,19 +12,13 @@
     "storage": "32gb"
   },
   "forwardPorts": [
-    5173,
     8000
   ],
   "portsAttributes": {
-    "5173": {
-      "label": "web-studio",
+    "8000": {
+      "label": "console",
       "visibility": "public",
       "onAutoForward": "openBrowserOnce"
-    },
-    "8000": {
-      "label": "platform-api",
-      "visibility": "public",
-      "onAutoForward": "notify"
     }
   },
   "postCreateCommand": "python3 .devcontainer/bootstrap.py",

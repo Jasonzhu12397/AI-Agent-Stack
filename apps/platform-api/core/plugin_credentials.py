@@ -372,9 +372,7 @@ def validate_reference(reference: str) -> str:
     return _parse_reference(reference).scheme
 
 
-def resolve_plaintext(
-    credential_ref: str, *, env_prefixes: tuple[str, ...] | None = None
-) -> str:
+def resolve_plaintext(credential_ref: str, *, env_prefixes: tuple[str, ...] | None = None) -> str:
     """Resolve a credential reference to the single secret string it carries.
 
     Callers that need one secret (payment merchant keys, signing certificates)
@@ -413,4 +411,3 @@ def resolve_plaintext(
 
 register_provider("env", _env_provider)
 register_provider("vault", _vault_provider)
-

@@ -93,6 +93,13 @@ def install_frontend() -> None:
     run([npm, "install", "--no-audit", "--no-fund"], cwd=WEB_STUDIO)
 
 
+def build_console() -> None:
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeError("npm is missing; the node feature did not install")
+    run([npm, "exec", "--", "vite", "build"], cwd=WEB_STUDIO)
+
+
 def migrate() -> None:
     run([sys.executable, "manage.py", "migrate", "--noinput"], cwd=PLATFORM_API, env=runtime_env())
 
@@ -109,6 +116,8 @@ def main() -> None:
     report("python-deps")
     install_frontend()
     report("frontend-deps")
+    build_console()
+    report("built-console")
     migrate()
     report("migrated")
     seed()

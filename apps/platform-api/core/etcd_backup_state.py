@@ -309,9 +309,7 @@ def _entries_from(names: Any, cluster_name: str) -> list[dict[str, Any]]:
 
     if not isinstance(names, list):
         return []
-    items = [
-        item if isinstance(item, dict) else {"name": str(item)} for item in names
-    ]
+    items = [item if isinstance(item, dict) else {"name": str(item)} for item in names]
     return contract.snapshot_entries(items, cluster_name=cluster_name)
 
 
@@ -356,8 +354,10 @@ def etcd_backup_state(
     )
     scheduler_at = _scheduler_last_run(deployment)
     scheduler_age = (
-        (now or datetime.datetime.now(datetime.UTC)) - scheduler_at
-    ).total_seconds() / 3600.0 if scheduler_at else None
+        ((now or datetime.datetime.now(datetime.UTC)) - scheduler_at).total_seconds() / 3600.0
+        if scheduler_at
+        else None
+    )
     locations = known_directories(deployment)
     state: dict[str, Any] = {
         "policy": policy,
@@ -366,9 +366,7 @@ def etcd_backup_state(
         "restore_point": None,
         "unconfirmed_restore_points": [],
         "scheduler_last_run": scheduler_at.isoformat() if scheduler_at else None,
-        "scheduler_age_hours": (
-            round(scheduler_age, 3) if scheduler_age is not None else None
-        ),
+        "scheduler_age_hours": (round(scheduler_age, 3) if scheduler_age is not None else None),
         "last_run": _command_summary(runs[0]) if runs else None,
         "history": [_command_summary(command) for command in commands],
         "newest": None,
@@ -424,9 +422,7 @@ def etcd_backup_state(
     cluster_name = deployment.cluster_name
     entries = _entries_from(_listing(result), cluster_name)
     listed_names = {entry["name"] for entry in entries}
-    upgrade_point = _reported_restore_point(
-        deployment, listed_names=listed_names, now=now
-    )
+    upgrade_point = _reported_restore_point(deployment, listed_names=listed_names, now=now)
     report = contract.assess(
         entries,
         keep_count=policy["keep_count"],
@@ -439,14 +435,10 @@ def etcd_backup_state(
     state.update(
         {
             "reported_by": reported.command_type,
-            "reported_at": (
-                reported.finished_at.isoformat() if reported.finished_at else None
-            ),
+            "reported_at": (reported.finished_at.isoformat() if reported.finished_at else None),
             "newest": report["newest"],
             "newest_age_hours": report["newest_age_hours"],
-            "stale": any(
-                finding["code"] == "ETCD_BACKUP_STALE" for finding in report["findings"]
-            ),
+            "stale": any(finding["code"] == "ETCD_BACKUP_STALE" for finding in report["findings"]),
             "ok": report["ok"],
             "count": report["count"],
             "prunable": report["prunable"],
@@ -481,9 +473,7 @@ def etcd_backup_state(
         .first()
     )
     waited = (
-        (current - stuck_run.created_at).total_seconds() / 3600.0
-        if stuck_run is not None
-        else 0.0
+        (current - stuck_run.created_at).total_seconds() / 3600.0 if stuck_run is not None else 0.0
     )
     if stuck_run is not None:
         state["findings"] = [
@@ -497,9 +487,7 @@ def etcd_backup_state(
         ]
         state["ok"] = False
         state["run_stuck_hours"] = round(waited, 3)
-    newest_result = (
-        newest_run.result if newest_run and isinstance(newest_run.result, dict) else {}
-    )
+    newest_result = newest_run.result if newest_run and isinstance(newest_run.result, dict) else {}
     if newest_run is not None and (
         newest_run.status in FAILED_STATUSES or newest_result.get("ok") is False
     ):
@@ -523,5 +511,3 @@ def etcd_backup_state(
         state["findings"] = [*report["findings"], dict(NOT_RUN_FINDING)]
         state["ok"] = False
     return state
-
-

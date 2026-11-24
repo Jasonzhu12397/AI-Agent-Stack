@@ -80,9 +80,9 @@ def touch(*, session_key: str, user) -> None:
         return
     now = timezone.now()
     cutoff = now - ACTIVITY_REFRESH_INTERVAL
-    updated = SessionActivity.objects.filter(
-        pk=session_key, last_activity__lt=cutoff
-    ).update(last_activity=now)
+    updated = SessionActivity.objects.filter(pk=session_key, last_activity__lt=cutoff).update(
+        last_activity=now
+    )
     if updated:
         return
     if SessionActivity.objects.filter(pk=session_key).exists():

@@ -126,9 +126,7 @@ class ToolApprovalDecisionView(APIView):
             )
         decision = self.decision
         reason = request.data.get("reason", "")
-        if decision == "reject" and (
-            not isinstance(reason, str) or len(reason) > 500
-        ):
+        if decision == "reject" and (not isinstance(reason, str) or len(reason) > 500):
             return Response(
                 {"detail": "reason must be a string no longer than 500 characters."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -170,9 +168,7 @@ class ToolApprovalDecisionView(APIView):
                         "code": "TOOL_APPROVAL_EXPIRED",
                         "message": "The high-risk tool approval request expired.",
                     }
-                    task.save(
-                        update_fields=["status", "finished_at", "error", "updated_at"]
-                    )
+                    task.save(update_fields=["status", "finished_at", "error", "updated_at"])
                     AgentRun.objects.filter(task=task, finished_at__isnull=True).update(
                         finished_at=now
                     )
@@ -186,9 +182,7 @@ class ToolApprovalDecisionView(APIView):
                 approval.status = ToolApprovalRequest.Status.APPROVED
                 approval.approved_by = request.user
                 approval.approved_at = now
-                approval.save(
-                    update_fields=["status", "approved_by", "approved_at"]
-                )
+                approval.save(update_fields=["status", "approved_by", "approved_at"])
                 task.status = Task.Status.QUEUED
                 task.available_at = now
                 task.error = None
@@ -226,12 +220,8 @@ class ToolApprovalDecisionView(APIView):
                     "code": "TOOL_APPROVAL_REJECTED",
                     "message": "A project administrator rejected a high-risk tool call.",
                 }
-                task.save(
-                    update_fields=["status", "finished_at", "error", "updated_at"]
-                )
-                AgentRun.objects.filter(task=task, finished_at__isnull=True).update(
-                    finished_at=now
-                )
+                task.save(update_fields=["status", "finished_at", "error", "updated_at"])
+                AgentRun.objects.filter(task=task, finished_at__isnull=True).update(finished_at=now)
                 expired = False
 
         if expired:

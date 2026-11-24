@@ -216,9 +216,7 @@ def validate_arguments(
             CAPABILITY_ARGUMENTS_INVALID, "Arguments exceed the maximum nesting depth."
         )
     if not isinstance(schema, dict):
-        raise ArgumentValidationError(
-            CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed."
-        )
+        raise ArgumentValidationError(CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed.")
 
     schema = dict(schema)
     root_schema = root if root is not None else schema
@@ -227,9 +225,7 @@ def validate_arguments(
 
     expected = schema.get("type")
     if not isinstance(expected, str):
-        raise ArgumentValidationError(
-            CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed."
-        )
+        raise ArgumentValidationError(CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed.")
 
     check = _TYPE_CHECKS.get(expected)
     if check is None or not check(value):
@@ -239,9 +235,7 @@ def validate_arguments(
 
     if "enum" in schema:
         allowed = schema["enum"]
-        if not isinstance(allowed, list) or not any(
-            _json_equal(value, entry) for entry in allowed
-        ):
+        if not isinstance(allowed, list) or not any(_json_equal(value, entry) for entry in allowed):
             raise ArgumentValidationError(
                 CAPABILITY_ARGUMENTS_INVALID, f"{path} is not an allowed value."
             )
@@ -273,17 +267,13 @@ def validate_arguments(
         minimum = schema.get("minimum")
         maximum = schema.get("maximum")
         if minimum is not None and (
-            not isinstance(minimum, (int, float))
-            or isinstance(minimum, bool)
-            or value < minimum
+            not isinstance(minimum, (int, float)) or isinstance(minimum, bool) or value < minimum
         ):
             raise ArgumentValidationError(
                 CAPABILITY_ARGUMENTS_INVALID, f"{path} is below the minimum value."
             )
         if maximum is not None and (
-            not isinstance(maximum, (int, float))
-            or isinstance(maximum, bool)
-            or value > maximum
+            not isinstance(maximum, (int, float)) or isinstance(maximum, bool) or value > maximum
         ):
             raise ArgumentValidationError(
                 CAPABILITY_ARGUMENTS_INVALID, f"{path} is above the maximum value."

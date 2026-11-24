@@ -4,26 +4,25 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0036_merge_agent_marketplace_and_command_expiry'),
+        ("core", "0036_merge_agent_marketplace_and_command_expiry"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='agentplugininstallation',
-            name='revision',
+            model_name="agentplugininstallation",
+            name="revision",
             field=models.PositiveIntegerField(default=1),
         ),
         migrations.AlterField(
-            model_name='agentplugindefinition',
-            name='protocol',
+            model_name="agentplugindefinition",
+            name="protocol",
             field=models.CharField(
                 choices=[
-                    ('http_json', 'HTTP JSON'),
-                    ('mcp', 'Model Context Protocol'),
-                    ('a2a', 'Agent-to-Agent'),
-                    ('openai_compatible', 'OpenAI Compatible'),
+                    ("http_json", "HTTP JSON"),
+                    ("mcp", "Model Context Protocol"),
+                    ("a2a", "Agent-to-Agent"),
+                    ("openai_compatible", "OpenAI Compatible"),
                 ],
                 max_length=32,
             ),

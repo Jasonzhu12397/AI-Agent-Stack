@@ -14,17 +14,23 @@ class TenantTokenBudgetExceeded(Exception):
 
 
 def _period_usage(tenant_id, start, now):
-    settled = TenantTokenUsage.objects.filter(
-        tenant_id=tenant_id,
-        status=TenantTokenUsage.Status.SETTLED,
-        settled_at__gte=start,
-        settled_at__lte=now,
-    ).aggregate(total=Sum("consumed_tokens"))["total"] or 0
-    reserved = TenantTokenUsage.objects.filter(
-        tenant_id=tenant_id,
-        status=TenantTokenUsage.Status.RESERVED,
-        expires_at__gt=now,
-    ).aggregate(total=Sum("reserved_tokens"))["total"] or 0
+    settled = (
+        TenantTokenUsage.objects.filter(
+            tenant_id=tenant_id,
+            status=TenantTokenUsage.Status.SETTLED,
+            settled_at__gte=start,
+            settled_at__lte=now,
+        ).aggregate(total=Sum("consumed_tokens"))["total"]
+        or 0
+    )
+    reserved = (
+        TenantTokenUsage.objects.filter(
+            tenant_id=tenant_id,
+            status=TenantTokenUsage.Status.RESERVED,
+            expires_at__gt=now,
+        ).aggregate(total=Sum("reserved_tokens"))["total"]
+        or 0
+    )
     return settled + reserved
 
 
@@ -49,9 +55,7 @@ def local_month_bounds(now=None):
     """
     current_time = now or timezone.now()
     local_now = timezone.localtime(current_time)
-    month_start = local_now.replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    )
+    month_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if month_start.month == 12:
         month_end = month_start.replace(year=month_start.year + 1, month=1)
     else:
@@ -104,9 +108,7 @@ def get_tenant_usage_history(tenant_id):
     for row in rows:
         period = timezone.localtime(row.settled_at).strftime("%Y-%m")
         source = _usage_source_ref(row)
-        grouped[(period, source)] = grouped.get((period, source), 0) + int(
-            row.consumed_tokens
-        )
+        grouped[(period, source)] = grouped.get((period, source), 0) + int(row.consumed_tokens)
     return [
         {"period": period, "source": source, "consumed_tokens": consumed}
         for (period, source), consumed in sorted(
@@ -338,10 +340,7 @@ def resolve_provider_token_usage(
         input_token_ceiling,
         output_token_ceiling,
     )
-    if any(
-        not isinstance(value, int) or isinstance(value, bool) or value < 0
-        for value in values
-    ):
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
         raise ValueError("Provider token usage and ceilings must be non-negative integers")
     if provider_type == "fake":
         return 0, 0

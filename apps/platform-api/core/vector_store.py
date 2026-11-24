@@ -152,9 +152,7 @@ class QdrantVectorStore:
         except (URLError, TimeoutError, OSError) as exc:
             raise VectorStoreError("Vector database is unavailable.") from exc
         if not 200 <= status < 300:
-            raise VectorStoreError(
-                f"Vector database readiness endpoint returned HTTP {status}."
-            )
+            raise VectorStoreError(f"Vector database readiness endpoint returned HTTP {status}.")
         return True
 
     def ping(self):

@@ -39,14 +39,13 @@ class Command(BaseCommand):
             "--no-alert",
             action="store_true",
             help="report the problems but do not POST them to the alert webhook",
-    )
+        )
         parser.add_argument(
             "--repeat-after-hours",
             type=float,
             default=DEFAULT_REPEAT_AFTER_HOURS,
             help=(
-                "re-audit a problem that has not changed after this many hours; "
-                "0 audits every run"
+                "re-audit a problem that has not changed after this many hours; 0 audits every run"
             ),
         )
 
@@ -166,9 +165,7 @@ class Command(BaseCommand):
             report["alert"] = deliver(report)
         self.stdout.write(json.dumps(report, ensure_ascii=False))
         if problems:
-            listed = ", ".join(
-                f"{item['cluster_name']}/{item['code']}" for item in problems
-            )
+            listed = ", ".join(f"{item['cluster_name']}/{item['code']}" for item in problems)
             raise CommandError(
                 f"{len(problems)} of {len(clusters)} installed cluster(s) have no "
                 f"usable recent backup: {listed}",

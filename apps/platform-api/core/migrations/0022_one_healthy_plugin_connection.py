@@ -18,9 +18,9 @@ def keep_one_healthy_connection_per_installation(apps, schema_editor):
             .values_list("pk", flat=True)
         )
         if len(healthy_ids) > 1:
-            PluginConnection.objects.using(database).filter(
-                pk__in=healthy_ids[1:]
-            ).update(status="error")
+            PluginConnection.objects.using(database).filter(pk__in=healthy_ids[1:]).update(
+                status="error"
+            )
 
 
 class Migration(migrations.Migration):

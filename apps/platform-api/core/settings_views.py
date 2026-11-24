@@ -64,13 +64,9 @@ class SettingsBaseView(APIView):
 
     def handle_exception(self, exc):
         if isinstance(exc, Http404):
-            return _error(
-                "NOT_FOUND", "Resource not found.", {}, status.HTTP_404_NOT_FOUND
-            )
+            return _error("NOT_FOUND", "Resource not found.", {}, status.HTTP_404_NOT_FOUND)
         if isinstance(exc, PermissionDenied):
-            return _error(
-                "FORBIDDEN", "Permission denied.", {}, status.HTTP_403_FORBIDDEN
-            )
+            return _error("FORBIDDEN", "Permission denied.", {}, status.HTTP_403_FORBIDDEN)
         if isinstance(exc, NotAuthenticated):
             return _error(
                 "AUTH_REQUIRED",
@@ -105,9 +101,7 @@ class TenantSettingsView(SettingsBaseView):
         row = TenantSetting.objects.filter(tenant=tenant, section=section).first()
         stored = row.values if row else {}
         return Response(
-            _settings_payload(
-                "tenant", section, stored, SECTION_DEFAULTS[section], row
-            )
+            _settings_payload("tenant", section, stored, SECTION_DEFAULTS[section], row)
         )
 
     def patch(self, request, tenant_id, section):
@@ -144,9 +138,7 @@ class TenantSettingsView(SettingsBaseView):
             metadata={"section": section, "changed_keys": sorted(cleaned)},
         )
         return Response(
-            _settings_payload(
-                "tenant", section, row.values, SECTION_DEFAULTS[section], row
-            )
+            _settings_payload("tenant", section, row.values, SECTION_DEFAULTS[section], row)
         )
 
 
@@ -165,9 +157,7 @@ class ProjectSettingsView(SettingsBaseView):
         tenant_values = tenant_row.values if tenant_row else {}
         project_values = project_row.values if project_row else {}
         defaults = SECTION_DEFAULTS[section]
-        effective, sources = _fold(
-            defaults, ("tenant", tenant_values), ("project", project_values)
-        )
+        effective, sources = _fold(defaults, ("tenant", tenant_values), ("project", project_values))
         return Response(
             {
                 "section": section,
@@ -217,9 +207,7 @@ class ProjectSettingsView(SettingsBaseView):
         tenant_row = TenantSetting.objects.filter(tenant=tenant, section=section).first()
         tenant_values = tenant_row.values if tenant_row else {}
         defaults = SECTION_DEFAULTS[section]
-        effective, sources = _fold(
-            defaults, ("tenant", tenant_values), ("project", row.values)
-        )
+        effective, sources = _fold(defaults, ("tenant", tenant_values), ("project", row.values))
         return Response(
             {
                 "section": section,
@@ -274,12 +262,8 @@ def _validate_shortcuts(values: object, existing: dict[str, object]):
     for shortcut_id, combination in merged.items():
         normalized = normalize_combination(str(combination))
         if normalized in seen:
-            conflicts.setdefault(shortcut_id, []).append(
-                f"conflicts with {seen[normalized]}"
-            )
-            conflicts.setdefault(seen[normalized], []).append(
-                f"conflicts with {shortcut_id}"
-            )
+            conflicts.setdefault(shortcut_id, []).append(f"conflicts with {seen[normalized]}")
+            conflicts.setdefault(seen[normalized], []).append(f"conflicts with {shortcut_id}")
         else:
             seen[normalized] = shortcut_id
     if conflicts:
@@ -588,9 +572,7 @@ class AccountSessionsView(SettingsBaseView):
                     "last_activity": metadata.get("last_activity"),
                     # ``null`` means the session predates this table; the value
                     # is never synthesized.
-                    "timestamps_source": "session_metadata"
-                    if metadata
-                    else "unavailable",
+                    "timestamps_source": "session_metadata" if metadata else "unavailable",
                 }
             )
         return Response({"results": results})
@@ -620,8 +602,6 @@ class AccountSessionRevokeView(SettingsBaseView):
                     "session.revoked",
                     "session",
                     session_key,
-                    metadata={
-                        "current": session.session_key == request.session.session_key
-                    },
+                    metadata={"current": session.session_key == request.session.session_key},
                 )
         return Response({"revoked": revoked, "idempotent": True})

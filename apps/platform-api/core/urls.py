@@ -1,5 +1,5 @@
 # ruff: noqa: I001
-from django.urls import include, path
+from django.urls import include, path, re_path
 
 from core.audit_views import (
     AuditEventListView,
@@ -58,6 +58,7 @@ from core.agent_views import (
     AgentRunListCreateView,
 )
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.console_views import console_asset, console_index
 from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
     ClusterDeploymentBmhInventorySyncView,
@@ -306,8 +307,7 @@ urlpatterns = [
         name="fleet-machine-bmc-config",
     ),
     path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/"
-        "fleet/network/collect/",
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/fleet/network/collect/",
         FleetNetworkCollectView.as_view(),
         name="fleet-network-collect",
     ),
@@ -629,4 +629,10 @@ urlpatterns = [
     path("", include("core.settings_urls")),
     path("", include("core.billing_urls")),
     path("", include("core.data_controls_urls")),
+    # The built console is served from this origin, after every API route.
+    re_path(r"^assets/(?P<path>.+)$", console_asset, name="console-asset"),
+    path("", console_index, name="console-index"),
+    re_path(
+        r"^(?!api/|admin/|health/|static/)(?P<path>.*)$", console_index, name="console-fallback"
+    ),
 ]

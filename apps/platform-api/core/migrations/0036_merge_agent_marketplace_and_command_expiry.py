@@ -4,11 +4,9 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0034_agentcommand_expired_status'),
-        ('core', '0035_merge_agent_plugin_and_command_deployment'),
+        ("core", "0034_agentcommand_expired_status"),
+        ("core", "0035_merge_agent_plugin_and_command_deployment"),
     ]
 
-    operations = [
-    ]
+    operations = []

@@ -1,4 +1,6 @@
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// Empty base means same-origin: the API serves the console bundle, and the
+// dev server proxies /api, so both modes need no cross-origin configuration.
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export type CurrentUser = {
   id: number;

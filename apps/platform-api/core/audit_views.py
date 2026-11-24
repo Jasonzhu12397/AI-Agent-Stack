@@ -32,9 +32,14 @@ class AuditEventListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
-        tenant = Tenant.objects.filter(
-            memberships__user=request.user,
-        ).distinct().filter(pk=tenant_id).first()
+        tenant = (
+            Tenant.objects.filter(
+                memberships__user=request.user,
+            )
+            .distinct()
+            .filter(pk=tenant_id)
+            .first()
+        )
         if tenant is None:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         is_admin = TenantMembership.objects.filter(
@@ -80,9 +85,14 @@ class AuditEventVerifyView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
-        tenant = Tenant.objects.filter(
-            memberships__user=request.user,
-        ).distinct().filter(pk=tenant_id).first()
+        tenant = (
+            Tenant.objects.filter(
+                memberships__user=request.user,
+            )
+            .distinct()
+            .filter(pk=tenant_id)
+            .first()
+        )
         if tenant is None:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         is_admin = TenantMembership.objects.filter(

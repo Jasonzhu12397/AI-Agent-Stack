@@ -21,15 +21,18 @@ from core.models import (
 
 
 def _can_edit(user, tenant, project):
-    return TenantMembership.objects.filter(
-        tenant=tenant,
-        user=user,
-        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-    ).exists() or ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-        role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
-    ).exists()
+    return (
+        TenantMembership.objects.filter(
+            tenant=tenant,
+            user=user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        or ProjectMembership.objects.filter(
+            project=project,
+            user=user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+    )
 
 
 def _collected_hosts(tenant, project) -> list[dict[str, object]]:
@@ -41,9 +44,9 @@ def _collected_hosts(tenant, project) -> list[dict[str, object]]:
     """
 
     hosts: list[dict[str, object]] = []
-    for machine in AgentMachine.objects.filter(
-        tenant=tenant, project=project
-    ).select_related("agent_node"):
+    for machine in AgentMachine.objects.filter(tenant=tenant, project=project).select_related(
+        "agent_node"
+    ):
         raw = machine.hardware_inventory
         inventory = raw if isinstance(raw, dict) else {}
         hosts.append(
@@ -80,9 +83,7 @@ class InfrastructureNetworkProfileView(APIView):
 
     def get(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        record = InfrastructureNetworkProfile.objects.filter(
-            tenant=tenant, project=project
-        ).first()
+        record = InfrastructureNetworkProfile.objects.filter(tenant=tenant, project=project).first()
         profile = record.profile if record and isinstance(record.profile, dict) else {}
         if not profile.get("networks"):
             return Response({"profile": {}, "generated": None})

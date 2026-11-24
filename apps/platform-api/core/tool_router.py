@@ -139,10 +139,14 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
         maximum = schema.get("maxItems", 100)
         item_schema = schema.get("items")
         if (
-            not isinstance(minimum, int) or isinstance(minimum, bool)
-            or not isinstance(maximum, int) or isinstance(maximum, bool)
-            or minimum < 0 or maximum < minimum
-            or len(value) < minimum or len(value) > maximum
+            not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or minimum < 0
+            or maximum < minimum
+            or len(value) < minimum
+            or len(value) > maximum
             or not isinstance(item_schema, dict)
         ):
             raise ToolExecutionError(f"{path} has an invalid array shape.")
@@ -157,10 +161,16 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
     if expected == "string":
         minimum = schema.get("minLength", 0)
         maximum = schema.get("maxLength", 65536)
-        if (not isinstance(minimum, int) or isinstance(minimum, bool)
-            or not isinstance(maximum, int) or isinstance(maximum, bool)
-            or minimum < 0 or maximum < minimum
-            or len(value) < minimum or len(value) > maximum):
+        if (
+            not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or minimum < 0
+            or maximum < minimum
+            or len(value) < minimum
+            or len(value) > maximum
+        ):
             raise ToolExecutionError(f"{path} has an invalid length.")
     if expected in {"integer", "number"}:
         if isinstance(value, float) and not math.isfinite(value):
@@ -169,6 +179,7 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
             raise ToolExecutionError(f"{path} is below its minimum.")
         if "maximum" in schema and value > schema["maximum"]:
             raise ToolExecutionError(f"{path} exceeds its maximum.")
+
 
 class ToolRouter:
     """Policy-enforcing dispatcher; connector transports must register trusted handlers."""
@@ -201,10 +212,11 @@ class ToolRouter:
         plugin_version: str = "*",
     ) -> bool:
         if plugin_version == "*":
-            return (
-                (plugin_key, tool_name) in self._handlers
-                or (plugin_key, "*", tool_name) in self._handlers
-            )
+            return (plugin_key, tool_name) in self._handlers or (
+                plugin_key,
+                "*",
+                tool_name,
+            ) in self._handlers
         return (plugin_key, plugin_version, tool_name) in self._handlers
 
     def unregister(
@@ -259,9 +271,7 @@ class ToolRouter:
             raise ToolExecutionError("Required connector permissions have not been granted.")
 
         if tool.risk_level in {"high", "critical"} and not approved:
-            raise ToolApprovalRequired(
-                "This tool requires explicit approval before execution."
-            )
+            raise ToolApprovalRequired("This tool requires explicit approval before execution.")
         if connection is not None:
             if connection.installation_id != installation.id or connection.status != "healthy":
                 raise ToolExecutionError("Connector connection is not healthy or is out of scope.")

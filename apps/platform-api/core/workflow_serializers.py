@@ -7,12 +7,26 @@ class WorkflowDraftSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowDefinition
         fields = [
-            "id", "tenant_id", "project_id", "name", "slug", "description",
-            "draft_definition", "current_version", "is_archived", "created_at", "updated_at",
+            "id",
+            "tenant_id",
+            "project_id",
+            "name",
+            "slug",
+            "description",
+            "draft_definition",
+            "current_version",
+            "is_archived",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = [
-            "id", "tenant_id", "project_id", "current_version", "is_archived",
-            "created_at", "updated_at",
+            "id",
+            "tenant_id",
+            "project_id",
+            "current_version",
+            "is_archived",
+            "created_at",
+            "updated_at",
         ]
 
     def validate_draft_definition(self, value):
@@ -34,8 +48,16 @@ class WorkflowStepRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowStepRun
         fields = [
-            "id", "node_id", "node_type", "status", "input_data", "output_data",
-            "error", "attempt", "started_at", "finished_at",
+            "id",
+            "node_id",
+            "node_type",
+            "status",
+            "input_data",
+            "output_data",
+            "error",
+            "attempt",
+            "started_at",
+            "finished_at",
         ]
         read_only_fields = fields
 
@@ -49,7 +71,16 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowRun
         fields = [
-            "id", "task_id", "workflow_version_id", "task_status", "input_data",
-            "state", "output_data", "deadline_at", "steps", "created_at", "finished_at",
+            "id",
+            "task_id",
+            "workflow_version_id",
+            "task_status",
+            "input_data",
+            "state",
+            "output_data",
+            "deadline_at",
+            "steps",
+            "created_at",
+            "finished_at",
         ]
         read_only_fields = fields

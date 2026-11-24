@@ -24,7 +24,7 @@ BRANCH = "codespace/status"
 REPO_SLUG = "Jasonzhu12397/AI-Agent-Stack"
 
 API_HEALTH = "http://127.0.0.1:8000/health/ready"
-WEB_ROOT = "http://127.0.0.1:5173/"
+WEB_ROOT = "http://127.0.0.1:8000/"
 LOGIN_URL = "http://127.0.0.1:8000/api/v1/auth/login/"
 CSRF_URL = "http://127.0.0.1:8000/api/v1/auth/csrf/"
 
@@ -82,7 +82,7 @@ def sign_in() -> tuple[int, str]:
         payload={"username": "demo", "password": "demo1234"},
         timeout=20.0,
         opener=opener,
-        extra_headers={"X-CSRFToken": token, "Referer": "http://127.0.0.1:5173/"},
+        extra_headers={"X-CSRFToken": token, "Referer": "http://127.0.0.1:8000/"},
     )
 
 

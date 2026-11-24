@@ -137,15 +137,18 @@ class ConnectorCatalogView(ErrorEnvelopeMixin, APIView):
         }
         agent_installations = {
             installation.plugin_id: installation
-            for installation in AgentPluginInstallation.objects.filter(tenant=tenant)
-            .select_related("plugin")
+            for installation in AgentPluginInstallation.objects.filter(
+                tenant=tenant
+            ).select_related("plugin")
         }
 
         results = []
         for definition in PluginDefinition.objects.filter(tenant=tenant):
-            installations = [
-                _plugin_installation_payload(plugin_installations[definition.id])
-            ] if definition.id in plugin_installations else []
+            installations = (
+                [_plugin_installation_payload(plugin_installations[definition.id])]
+                if definition.id in plugin_installations
+                else []
+            )
             source = (
                 "mcp"
                 if definition.connector_type == PluginDefinition.ConnectorType.MCP
@@ -154,9 +157,11 @@ class ConnectorCatalogView(ErrorEnvelopeMixin, APIView):
             results.append(_catalog_entry(definition, source, installations))
 
         for definition in AgentPluginDefinition.objects.filter(tenant=tenant):
-            installations = [
-                _agent_installation_payload(agent_installations[definition.id])
-            ] if definition.id in agent_installations else []
+            installations = (
+                [_agent_installation_payload(agent_installations[definition.id])]
+                if definition.id in agent_installations
+                else []
+            )
             results.append(_catalog_entry(definition, "agent_plugin", installations))
 
         return Response({"results": results})
@@ -166,14 +171,10 @@ class ConnectorInstallView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def _resolve_definition(self, tenant, slug):
-        plugin = PluginDefinition.objects.filter(
-            tenant=tenant, plugin_key=slug
-        ).first()
+        plugin = PluginDefinition.objects.filter(tenant=tenant, plugin_key=slug).first()
         if plugin is not None:
             return "plugin", plugin
-        agent = AgentPluginDefinition.objects.filter(
-            tenant=tenant, plugin_key=slug
-        ).first()
+        agent = AgentPluginDefinition.objects.filter(tenant=tenant, plugin_key=slug).first()
         if agent is not None:
             return "agent", agent
         return None, None
@@ -182,28 +183,23 @@ class ConnectorInstallView(ErrorEnvelopeMixin, APIView):
         tenant = get_tenant_for_user(request, tenant_id)
         body = request.data if isinstance(request.data, dict) else {}
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
 
         source, definition = self._resolve_definition(tenant, slug)
         if definition is None:
-            return error_response(
-                "CONNECTOR_NOT_FOUND", f"Unknown connector: {slug}", status=404
-            )
+            return error_response("CONNECTOR_NOT_FOUND", f"Unknown connector: {slug}", status=404)
 
         project_id = body.get("project_id")
         project = get_object_or_404(Project.objects.filter(tenant=tenant), pk=project_id)
-        if not ProjectMembership.objects.filter(
-            project=project, user=request.user
-        ).exists() and not TenantMembership.objects.filter(
-            tenant=tenant,
-            user=request.user,
-            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists():
-            return error_response(
-                "FORBIDDEN", "Project membership required.", status=403
-            )
+        if (
+            not ProjectMembership.objects.filter(project=project, user=request.user).exists()
+            and not TenantMembership.objects.filter(
+                tenant=tenant,
+                user=request.user,
+                role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+            ).exists()
+        ):
+            return error_response("FORBIDDEN", "Project membership required.", status=403)
 
         config = body.get("config", {})
         if not isinstance(config, dict):
@@ -319,9 +315,7 @@ class ConnectorInstallationUpdateView(ErrorEnvelopeMixin, APIView):
     def patch(self, request, tenant_id, installation_id):
         tenant = get_tenant_for_user(request, tenant_id)
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         source, installation, definition = _resolve_installation(tenant, installation_id)
         if installation is None:
             return error_response(
@@ -369,9 +363,7 @@ class ConnectorInstallationUpdateView(ErrorEnvelopeMixin, APIView):
                 )
                 connection.credential_ref = credential_ref
                 connection.auth_type = PluginConnection.AuthType.CREDENTIAL_REF
-                connection.save(
-                    update_fields=["credential_ref", "auth_type", "updated_at"]
-                )
+                connection.save(update_fields=["credential_ref", "auth_type", "updated_at"])
             installation.save(update_fields=["config", "updated_at"])
             configured = bool(
                 credential_ref
@@ -466,11 +458,7 @@ def _run_gateway_check(installation, connection, plugin, *, purpose):
             ),
         )
     except ToolExecutionError as exc:
-        code = (
-            "CONNECTOR_HEALTH_CHECK_FAILED"
-            if purpose == "health"
-            else "CONNECTOR_TEST_FAILED"
-        )
+        code = "CONNECTOR_HEALTH_CHECK_FAILED" if purpose == "health" else "CONNECTOR_TEST_FAILED"
         raise ConnectorCheckError(code, str(exc)) from exc
 
 
@@ -480,18 +468,14 @@ class ConnectorHealthView(ErrorEnvelopeMixin, APIView):
     def post(self, request, tenant_id, installation_id):
         tenant = get_tenant_for_user(request, tenant_id)
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         source, installation, plugin = _resolve_installation(tenant, installation_id)
         if installation is None:
             return error_response(
                 "INSTALLATION_NOT_FOUND", "Installation not found for this tenant.", status=404
             )
         if installation.status != PluginInstallation.Status.INSTALLED:
-            return error_response(
-                "CONNECTOR_NOT_ACTIVE", "Installation is not active.", status=409
-            )
+            return error_response("CONNECTOR_NOT_ACTIVE", "Installation is not active.", status=409)
         if source != "plugin":
             return error_response(
                 "CONNECTOR_TRANSPORT_UNSUPPORTED",
@@ -544,18 +528,14 @@ class ConnectorTestView(ErrorEnvelopeMixin, APIView):
     def post(self, request, tenant_id, installation_id):
         tenant = get_tenant_for_user(request, tenant_id)
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         source, installation, plugin = _resolve_installation(tenant, installation_id)
         if installation is None:
             return error_response(
                 "INSTALLATION_NOT_FOUND", "Installation not found for this tenant.", status=404
             )
         if installation.status != PluginInstallation.Status.INSTALLED:
-            return error_response(
-                "CONNECTOR_NOT_ACTIVE", "Installation is not active.", status=409
-            )
+            return error_response("CONNECTOR_NOT_ACTIVE", "Installation is not active.", status=409)
         if source != "plugin":
             return error_response(
                 "CONNECTOR_TRANSPORT_UNSUPPORTED",

@@ -71,9 +71,7 @@ class TenantTokenBudgetView(APIView):
             partial=request.method == "PATCH",
         )
         serializer.is_valid(raise_exception=True)
-        budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
-            tenant=tenant
-        )
+        budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(tenant=tenant)
         for field, value in serializer.validated_data.items():
             setattr(budget, field, value)
         budget.save(update_fields=[*serializer.validated_data, "updated_at"])

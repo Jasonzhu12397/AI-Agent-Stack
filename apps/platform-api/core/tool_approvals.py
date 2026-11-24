@@ -93,9 +93,7 @@ def create_pending_tool_approval(
     now = timezone.now()
 
     with transaction.atomic():
-        task = Task.objects.select_for_update().select_related("tenant", "project").get(
-            pk=task_id
-        )
+        task = Task.objects.select_for_update().select_related("tenant", "project").get(pk=task_id)
         if task.status != Task.Status.RUNNING:
             raise ValueError("Only a running task can be suspended for approval")
         if task.tenant_id != installation.tenant_id or task.project_id != installation.project_id:
@@ -217,9 +215,11 @@ def expire_pending_tool_approvals(limit=100):
     )
     for approval_id in candidate_ids:
         with transaction.atomic():
-            task_id = ToolApprovalRequest.objects.filter(pk=approval_id).values_list(
-                "task_id", flat=True
-            ).first()
+            task_id = (
+                ToolApprovalRequest.objects.filter(pk=approval_id)
+                .values_list("task_id", flat=True)
+                .first()
+            )
             if task_id is None:
                 continue
             task = Task.objects.select_for_update(skip_locked=True).filter(pk=task_id).first()
@@ -252,20 +252,14 @@ def expire_pending_tool_approvals(limit=100):
                     "code": "TOOL_APPROVAL_EXPIRED",
                     "message": "The high-risk tool approval request expired.",
                 }
-                task.save(
-                    update_fields=["status", "finished_at", "error", "updated_at"]
-                )
+                task.save(update_fields=["status", "finished_at", "error", "updated_at"])
                 ToolApprovalRequest.objects.filter(
                     task=task,
                     status__in=[
                         ToolApprovalRequest.Status.PENDING,
                         ToolApprovalRequest.Status.APPROVED,
                     ],
-                ).exclude(pk=approval.pk).update(
-                    status=ToolApprovalRequest.Status.CANCELLED
-                )
-                AgentRun.objects.filter(task=task, finished_at__isnull=True).update(
-                    finished_at=now
-                )
+                ).exclude(pk=approval.pk).update(status=ToolApprovalRequest.Status.CANCELLED)
+                AgentRun.objects.filter(task=task, finished_at__isnull=True).update(finished_at=now)
             expired_count += 1
     return expired_count

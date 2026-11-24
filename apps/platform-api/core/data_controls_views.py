@@ -66,11 +66,14 @@ def require_admin(request, tenant, project=None):
         role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
     ).exists():
         return True
-    if project and ProjectMembership.objects.filter(
-        project=project,
-        user=request.user,
-        role=ProjectMembership.Role.ADMIN,
-    ).exists():
+    if (
+        project
+        and ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role=ProjectMembership.Role.ADMIN,
+        ).exists()
+    ):
         return True
     return False
 
@@ -217,10 +220,7 @@ def _collect_export(tenant, project, scope):
         payload["runs"] = runs
         row_count += len(runs)
     if "audit_events" in kinds:
-        events = [
-            _audit_row(event)
-            for event in AuditEvent.objects.filter(tenant=tenant)
-        ]
+        events = [_audit_row(event) for event in AuditEvent.objects.filter(tenant=tenant)]
         payload["audit_events"] = events
         row_count += len(events)
     return payload, row_count
@@ -287,9 +287,7 @@ class DataExportListCreateView(ErrorEnvelopeMixin, APIView):
     def post(self, request, tenant_id):
         tenant = self.get_tenant()
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         body = request.data if isinstance(request.data, dict) else {}
         idempotency_key = str(body.get("idempotency_key") or "").strip()
         if not idempotency_key:
@@ -317,9 +315,7 @@ class DataExportListCreateView(ErrorEnvelopeMixin, APIView):
         project = None
         project_id = scope.get("project_id")
         if project_id:
-            project = get_object_or_404(
-                Project.objects.filter(tenant=tenant), pk=project_id
-            )
+            project = get_object_or_404(Project.objects.filter(tenant=tenant), pk=project_id)
 
         job = DataExportJob.objects.create(
             tenant=tenant,
@@ -376,9 +372,7 @@ class DataExportExpireView(ErrorEnvelopeMixin, APIView):
     def post(self, request, tenant_id, job_id):
         tenant = self.get_tenant()
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         job = get_object_or_404(DataExportJob.objects.filter(tenant=tenant), pk=job_id)
         if job.status != DataExportJob.Status.EXPIRED:
             job.status = DataExportJob.Status.EXPIRED
@@ -444,9 +438,7 @@ class ArchiveItemListView(ErrorEnvelopeMixin, APIView):
         results = []
         for item_type in types:
             model = ARCHIVE_REGISTRY[item_type]["model"]
-            queryset = model.objects.filter(
-                tenant=tenant, project=project, is_archived=True
-            )
+            queryset = model.objects.filter(tenant=tenant, project=project, is_archived=True)
             if q:
                 queryset = queryset.filter(name__icontains=q)
             for item in queryset:
@@ -470,9 +462,7 @@ class ArchiveItemRestoreView(ErrorEnvelopeMixin, APIView):
         tenant = get_tenant_for_user(request, tenant_id)
         project = get_object_or_404(Project.objects.filter(tenant=tenant), pk=project_id)
         if not require_admin(request, tenant, project):
-            return error_response(
-                "FORBIDDEN", "Project admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Project admin permission is required.", status=403)
         entry = _registry_entry(item_type)
         if entry is None:
             return error_response(
@@ -522,9 +512,7 @@ class ArchiveItemPurgeView(ErrorEnvelopeMixin, APIView):
         tenant = get_tenant_for_user(request, tenant_id)
         project = get_object_or_404(Project.objects.filter(tenant=tenant), pk=project_id)
         if not require_admin(request, tenant, project):
-            return error_response(
-                "FORBIDDEN", "Project admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Project admin permission is required.", status=403)
         entry = _registry_entry(item_type)
         if entry is None:
             return error_response(
@@ -578,9 +566,7 @@ def _grant_payload(installation, source, scopes):
         "project_id": str(installation.project_id),
         "scopes": scopes,
         "status": installation.status,
-        "granted_at": installation.created_at.isoformat()
-        if installation.created_at
-        else None,
+        "granted_at": installation.created_at.isoformat() if installation.created_at else None,
     }
 
 
@@ -592,19 +578,17 @@ class PrivacyGrantListView(ErrorEnvelopeMixin, APIView):
         from core.models import PluginInstallation
 
         grants = []
-        for installation in PluginInstallation.objects.filter(
-            tenant=tenant
-        ).select_related("plugin", "project"):
+        for installation in PluginInstallation.objects.filter(tenant=tenant).select_related(
+            "plugin", "project"
+        ):
             grants.append(
                 _grant_payload(installation, "connector", installation.granted_permissions)
             )
-        for installation in AgentPluginInstallation.objects.filter(
-            tenant=tenant
-        ).select_related("plugin", "project"):
+        for installation in AgentPluginInstallation.objects.filter(tenant=tenant).select_related(
+            "plugin", "project"
+        ):
             grants.append(
-                _grant_payload(
-                    installation, "agent_connector", installation.granted_capabilities
-                )
+                _grant_payload(installation, "agent_connector", installation.granted_capabilities)
             )
         return Response({"results": grants})
 
@@ -615,9 +599,7 @@ class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
     def _resolve(self, tenant, grant_id):
         from core.models import PluginInstallation
 
-        plugin_installation = PluginInstallation.objects.filter(
-            tenant=tenant, pk=grant_id
-        ).first()
+        plugin_installation = PluginInstallation.objects.filter(tenant=tenant, pk=grant_id).first()
         if plugin_installation is not None:
             return "plugin", plugin_installation
         agent_installation = AgentPluginInstallation.objects.filter(
@@ -630,14 +612,10 @@ class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
     def delete(self, request, tenant_id, grant_id):
         tenant = get_tenant_for_user(request, tenant_id)
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         source, installation = self._resolve(tenant, grant_id)
         if installation is None:
-            return error_response(
-                "GRANT_NOT_FOUND", "Grant not found for this tenant.", status=404
-            )
+            return error_response("GRANT_NOT_FOUND", "Grant not found for this tenant.", status=404)
 
         already_revoked = installation.status == PluginInstallation.Status.DISABLED
         if not already_revoked:
@@ -720,9 +698,7 @@ class PrivacySessionListView(ErrorEnvelopeMixin, APIView):
 
     def get(self, request, tenant_id):
         get_tenant_for_user(request, tenant_id)
-        cookie_age = int(
-            getattr(settings, "SESSION_COOKIE_AGE", 1209600)
-        )
+        cookie_age = int(getattr(settings, "SESSION_COOKIE_AGE", 1209600))
         current_key = request.session.session_key
         results = []
         for session in Session.objects.all().iterator():
@@ -751,9 +727,7 @@ class PrivacySessionRevokeView(ErrorEnvelopeMixin, APIView):
         owner_id = _session_owner_id(session_key)
         if owner_id is None or owner_id != str(request.user.pk):
             # Never disclose whether another user's session exists.
-            return error_response(
-                "NOT_FOUND", "Session not found for this user.", status=404
-            )
+            return error_response("NOT_FOUND", "Session not found for this user.", status=404)
 
         masked_key = _mask_session_key(session_key)
         session.delete()
@@ -787,12 +761,8 @@ class DeletionRequestListCreateView(ErrorEnvelopeMixin, APIView):
                         else item.scope,
                         "status": item.status,
                         "audit_ref": item.audit_ref,
-                        "executed_at": item.executed_at.isoformat()
-                        if item.executed_at
-                        else None,
-                        "created_at": item.created_at.isoformat()
-                        if item.created_at
-                        else None,
+                        "executed_at": item.executed_at.isoformat() if item.executed_at else None,
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
                     }
                     for item in requests
                 ]
@@ -802,9 +772,7 @@ class DeletionRequestListCreateView(ErrorEnvelopeMixin, APIView):
     def post(self, request, tenant_id):
         tenant = self.get_tenant()
         if not require_admin(request, tenant):
-            return error_response(
-                "FORBIDDEN", "Tenant admin permission is required.", status=403
-            )
+            return error_response("FORBIDDEN", "Tenant admin permission is required.", status=403)
         body = request.data if isinstance(request.data, dict) else {}
 
         scope_value = body.get("scope")

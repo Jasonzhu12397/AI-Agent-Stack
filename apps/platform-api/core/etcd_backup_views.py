@@ -59,11 +59,7 @@ class ClusterDeploymentEtcdBackupPolicyView(APIView):
                 {"detail": "Only policy fields may be set.", "code": "policy_fields_only"},
                 status=400,
             )
-        values = {
-            field: request.data[field]
-            for field in POLICY_FIELDS
-            if field in request.data
-        }
+        values = {field: request.data[field] for field in POLICY_FIELDS if field in request.data}
         if "enabled" in request.data:
             values["enabled"] = request.data["enabled"]
         if not values:
@@ -114,9 +110,7 @@ class ClusterDeploymentEtcdBackupRunView(APIView):
         deployment, error = _deployment_or_error(request, deployment_id)
         if error is not None:
             return error
-        command, created, reason = queue_backup(
-            deployment, requested_by=request.user
-        )
+        command, created, reason = queue_backup(deployment, requested_by=request.user)
         if command is None:
             return Response(
                 {"detail": _reason_detail(reason), "code": _reason_code(reason)},

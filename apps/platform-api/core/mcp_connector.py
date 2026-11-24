@@ -88,12 +88,7 @@ def _load_json(payload):
 
 
 def _content_type(response):
-    return (
-        response.headers.get("content-type", "")
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
+    return response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
 
 
 def _parse_sse_messages(payload):
@@ -423,8 +418,7 @@ def _mcp_config(context):
         raise ToolExecutionError("MCP protocol version is invalid.")
     tool_map = transport.get("tool_map", {})
     if not isinstance(tool_map, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) and value
-        for key, value in tool_map.items()
+        isinstance(key, str) and isinstance(value, str) and value for key, value in tool_map.items()
     ):
         raise ToolExecutionError("MCP tool mapping is invalid.")
     timeout_seconds = min(max(int(context.plugin_manifest.get("timeout_seconds", 60)), 1), 300)

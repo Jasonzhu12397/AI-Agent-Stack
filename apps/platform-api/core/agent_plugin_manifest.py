@@ -31,6 +31,7 @@ def endpoint_fingerprint(endpoint_url: str) -> str:
 
     return hashlib.sha256(str(endpoint_url).encode("utf-8")).hexdigest()
 
+
 _EMPTY_OBJECT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},
@@ -72,9 +73,7 @@ def _discovery_context(
     return discovery, tools, matches
 
 
-def validate_manifest(
-    manifest: Any, protocol: str, endpoint_url: str | None = None
-) -> str | None:
+def validate_manifest(manifest: Any, protocol: str, endpoint_url: str | None = None) -> str | None:
     """Return a human-readable validation error, or None when the manifest is valid.
 
     A missing manifest is accepted for backwards compatibility with legacy

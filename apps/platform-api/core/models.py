@@ -160,6 +160,7 @@ class ModelProvider(models.Model):
         on_delete=models.PROTECT,
         related_name="created_model_providers",
     )
+
     class AuthMode(models.TextChoices):
         """Who pays for the calls this provider serves.
 
@@ -402,7 +403,6 @@ class AgentRun(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-
 
 
 class AgentTeam(models.Model):

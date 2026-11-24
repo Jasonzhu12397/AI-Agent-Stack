@@ -31,32 +31,24 @@ def reclaim_for_refund(
     # Serialize re-entry on the order row: a replay and a concurrent reclaim
     # path both take this lock, so only one reclaim row can ever be inserted.
     order = Order.objects.select_for_update().get(pk=order.pk)
-    existing = EntitlementReclaim.objects.filter(
-        refund_reference=refund_reference
-    ).first()
+    existing = EntitlementReclaim.objects.filter(refund_reference=refund_reference).first()
     if existing is not None:
         return existing
 
     grant = getattr(order, "grant", None)
     if grant is not None:
         already_tokens = (
-            EntitlementReclaim.objects.filter(grant=grant).aggregate(
-                total=Sum("tokens")
-            )["total"]
+            EntitlementReclaim.objects.filter(grant=grant).aggregate(total=Sum("tokens"))["total"]
             or 0
         )
         raw_tokens = (
-            grant.tokens * refund_cents // order.amount_cents
-            if order.amount_cents > 0
-            else 0
+            grant.tokens * refund_cents // order.amount_cents if order.amount_cents > 0 else 0
         )
         tokens = min(raw_tokens, max(0, grant.tokens - already_tokens))
     else:
         tokens = 0
 
-    budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
-        tenant=order.tenant
-    )
+    budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(tenant=order.tenant)
     limit_before = int(budget.monthly_limit)
     limit_after = max(0, limit_before - tokens)
 

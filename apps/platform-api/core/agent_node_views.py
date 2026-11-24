@@ -3463,8 +3463,7 @@ class FleetDiscoveryView(APIView):
                 or len(machine_ids) > self.MAX_MACHINES
             ):
                 return legacy_error_response(
-                    "machine_ids must be a non-empty list of up to "
-                    f"{self.MAX_MACHINES} UUIDs.",
+                    f"machine_ids must be a non-empty list of up to {self.MAX_MACHINES} UUIDs.",
                     http_status=400,
                 )
             try:

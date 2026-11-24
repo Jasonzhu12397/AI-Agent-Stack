@@ -59,12 +59,7 @@ def _read_kv_v2(client, address, mount, path, headers):
     with client.stream("GET", url, headers=headers) as response:
         if response.status_code != 200:
             raise RuntimeError("Vault secret lookup failed.")
-        content_type = (
-            response.headers.get("content-type", "")
-            .split(";", 1)[0]
-            .strip()
-            .lower()
-        )
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             raise ValueError("Vault returned a non-JSON response.")
         body = bytearray()
@@ -92,7 +87,6 @@ def _tenant_scoped_path(path, tenant_id, project_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", project):
         raise ValueError("Vault project scope is required.")
     return f"tenants/{tenant}/projects/{project}/{path}"
-
 
 
 def _jwt_claim(payload, claim_path):
@@ -165,12 +159,7 @@ def resolve_vault_jwt_token(tenant_id, project_id):
         ) as response:
             if response.status_code != 200:
                 raise RuntimeError("Vault workload identity login failed.")
-            content_type = (
-                response.headers.get("content-type", "")
-                .split(";", 1)[0]
-                .strip()
-                .lower()
-            )
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             if content_type != "application/json":
                 raise ValueError("Vault JWT login returned a non-JSON response.")
             body = bytearray()
@@ -252,9 +241,7 @@ def resolve_bmc_credentials(
         result = {"username": username, "password": password}
         if trust_reference:
             trust_mount, trust_path = trust_reference
-            trust_secret = _read_kv_v2(
-                client, address, trust_mount, trust_path, headers
-            )
+            trust_secret = _read_kv_v2(client, address, trust_mount, trust_path, headers)
             pem = trust_secret.get("pem") or trust_secret.get("certificate")
             if not isinstance(pem, str) or not pem.strip():
                 raise ValueError("Vault trust bundle secret must contain PEM data.")

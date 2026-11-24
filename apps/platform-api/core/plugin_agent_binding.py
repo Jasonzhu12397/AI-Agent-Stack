@@ -154,9 +154,7 @@ def bind_capability(
 
     snapshot = _snapshot(installation, capability_definition)
     with transaction.atomic():
-        definition = _existing_definition(
-            installation.project, installation, capability_name
-        )
+        definition = _existing_definition(installation.project, installation, capability_name)
         if definition is None:
             name = f"{installation.plugin.name}: {capability_name}"[:120]
             definition = AgentDefinition(
@@ -246,9 +244,7 @@ def list_marketplace_agents(tenant, project) -> list[dict[str, Any]]:
     """
 
     entries: list[dict[str, Any]] = []
-    definitions = AgentDefinition.objects.filter(
-        tenant=tenant, project=project
-    ).order_by("name")
+    definitions = AgentDefinition.objects.filter(tenant=tenant, project=project).order_by("name")
     for definition in definitions:
         config = definition.draft_config or {}
         if config.get("kind") != MARKETPLACE_AGENT_KIND:
@@ -317,15 +313,18 @@ def _project_for_user(request, tenant: Tenant, project_id) -> Project:
 
 
 def _can_manage_project(user, tenant: Tenant, project: Project) -> bool:
-    return TenantMembership.objects.filter(
-        tenant=tenant,
-        user=user,
-        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-    ).exists() or ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-        role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
-    ).exists()
+    return (
+        TenantMembership.objects.filter(
+            tenant=tenant,
+            user=user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        or ProjectMembership.objects.filter(
+            project=project,
+            user=user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+    )
 
 
 def _installation_for_user(request, installation_id) -> AgentPluginInstallation:

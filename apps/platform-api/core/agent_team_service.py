@@ -356,13 +356,9 @@ def build_team_graph(normalized):
             if len(members) == 1:
                 edges.append({"source": "router", "target": node["id"]})
             elif index == len(members):
-                edges.append(
-                    {"source": f"route_{index - 1}", "target": node["id"], "when": False}
-                )
+                edges.append({"source": f"route_{index - 1}", "target": node["id"], "when": False})
             else:
-                edges.append(
-                    {"source": f"route_{index}", "target": node["id"], "when": True}
-                )
+                edges.append({"source": f"route_{index}", "target": node["id"], "when": True})
 
     if coordinator is not None:
         gather_from = [f"member_{index}" for index in range(1, len(members) + 1)]
@@ -377,9 +373,7 @@ def build_team_graph(normalized):
         previous = "coordinator"
         end_config = {"source_node": "coordinator"}
     else:
-        end_config = {
-            "gather_from": [f"member_{index}" for index in range(1, len(members) + 1)]
-        }
+        end_config = {"gather_from": [f"member_{index}" for index in range(1, len(members) + 1)]}
     nodes.append({"id": "end", "type": "end", "config": end_config})
     if coordinator is not None:
         edges.append({"source": "coordinator", "target": "end"})

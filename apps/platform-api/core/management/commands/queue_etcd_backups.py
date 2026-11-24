@@ -31,9 +31,7 @@ RESULT_QUEUED = "queued"
 RESULT_SKIPPED = "skipped"
 
 
-def _record_heartbeat(
-    bucket: str, deployment: ClusterDeployment, outcome: dict[str, Any]
-) -> None:
+def _record_heartbeat(bucket: str, deployment: ClusterDeployment, outcome: dict[str, Any]) -> None:
     """Say that this cluster was evaluated in this hour bucket, and how.
 
     The record belongs to the deployment: it answers "did the scheduler look at
@@ -88,9 +86,7 @@ class Command(BaseCommand):
         # No default: an unset flag must not overwrite the deployment's own
         # policy, and 0 is only meaningful where the contract defines it (an
         # explicit min-free-bytes=0 means "measure, do not refuse").
-        parser.add_argument(
-            "--directory", default=None, help="override the backup directory"
-        )
+        parser.add_argument("--directory", default=None, help="override the backup directory")
         parser.add_argument("--keep-count", type=int, default=None)
         parser.add_argument("--keep-max-age-hours", type=int, default=None)
         parser.add_argument("--pre-upgrade-keep-max-age-hours", type=int, default=None)
@@ -120,17 +116,11 @@ class Command(BaseCommand):
                 # would be skipped, so it reports the same reasons.
                 reason = unqueueable_reason(deployment)
                 if reason:
-                    skipped.append(
-                        {"deployment_id": str(deployment.id), "reason": reason}
-                    )
+                    skipped.append({"deployment_id": str(deployment.id), "reason": reason})
                 else:
-                    queued.append(
-                        {"deployment_id": str(deployment.id), "command_id": None}
-                    )
+                    queued.append({"deployment_id": str(deployment.id), "command_id": None})
                 continue
-            command, created, reason = queue_backup(
-                deployment, overrides=overrides
-            )
+            command, created, reason = queue_backup(deployment, overrides=overrides)
             if reason:
                 skipped.append({"deployment_id": str(deployment.id), "reason": reason})
                 outcomes.append(

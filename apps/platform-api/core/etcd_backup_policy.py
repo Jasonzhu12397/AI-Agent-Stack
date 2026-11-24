@@ -31,9 +31,7 @@ POLICY_AUDIT_EVENT = "cluster.etcd_backup.policy.updated"
 
 #: Audit event written once, when an approved-but-unclaimed rollback leaves the
 #: live set and releases the snapshot it named.
-ROLLBACK_PROTECTION_RELEASED_EVENT = (
-    "cluster.kubernetes.rollback.protection.released"
-)
+ROLLBACK_PROTECTION_RELEASED_EVENT = "cluster.kubernetes.rollback.protection.released"
 
 #: ``spec.kubernetes`` key that overrides how long an approved rollback that no
 #: agent has claimed keeps protecting its snapshot, in minutes.
@@ -217,9 +215,9 @@ def known_directories(deployment: ClusterDeployment) -> dict[str, Any]:
         if isinstance(directory, str) and directory.strip():
             sources.append(directory)
 
-    upgrades = AgentCommand.objects.filter(
-        deployment=deployment, command_type=UPGRADE_ACTION
-    ).only("result")
+    upgrades = AgentCommand.objects.filter(deployment=deployment, command_type=UPGRADE_ACTION).only(
+        "result"
+    )
     for command in upgrades:
         result = command.result if isinstance(command.result, dict) else {}
         snapshot = result.get("etcd_snapshot")

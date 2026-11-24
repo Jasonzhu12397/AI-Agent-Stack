@@ -74,9 +74,7 @@ def match_machines(machines, hosts):
 
     from packages.agent_contracts.metal3_bmh_inventory import bmc_host_key
 
-    by_bmc = {
-        key: machine for machine in machines if (key := bmc_host_key(machine.bmc_endpoint))
-    }
+    by_bmc = {key: machine for machine in machines if (key := bmc_host_key(machine.bmc_endpoint))}
     by_bmh = {machine.bmh_name: machine for machine in machines if machine.bmh_name}
     by_uuid = {machine.system_uuid: machine for machine in machines if machine.system_uuid}
     pairs: list[tuple[dict[str, Any], AgentMachine]] = []

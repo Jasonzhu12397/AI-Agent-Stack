@@ -121,9 +121,7 @@ class _CapabilityCache:
 _cache = _CapabilityCache()
 
 
-def lookup(
-    tenant_id: str, project_id: str, capability_name: str
-) -> dict[str, Any] | None:
+def lookup(tenant_id: str, project_id: str, capability_name: str) -> dict[str, Any] | None:
     return _cache.lookup(tenant_id, project_id, capability_name)
 
 

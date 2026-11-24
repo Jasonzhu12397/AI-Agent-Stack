@@ -64,9 +64,7 @@ class CloudControlClient:
     ) -> None:
         if role not in {"eph", "target"}:
             raise ValueError("Agent role is invalid")
-        if (role == "target" and cluster_id is None) or (
-            role == "eph" and cluster_id is not None
-        ):
+        if (role == "target" and cluster_id is None) or (role == "eph" and cluster_id is not None):
             raise ValueError("Agent cluster scope is invalid")
         self._request(
             "POST",
@@ -114,9 +112,7 @@ class CloudControlClient:
             f"/api/v1/control/deployments/{deployment_id}",
         )
 
-    def get_deployment_action_result(
-        self, deployment_id: UUID, action: str
-    ) -> dict[str, Any]:
+    def get_deployment_action_result(self, deployment_id: UUID, action: str) -> dict[str, Any]:
         """Return the newest command result the EPH reported for one action."""
 
         return self._request(

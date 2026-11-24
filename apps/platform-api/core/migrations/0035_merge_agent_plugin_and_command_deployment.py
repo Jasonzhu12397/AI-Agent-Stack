@@ -4,11 +4,9 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0033_backfill_command_deployment'),
-        ('core', '0034_agent_capability_invocation'),
+        ("core", "0033_backfill_command_deployment"),
+        ("core", "0034_agent_capability_invocation"),
     ]
 
-    operations = [
-    ]
+    operations = []

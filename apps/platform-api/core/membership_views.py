@@ -42,11 +42,14 @@ def project_for_user(request, tenant, project_id):
 
 
 def require_project_admin(request, tenant, project):
-    return require_tenant_admin(request, tenant) or ProjectMembership.objects.filter(
-        project=project,
-        user=request.user,
-        role=ProjectMembership.Role.ADMIN,
-    ).exists()
+    return (
+        require_tenant_admin(request, tenant)
+        or ProjectMembership.objects.filter(
+            project=project,
+            user=request.user,
+            role=ProjectMembership.Role.ADMIN,
+        ).exists()
+    )
 
 
 def membership_payload(membership):
@@ -155,16 +158,16 @@ class TenantMemberDetailView(ErrorEnvelopeMixin, APIView):
             actor_is_owner = require_tenant_owner(request, tenant)
             if membership.role == TenantMembership.Role.OWNER and not actor_is_owner:
                 return error_envelope_response(
-                "OWNER_ROLE_REQUIRED",
-                "Only an owner can change an owner role.",
-                http_status=status.HTTP_403_FORBIDDEN,
-            )
+                    "OWNER_ROLE_REQUIRED",
+                    "Only an owner can change an owner role.",
+                    http_status=status.HTTP_403_FORBIDDEN,
+                )
             if role == TenantMembership.Role.OWNER and not actor_is_owner:
                 return error_envelope_response(
-                "OWNER_ROLE_REQUIRED",
-                "Only an owner can grant the owner role.",
-                http_status=status.HTTP_403_FORBIDDEN,
-            )
+                    "OWNER_ROLE_REQUIRED",
+                    "Only an owner can grant the owner role.",
+                    http_status=status.HTTP_403_FORBIDDEN,
+                )
             if (
                 membership.role == TenantMembership.Role.OWNER
                 and role != TenantMembership.Role.OWNER
@@ -175,10 +178,10 @@ class TenantMemberDetailView(ErrorEnvelopeMixin, APIView):
                 ).count()
                 if owner_count <= 1:
                     return error_envelope_response(
-                "LAST_OWNER_PROTECTED",
-                "A tenant must retain at least one owner.",
-                http_status=status.HTTP_409_CONFLICT,
-            )
+                        "LAST_OWNER_PROTECTED",
+                        "A tenant must retain at least one owner.",
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
             old_role = membership.role
             membership.role = role
             membership.save(update_fields=["role"])
@@ -214,10 +217,10 @@ class TenantMemberDetailView(ErrorEnvelopeMixin, APIView):
             actor_is_owner = require_tenant_owner(request, tenant)
             if membership.role == TenantMembership.Role.OWNER and not actor_is_owner:
                 return error_envelope_response(
-                "OWNER_ROLE_REQUIRED",
-                "Only an owner can remove an owner.",
-                http_status=status.HTTP_403_FORBIDDEN,
-            )
+                    "OWNER_ROLE_REQUIRED",
+                    "Only an owner can remove an owner.",
+                    http_status=status.HTTP_403_FORBIDDEN,
+                )
             if membership.role == TenantMembership.Role.OWNER:
                 owner_count = TenantMembership.objects.filter(
                     tenant=tenant,
@@ -225,10 +228,10 @@ class TenantMemberDetailView(ErrorEnvelopeMixin, APIView):
                 ).count()
                 if owner_count <= 1:
                     return error_envelope_response(
-                "LAST_OWNER_PROTECTED",
-                "A tenant must retain at least one owner.",
-                http_status=status.HTTP_409_CONFLICT,
-            )
+                        "LAST_OWNER_PROTECTED",
+                        "A tenant must retain at least one owner.",
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
             ProjectMembership.objects.filter(
                 project__tenant=tenant,
                 user=membership.user,
@@ -346,10 +349,10 @@ class ProjectMemberDetailView(ErrorEnvelopeMixin, APIView):
                 ).count()
                 if admin_count <= 1:
                     return error_envelope_response(
-                "LAST_PROJECT_ADMIN_PROTECTED",
-                "A project must retain at least one administrator.",
-                http_status=status.HTTP_409_CONFLICT,
-            )
+                        "LAST_PROJECT_ADMIN_PROTECTED",
+                        "A project must retain at least one administrator.",
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
             membership.role = role
             membership.save(update_fields=["role"])
         return Response(membership_payload(membership))
@@ -377,9 +380,9 @@ class ProjectMemberDetailView(ErrorEnvelopeMixin, APIView):
                 ).count()
                 if admin_count <= 1:
                     return error_envelope_response(
-                "LAST_PROJECT_ADMIN_PROTECTED",
-                "A project must retain at least one administrator.",
-                http_status=status.HTTP_409_CONFLICT,
-            )
+                        "LAST_PROJECT_ADMIN_PROTECTED",
+                        "A project must retain at least one administrator.",
+                        http_status=status.HTTP_409_CONFLICT,
+                    )
             membership.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

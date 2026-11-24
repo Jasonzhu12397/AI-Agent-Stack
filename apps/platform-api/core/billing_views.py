@@ -159,9 +159,7 @@ def _subscription_dict(subscription: Subscription | None) -> dict | None:
         "id": str(subscription.id),
         "plan": subscription.plan.code,
         "status": subscription.status,
-        "started_at": subscription.started_at.isoformat()
-        if subscription.started_at
-        else None,
+        "started_at": subscription.started_at.isoformat() if subscription.started_at else None,
         "current_period_start": subscription.current_period_start.isoformat()
         if subscription.current_period_start
         else None,
@@ -251,9 +249,7 @@ class PlansView(TenantScopedView):
 class SubscriptionView(TenantScopedView):
     def get(self, request, tenant_id):
         tenant = self.get_tenant()
-        subscription = (
-            Subscription.objects.filter(tenant=tenant).order_by("-created_at").first()
-        )
+        subscription = Subscription.objects.filter(tenant=tenant).order_by("-created_at").first()
         return Response(
             {"subscription": _subscription_dict(subscription), "source": "authoritative"}
         )
@@ -354,9 +350,7 @@ class SubscriptionRenewView(_SubscriptionAdminView):
 class SubscriptionSettleView(_SubscriptionAdminView):
     def post(self, request, tenant_id):
         tenant = self.get_tenant()
-        settled = subscription_service.settle_due_subscriptions(
-            request=request, tenant=tenant
-        )
+        settled = subscription_service.settle_due_subscriptions(request=request, tenant=tenant)
         return Response(
             {
                 "count": len(settled),
@@ -475,9 +469,7 @@ class OrderListCreateView(TenantScopedView):
                 http_status=status.HTTP_409_CONFLICT,
             )
 
-        existing = Order.objects.filter(
-            tenant=tenant, idempotency_key=idempotency_key
-        ).first()
+        existing = Order.objects.filter(tenant=tenant, idempotency_key=idempotency_key).first()
         if existing is not None:
             return Response(_order_dict(existing), status=status.HTTP_200_OK)
 
@@ -682,9 +674,7 @@ class OrderCloseView(TenantScopedView):
                         http_status=status.HTTP_502_BAD_GATEWAY,
                     )
             order.transition(Order.Status.CLOSED)
-        record_audit_event(
-            request, tenant, "billing.order.closed", "order", order.id
-        )
+        record_audit_event(request, tenant, "billing.order.closed", "order", order.id)
         _record_payment_audit(
             tenant=tenant,
             order=order,
@@ -950,9 +940,7 @@ class ReconciliationView(_SubscriptionAdminView):
             aggregate["refunded_cents"] += order.refunded_cents
 
         providers = registry.build_providers()
-        unavailable = {
-            order.channel for order in orders if order.channel not in providers
-        }
+        unavailable = {order.channel for order in orders if order.channel not in providers}
 
         discrepancies: list[dict] = []
         refund_discrepancies: list[dict] = []
@@ -1095,9 +1083,7 @@ def _credit_entitlement(order: Order) -> EntitlementGrant:
         # Another writer won the race; its row is the authoritative grant.
         return EntitlementGrant.objects.get(order=order)
 
-    budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
-        tenant=order.tenant
-    )
+    budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(tenant=order.tenant)
     budget.monthly_limit += grant.tokens
     budget.save(update_fields=["monthly_limit", "updated_at"])
     return grant
@@ -1368,9 +1354,7 @@ class PaymentCallbackView(ErrorEnvelopeMixin, APIView):
         refund_reference = result.refund_reference or (
             f"callback-refund-{order.id}-{result.amount_cents or 0}"
         )
-        already = EntitlementReclaim.objects.filter(
-            refund_reference=refund_reference
-        ).first()
+        already = EntitlementReclaim.objects.filter(refund_reference=refund_reference).first()
         if already is None:
             reclaim = reclaim_for_refund(
                 order=order,

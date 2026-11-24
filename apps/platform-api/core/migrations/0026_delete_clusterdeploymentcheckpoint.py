@@ -4,13 +4,12 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0025_knowledgedocument_vector_collection_and_more'),
+        ("core", "0025_knowledgedocument_vector_collection_and_more"),
     ]
 
     operations = [
         migrations.DeleteModel(
-            name='ClusterDeploymentCheckpoint',
+            name="ClusterDeploymentCheckpoint",
         ),
     ]

@@ -39,7 +39,8 @@ def _safe_metadata(value):
             result[str(key)[:80]] = _safe_metadata(child)
         elif isinstance(child, list):
             result[str(key)[:80]] = [
-                item for item in child[:50]
+                item
+                for item in child[:50]
                 if isinstance(item, (str, int, float, bool)) or item is None
             ]
         elif isinstance(child, (str, int, float, bool)) or child is None:

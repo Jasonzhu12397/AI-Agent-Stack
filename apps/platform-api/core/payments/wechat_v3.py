@@ -194,9 +194,7 @@ class WechatPayV3Provider(PaymentProvider):
     ) -> dict:
         mchid = self._resolve("mchid") or ""
         merchant_serial = self._resolve("serial_no") or ""
-        body_text = (
-            json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body else ""
-        )
+        body_text = json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body else ""
         body_bytes = body_text.encode("utf-8")
 
         timestamp = str(int(time.time()))
@@ -312,9 +310,7 @@ class WechatPayV3Provider(PaymentProvider):
                 "currency": order.currency,
             },
         }
-        data = self._signed_request(
-            "POST", "/v3/refund/domestic/refunds", "", payload
-        )
+        data = self._signed_request("POST", "/v3/refund/domestic/refunds", "", payload)
         return {
             "provider": "wechat_v3",
             "refund_id": data.get("refund_id", ""),
@@ -367,9 +363,7 @@ class WechatPayV3Provider(PaymentProvider):
         )
         missing = [name for name in required if not headers.get(name)]
         if missing:
-            return CallbackResult(
-                ok=False, message=f"missing headers: {', '.join(missing)}"
-            )
+            return CallbackResult(ok=False, message=f"missing headers: {', '.join(missing)}")
 
         api_v3_key = self._resolve("api_v3_key")
         if not api_v3_key:
@@ -383,9 +377,7 @@ class WechatPayV3Provider(PaymentProvider):
         trusted_serial = format(certificate.serial_number, "x")
         header_serial = str(headers["Wechatpay-Serial"]).strip().lower()
         if header_serial != trusted_serial:
-            return CallbackResult(
-                ok=False, message="untrusted platform certificate serial"
-            )
+            return CallbackResult(ok=False, message="untrusted platform certificate serial")
 
         timestamp = headers["Wechatpay-Timestamp"]
         nonce = headers["Wechatpay-Nonce"]
@@ -439,14 +431,10 @@ class WechatPayV3Provider(PaymentProvider):
         """
 
         amount = plaintext.get("amount") or {}
-        refund_reference = (
-            plaintext.get("out_refund_no") or plaintext.get("refund_id") or None
-        )
+        refund_reference = plaintext.get("out_refund_no") or plaintext.get("refund_id") or None
         return CallbackResult(
             ok=True,
-            status=_REFUND_STATUS_MAP.get(
-                plaintext.get("refund_status", ""), "refund_abnormal"
-            ),
+            status=_REFUND_STATUS_MAP.get(plaintext.get("refund_status", ""), "refund_abnormal"),
             order_reference=plaintext.get("out_trade_no"),
             refund_reference=refund_reference,
             raw=plaintext,

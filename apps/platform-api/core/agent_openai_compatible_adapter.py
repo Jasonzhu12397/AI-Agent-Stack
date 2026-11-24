@@ -205,11 +205,7 @@ def _validate_completion_options(
 
     max_tokens = arguments.get("max_tokens")
     if max_tokens is not None:
-        if (
-            isinstance(max_tokens, bool)
-            or not isinstance(max_tokens, int)
-            or max_tokens <= 0
-        ):
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
             raise CapabilityResolutionError(
                 CAPABILITY_ARGUMENTS_OUT_OF_RANGE,
                 "max_tokens must be a positive integer.",

@@ -101,9 +101,7 @@ class AlipayProvider(PaymentProvider):
     def _signed_content(params: dict[str, str]) -> str:
         excluded = {"sign", "sign_type"}
         items = sorted(
-            (key, value)
-            for key, value in params.items()
-            if key not in excluded and value != ""
+            (key, value) for key, value in params.items() if key not in excluded and value != ""
         )
         return "&".join(f"{key}={value}" for key, value in items)
 
@@ -276,9 +274,7 @@ class AlipayProvider(PaymentProvider):
         # back in this response, so there is no async refund-notify channel
         # to parse (the async notify covers payment trade status only).
         refund_cents = amount_cents if amount_cents is not None else order.amount_cents
-        refund_amount = (
-            Decimal(refund_cents) / Decimal(100)
-        ).quantize(Decimal("0.01"))
+        refund_amount = (Decimal(refund_cents) / Decimal(100)).quantize(Decimal("0.01"))
         out_request_no = refund_reference or f"refund-{order.id}-{refund_cents}"
         biz_content = {
             "out_trade_no": str(order.id),
@@ -300,9 +296,7 @@ class AlipayProvider(PaymentProvider):
 
     def close_payment(self, order) -> dict:
         try:
-            node = self._request(
-                "alipay.trade.close", {"out_trade_no": str(order.id)}
-            )
+            node = self._request("alipay.trade.close", {"out_trade_no": str(order.id)})
         except PaymentProviderError as exc:
             if getattr(exc, "upstream_code", "") == "ACQ.TRADE_NOT_EXIST":
                 return {"provider": "alipay", "closed": True, "already": True}

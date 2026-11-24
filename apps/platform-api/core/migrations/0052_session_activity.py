@@ -7,38 +7,37 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0051_order_payment_instruction'),
+        ("core", "0051_order_payment_instruction"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='SessionActivity',
+            name="SessionActivity",
             fields=[
                 (
-                    'session_key',
+                    "session_key",
                     models.CharField(max_length=64, primary_key=True, serialize=False),
                 ),
-                ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
+                ("created_at", models.DateTimeField(default=django.utils.timezone.now)),
                 (
-                    'last_activity',
+                    "last_activity",
                     models.DateTimeField(db_index=True, default=django.utils.timezone.now),
                 ),
-                ('revoked_at', models.DateTimeField(blank=True, null=True)),
+                ("revoked_at", models.DateTimeField(blank=True, null=True)),
                 (
-                    'user',
+                    "user",
                     models.ForeignKey(
                         on_delete=django.db.models.deletion.CASCADE,
-                        related_name='session_activities',
+                        related_name="session_activities",
                         to=settings.AUTH_USER_MODEL,
                     ),
                 ),
             ],
             options={
-                'verbose_name_plural': 'session activities',
-                'ordering': ['-last_activity'],
+                "verbose_name_plural": "session activities",
+                "ordering": ["-last_activity"],
             },
         ),
     ]

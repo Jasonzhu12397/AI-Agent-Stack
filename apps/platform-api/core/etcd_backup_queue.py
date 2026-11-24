@@ -137,9 +137,7 @@ def backup_payload(
     return request
 
 
-def _queue_with_retry(
-    tenant: Any, key: str, defaults: dict[str, Any]
-) -> tuple[AgentCommand, bool]:
+def _queue_with_retry(tenant: Any, key: str, defaults: dict[str, Any]) -> tuple[AgentCommand, bool]:
     """Get or create this bucket's command, retrying when the bucket's is dead.
 
     Both queues share the rule, because both have the same failure: a command
@@ -233,10 +231,7 @@ def _change_slot_key(
     not collapse into one. The key stays under the 128-char idempotency limit.
     """
 
-    return (
-        f"etcd-backup:{deployment.id}:{hour_bucket(now)}"
-        f":{SLOT_CHANGE}:cmd:{source.id}"
-    )
+    return f"etcd-backup:{deployment.id}:{hour_bucket(now)}:{SLOT_CHANGE}:cmd:{source.id}"
 
 
 def queue_backup(

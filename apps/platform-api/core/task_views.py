@@ -127,9 +127,7 @@ class TaskListCreateView(APIView):
             task = Task.objects.get(tenant=tenant, idempotency_key=idempotency_key)
             created = False
         if not created and (
-            task.project_id != project.id
-            or task.task_type != task_type
-            or task.payload != payload
+            task.project_id != project.id or task.task_type != task_type or task.payload != payload
         ):
             return Response(
                 {"detail": "Idempotency-Key was already used with a different request."},

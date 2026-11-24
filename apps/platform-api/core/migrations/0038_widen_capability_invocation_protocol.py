@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0037_agent_plugin_installation_revision'),
+        ("core", "0037_agent_plugin_installation_revision"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='agentcapabilityinvocation',
-            name='protocol',
+            model_name="agentcapabilityinvocation",
+            name="protocol",
             field=models.CharField(max_length=32),
         ),
     ]

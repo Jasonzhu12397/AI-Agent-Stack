@@ -103,9 +103,7 @@ def build_pxe_boot_plan(system: dict[str, Any]) -> dict[str, Any]:
     supported = boot.get("BootSourceOverrideSupported")
     if not isinstance(supported, list):
         raise PxeBootError("PXE_BOOT_UNSUPPORTED")
-    normalized = {
-        str(item).casefold() for item in supported if isinstance(item, str)
-    }
+    normalized = {str(item).casefold() for item in supported if isinstance(item, str)}
     if "pxe" not in normalized:
         raise PxeBootError("PXE_BOOT_UNSUPPORTED")
     power_state = system.get("PowerState")
@@ -189,7 +187,5 @@ def pxe_boot_machine(
             **plan,
         }
         if execute:
-            evidence.update(
-                apply_pxe_boot(client, base_url, auth, system_path, plan)
-            )
+            evidence.update(apply_pxe_boot(client, base_url, auth, system_path, plan))
         return evidence

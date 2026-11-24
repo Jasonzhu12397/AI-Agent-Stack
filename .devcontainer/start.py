@@ -1,8 +1,8 @@
 """Serve the console inside a Codespace.
 
-Starts the ASGI API on 8000 and the Vite dev server on 5173, both bound to
-0.0.0.0 so the forwarded ports work. The dev server proxies ``/api`` to the
-API, which keeps the browser on a single origin and avoids CORS entirely.
+Starts the ASGI API on 8000 bound to 0.0.0.0 so the forwarded port works. The
+API also serves the built web console, so a deployment needs exactly one public
+port and one origin: no CORS, no second runtime.
 
 Every start kills what a previous start left behind, so restarting the
 container never ends up with two servers fighting over a port.
@@ -10,6 +10,7 @@ container never ends up with two servers fighting over a port.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -24,7 +25,7 @@ DATA_DIR = REPO_ROOT / ".devdata"
 PID_FILE = DATA_DIR / "servers.json"
 
 API_PORT = 8000
-WEB_PORT = 5173
+WEB_PORT = API_PORT
 
 
 def runtime_env() -> dict:
@@ -55,6 +56,8 @@ def stop_previous() -> None:
     except ValueError:
         return
     for pid in pids:
+        if not pid:  # a zero pid would signal the whole process group
+            continue
         try:
             # Servers were spawned in their own session, so killing the group
             # also stops the node process npm would otherwise leave behind.
@@ -98,17 +101,9 @@ def main() -> None:
         log_name="api.log",
         env=env,
     )
-    npm = "npm"
-    web = spawn(
-        [npm, "run", "dev", "--", "--port", str(WEB_PORT)],
-        cwd=WEB_STUDIO,
-        log_name="web.log",
-        env=env,
-    )
-    import json
-
-    PID_FILE.write_text(json.dumps([api, web]))
-    print(f"console ready: port {WEB_PORT} (API on {API_PORT})", flush=True)
+    # The API serves the built console bundle, so there is no second runtime.
+    PID_FILE.write_text(json.dumps([api]))
+    print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
     subprocess.run(
         [sys.executable, str(Path(__file__).with_name("healthcheck.py"))],

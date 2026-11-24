@@ -78,10 +78,7 @@ def _workflow_output_budget(
         model_max_tokens,
         MAX_WORKFLOW_NODE_OUTPUT_TOKENS,
         MAX_WORKFLOW_RUN_OUTPUT_TOKENS - output_tokens,
-        MAX_WORKFLOW_RUN_TOTAL_TOKENS
-        - input_tokens
-        - output_tokens
-        - estimated_input_tokens,
+        MAX_WORKFLOW_RUN_TOTAL_TOKENS - input_tokens - output_tokens - estimated_input_tokens,
     )
 
 
@@ -141,9 +138,7 @@ def validate_workflow_definition(definition):
             raise WorkflowValidationError(f"Node {node_id} config must be an object.")
         join = config.get("join", "any")
         if join not in {"any", "all"}:
-            raise WorkflowValidationError(
-                f"Node {node_id} join must be any or all."
-            )
+            raise WorkflowValidationError(f"Node {node_id} join must be any or all.")
         if node_type == "start" and join != "any":
             raise WorkflowValidationError("Start node cannot declare a join strategy.")
 
@@ -185,9 +180,7 @@ def validate_workflow_definition(definition):
                     f"Tool node {node_id} tool_id must be a UUID."
                 ) from exc
             if "arguments" in config and not isinstance(config["arguments"], dict):
-                raise WorkflowValidationError(
-                    f"Tool node {node_id} arguments must be an object."
-                )
+                raise WorkflowValidationError(f"Tool node {node_id} arguments must be an object.")
         if node_type == "knowledge_search":
             knowledge_ids = config.get("knowledge_base_ids")
             if not isinstance(knowledge_ids, list) or not 1 <= len(knowledge_ids) <= 8:
@@ -218,9 +211,7 @@ def validate_workflow_definition(definition):
         if node_type == "agent":
             agent_version_id = config.get("agent_version_id")
             if not isinstance(agent_version_id, str):
-                raise WorkflowValidationError(
-                    f"Agent node {node_id} requires agent_version_id."
-                )
+                raise WorkflowValidationError(f"Agent node {node_id} requires agent_version_id.")
             try:
                 uuid.UUID(agent_version_id)
             except ValueError as exc:
@@ -229,19 +220,13 @@ def validate_workflow_definition(definition):
                 ) from exc
             capability = config.get("capability")
             if capability is not None and not isinstance(capability, str):
-                raise WorkflowValidationError(
-                    f"Agent node {node_id} capability must be a string."
-                )
+                raise WorkflowValidationError(f"Agent node {node_id} capability must be a string.")
             arguments = config.get("arguments")
             if arguments is not None and not isinstance(arguments, dict):
-                raise WorkflowValidationError(
-                    f"Agent node {node_id} arguments must be an object."
-                )
+                raise WorkflowValidationError(f"Agent node {node_id} arguments must be an object.")
             instructions = config.get("instructions", "")
             if not isinstance(instructions, str) or len(instructions) > 4000:
-                raise WorkflowValidationError(
-                    f"Agent node {node_id} instructions are invalid."
-                )
+                raise WorkflowValidationError(f"Agent node {node_id} instructions are invalid.")
         gather_from = config.get("gather_from")
         if gather_from is not None:
             if not isinstance(gather_from, list) or not 1 <= len(gather_from) <= 12:
@@ -258,9 +243,7 @@ def validate_workflow_definition(definition):
                     f"Node {node_id} gather_from contains an invalid node id."
                 )
             if len(set(gather_from)) != len(gather_from):
-                raise WorkflowValidationError(
-                    f"Node {node_id} gather_from cannot repeat nodes."
-                )
+                raise WorkflowValidationError(f"Node {node_id} gather_from cannot repeat nodes.")
             if (
                 config.get("input_from")
                 or config.get("source_node")
@@ -284,9 +267,7 @@ def validate_workflow_definition(definition):
         if node_type == "approval":
             instructions = config.get("instructions", "")
             if not isinstance(instructions, str) or len(instructions) > 4000:
-                raise WorkflowValidationError(
-                    f"Approval node {node_id} instructions are invalid."
-                )
+                raise WorkflowValidationError(f"Approval node {node_id} instructions are invalid.")
         if node_type == "loop":
             max_iterations = config.get("max_iterations")
             if (
@@ -304,14 +285,10 @@ def validate_workflow_definition(definition):
                 )
             body_type = body.get("type")
             if body_type not in {"llm", "tool", "knowledge_search", "agent"}:
-                raise WorkflowValidationError(
-                    f"Loop node {node_id} body type is not supported."
-                )
+                raise WorkflowValidationError(f"Loop node {node_id} body type is not supported.")
             body_config = body.get("config", {})
             if not isinstance(body_config, dict):
-                raise WorkflowValidationError(
-                    f"Loop node {node_id} body config must be an object."
-                )
+                raise WorkflowValidationError(f"Loop node {node_id} body config must be an object.")
             if any(
                 key in body_config
                 for key in ("input_from", "source_node", "arguments_from", "gather_from")
@@ -420,14 +397,9 @@ def validate_workflow_definition(definition):
             or node["config"].get("arguments_from")
         )
         if source_node and source_node not in node_map:
-            raise WorkflowValidationError(
-                f"Node {node_id} references an unknown source node."
-            )
+            raise WorkflowValidationError(f"Node {node_id} references an unknown source node.")
         if node["type"] == "condition":
-            branch_values = {
-                edge.get("when")
-                for edge in outgoing[node_id]
-            }
+            branch_values = {edge.get("when") for edge in outgoing[node_id]}
             if branch_values != {True, False}:
                 raise WorkflowValidationError(
                     f"Condition node {node_id} requires true and false outgoing branches."
@@ -447,10 +419,7 @@ def validate_workflow_definition(definition):
                 queue.append(target)
     if len(ordered_ids) != len(node_map):
         raise WorkflowValidationError("Workflow graph contains a cycle.")
-    order_index = {
-        node_id: index
-        for index, node_id in enumerate(ordered_ids)
-    }
+    order_index = {node_id: index for index, node_id in enumerate(ordered_ids)}
     for node_id, node in node_map.items():
         source_node = (
             node["config"].get("input_from")
@@ -523,16 +492,20 @@ def validate_model_references(graph, tenant, project):
                 )
             continue
         if node["type"] == "tool":
-            tool = PluginTool.objects.select_related("plugin").filter(
-                pk=config["tool_id"],
-                enabled=True,
-                plugin__enabled=True,
-                plugin__review_status="approved",
-                plugin__installations__tenant=tenant,
-                plugin__installations__project=project,
-                plugin__installations__status=PluginInstallation.Status.INSTALLED,
-                plugin__installations__plugin_version=F("plugin__version"),
-            ).first()
+            tool = (
+                PluginTool.objects.select_related("plugin")
+                .filter(
+                    pk=config["tool_id"],
+                    enabled=True,
+                    plugin__enabled=True,
+                    plugin__review_status="approved",
+                    plugin__installations__tenant=tenant,
+                    plugin__installations__project=project,
+                    plugin__installations__status=PluginInstallation.Status.INSTALLED,
+                    plugin__installations__plugin_version=F("plugin__version"),
+                )
+                .first()
+            )
             if tool is None:
                 raise WorkflowValidationError(
                     "A workflow tool node references a tool that is not "
@@ -602,14 +575,10 @@ def validate_model_references(graph, tenant, project):
                     "Workflow agent model provider is outside the tenant."
                 )
             if "chat" not in model.capabilities:
-                raise WorkflowValidationError(
-                    "Workflow agent node model must support chat."
-                )
+                raise WorkflowValidationError("Workflow agent node model must support chat.")
             knowledge_ids = snapshot.get("knowledge_base_ids", [])
             if not isinstance(knowledge_ids, list) or len(knowledge_ids) > 8:
-                raise WorkflowValidationError(
-                    "Workflow agent knowledge base allowlist is invalid."
-                )
+                raise WorkflowValidationError("Workflow agent knowledge base allowlist is invalid.")
             if knowledge_ids:
                 count = KnowledgeBase.objects.filter(
                     id__in=knowledge_ids,
@@ -626,11 +595,15 @@ def validate_model_references(graph, tenant, project):
             continue
         if node["type"] != "llm":
             continue
-        model = ModelConfig.objects.select_related("provider").filter(
-            pk=config["model_config_id"],
-            enabled=True,
-            provider__enabled=True,
-        ).first()
+        model = (
+            ModelConfig.objects.select_related("provider")
+            .filter(
+                pk=config["model_config_id"],
+                enabled=True,
+                provider__enabled=True,
+            )
+            .first()
+        )
         if model is None:
             raise WorkflowValidationError("A workflow LLM node references an unavailable model.")
         max_tokens = config.get("max_tokens", model.max_output_tokens)
@@ -724,8 +697,7 @@ def _marketplace_arguments(node, state, snapshot):
         source = state.get(arguments_from)
         if not isinstance(source, dict):
             raise WorkflowValidationError(
-                "Marketplace agent arguments_from must reference a node that "
-                "returned an object."
+                "Marketplace agent arguments_from must reference a node that returned an object."
             )
         return source
     source_value = _step_input(node, state)
@@ -751,9 +723,7 @@ def _execute_marketplace_agent(
     installation_id = snapshot.get("installation_id")
     capability = snapshot.get("capability")
     installation = (
-        AgentPluginInstallation.objects.filter(pk=installation_id)
-        .select_related("plugin")
-        .first()
+        AgentPluginInstallation.objects.filter(pk=installation_id).select_related("plugin").first()
     )
     if installation is None:
         raise MarketplaceAgentExecutionError(
@@ -1066,9 +1036,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 agent__is_archived=False,
             )
         except AgentVersion.DoesNotExist as exc:
-            raise WorkflowValidationError(
-                "Workflow agent version is no longer available."
-            ) from exc
+            raise WorkflowValidationError("Workflow agent version is no longer available.") from exc
         snapshot = agent_version.config_snapshot
         if snapshot.get("kind") == MARKETPLACE_AGENT_KIND:
             return _execute_marketplace_agent(
@@ -1085,10 +1053,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if isinstance(source_value, dict) and isinstance(source_value.get("gathered"), list):
             source_text = ""
             for item in source_value["gathered"]:
-                source_text += (
-                    f"[teammate_node={item['node']}]\n"
-                    f"{_value_text(item['output'])}\n\n"
-                )
+                source_text += f"[teammate_node={item['node']}]\n{_value_text(item['output'])}\n\n"
         else:
             source_text = _value_text(source_value)
         knowledge_ids = snapshot.get("knowledge_base_ids", [])
@@ -1157,9 +1122,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 provider__enabled=True,
             )
         except (KeyError, ModelConfig.DoesNotExist) as exc:
-            raise WorkflowValidationError(
-                "Workflow agent model is no longer available."
-            ) from exc
+            raise WorkflowValidationError("Workflow agent model is no longer available.") from exc
         serialized_messages = json.dumps(
             messages,
             ensure_ascii=False,
@@ -1226,9 +1189,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            raise WorkflowValidationError(
-                "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
-            ) from exc
+            raise WorkflowValidationError("WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY") from exc
         actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
             provider_type=model.provider.provider_type,
             reported_input_tokens=response.input_tokens,
@@ -1254,12 +1215,8 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if not isinstance(pending_llm, dict):
             raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
         pending_llm = {**pending_llm, node["id"]: output}
-        checkpoint_state = {
-            key: value for key, value in state.items() if key == "_loops"
-        }
-        checkpoint_state.update(
-            {"_token_usage": usage, "_pending_llm": pending_llm}
-        )
+        checkpoint_state = {key: value for key, value in state.items() if key == "_loops"}
+        checkpoint_state.update({"_token_usage": usage, "_pending_llm": pending_llm})
         WorkflowRun.objects.filter(task=task).update(state=checkpoint_state)
         state["_token_usage"] = usage
         state["_pending_llm"] = pending_llm
@@ -1346,9 +1303,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            raise WorkflowValidationError(
-                "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY"
-            ) from exc
+            raise WorkflowValidationError("WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY") from exc
         actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
             provider_type=model.provider.provider_type,
             reported_input_tokens=response.input_tokens,
@@ -1372,12 +1327,8 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         if not isinstance(pending_llm, dict):
             raise WorkflowValidationError("WORKFLOW_PENDING_LLM_STATE_INVALID")
         pending_llm = {**pending_llm, node["id"]: output}
-        checkpoint_state = {
-            key: value for key, value in state.items() if key == "_loops"
-        }
-        checkpoint_state.update(
-            {"_token_usage": usage, "_pending_llm": pending_llm}
-        )
+        checkpoint_state = {key: value for key, value in state.items() if key == "_loops"}
+        checkpoint_state.update({"_token_usage": usage, "_pending_llm": pending_llm})
         WorkflowRun.objects.filter(task=task).update(state=checkpoint_state)
         state["_token_usage"] = usage
         state["_pending_llm"] = pending_llm
@@ -1394,9 +1345,7 @@ def _mark_workflow_deadline_exceeded(workflow_run):
     now = timezone.now()
     workflow_run.output_data = {
         "error": "WORKFLOW_DEADLINE_EXCEEDED",
-        "deadline_at": workflow_run.deadline_at.isoformat()
-        if workflow_run.deadline_at
-        else None,
+        "deadline_at": workflow_run.deadline_at.isoformat() if workflow_run.deadline_at else None,
     }
     workflow_run.finished_at = now
     workflow_run.save(update_fields=["output_data", "finished_at"])
@@ -1532,8 +1481,7 @@ def execute_workflow_run(task, worker_id, renew_lease):
     state.setdefault("input", workflow_run.input_data)
     active_nodes = set()
     step_records = {
-        step.node_id: step
-        for step in WorkflowStepRun.objects.filter(workflow_run=workflow_run)
+        step.node_id: step for step in WorkflowStepRun.objects.filter(workflow_run=workflow_run)
     }
     usage = state.get("_token_usage")
     if not isinstance(usage, dict):

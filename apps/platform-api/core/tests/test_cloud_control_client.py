@@ -23,14 +23,21 @@ def _client(tmp_path, transport):
 
 def test_enqueue_command_uses_mtls_client_and_returns_command_uuid(tmp_path):
     expected = uuid4()
+
     def handler(request):
         assert request.url.path == "/api/v1/control/commands"
         return httpx.Response(201, json={"command_id": str(expected), "status": "queued"})
+
     client = _client(tmp_path, httpx.MockTransport(handler))
     try:
         result = client.enqueue_command(
-            uuid4(), uuid4(), "target", "target.cluster.observe",
-            "idempotency-key-0001", {}, "a" * 64,
+            uuid4(),
+            uuid4(),
+            "target",
+            "target.cluster.observe",
+            "idempotency-key-0001",
+            {},
+            "a" * 64,
         )
         assert result == expected
     finally:
@@ -42,12 +49,16 @@ def test_enqueue_command_rejects_missing_approval_digest(tmp_path):
     try:
         with pytest.raises(ValueError):
             client.enqueue_command(
-                uuid4(), uuid4(), "target", "target.cluster.observe",
-                "idempotency-key-0001", {}, "",
+                uuid4(),
+                uuid4(),
+                "target",
+                "target.cluster.observe",
+                "idempotency-key-0001",
+                {},
+                "",
             )
     finally:
         client.close()
-
 
 
 def test_cloud_control_registers_agent_and_creates_deployment(tmp_path):
@@ -101,9 +112,7 @@ def test_cloud_control_reconcile_uses_the_platform_api_route(tmp_path):
     client = _client(tmp_path, httpx.MockTransport(handler))
     try:
         client.reconcile_deployments(limit=25)
-        assert calls == [
-            ("POST", "/api/v1/control/deployments/reconcile", {"limit": 25})
-        ]
+        assert calls == [("POST", "/api/v1/control/deployments/reconcile", {"limit": 25})]
     finally:
         client.close()
 
