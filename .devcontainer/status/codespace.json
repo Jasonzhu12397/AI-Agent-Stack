@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T10:10:26Z",
+  "checked_at": "2026-11-24T10:12:10Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -13,23 +13,23 @@
   },
   "workflow": {
     "status": "succeeded",
-    "run_id": "c8203643",
+    "run_id": "9555255e",
     "error": null
   },
   "ok": true,
   "api_log": [
-    "127.0.0.1:39232 - - [24/Nov/2026:18:10:24] \"GET /\" 200 452",
-    "127.0.0.1:39248 - - [24/Nov/2026:18:10:24] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:39256 - - [24/Nov/2026:18:10:24] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:39268 - - [24/Nov/2026:18:10:24] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:39272 - - [24/Nov/2026:18:10:25] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:39276 - - [24/Nov/2026:18:10:25] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:39292 - - [24/Nov/2026:18:10:25] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:39298 - - [24/Nov/2026:18:10:25] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:39306 - - [24/Nov/2026:18:10:25] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:39320 - - [24/Nov/2026:18:10:25] \"POST /api/v1/workflows/62f11032-3bde-46e1-947b-ddca0d5ced55/publish/\" 201 318",
-    "127.0.0.1:39322 - - [24/Nov/2026:18:10:25] \"POST /api/v1/workflows/62f11032-3bde-46e1-947b-ddca0d5ced55/runs/\" 202 435",
-    "127.0.0.1:39336 - - [24/Nov/2026:18:10:26] \"GET /api/v1/workflows/62f11032-3bde-46e1-947b-ddca0d5ced55/runs/\" 200 1553"
+    "127.0.0.1:34250 - - [24/Nov/2026:18:12:08] \"GET /\" 200 452",
+    "127.0.0.1:34260 - - [24/Nov/2026:18:12:08] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:34270 - - [24/Nov/2026:18:12:08] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:34280 - - [24/Nov/2026:18:12:08] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:34296 - - [24/Nov/2026:18:12:09] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:34306 - - [24/Nov/2026:18:12:09] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:34320 - - [24/Nov/2026:18:12:09] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:34336 - - [24/Nov/2026:18:12:09] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:34350 - - [24/Nov/2026:18:12:09] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:34354 - - [24/Nov/2026:18:12:09] \"POST /api/v1/workflows/6ca5625b-93fe-458e-91e4-d2ab49889f31/publish/\" 201 318",
+    "127.0.0.1:34366 - - [24/Nov/2026:18:12:09] \"POST /api/v1/workflows/6ca5625b-93fe-458e-91e4-d2ab49889f31/runs/\" 202 435",
+    "127.0.0.1:34370 - - [24/Nov/2026:18:12:10] \"GET /api/v1/workflows/6ca5625b-93fe-458e-91e4-d2ab49889f31/runs/\" 200 1553"
   ],
   "web_log": [
     "",
@@ -39,7 +39,6 @@
     "sh: 1: vite: not found"
   ],
   "worker_log": [
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-v7rtvflj-l91vu0lp8z-dc2j6oo3fdkg00a0c07g-sandbox-16341, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-v7rtvflj-l91vu0lp8z-dc2j6oo3fdkg00a0c07g-sandbox-16820, poll_seconds=1.0)",
@@ -48,6 +47,9 @@
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-s1hw14bh-sadh4fc4rf-dc2lup02urtmgq8ffc9g-sandbox-1578, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-s1hw14bh-sadh4fc4rf-dc2lup02urtmgq8ffc9g-sandbox-3399, poll_seconds=1.0)"
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-s1hw14bh-sadh4fc4rf-dc2lup02urtmgq8ffc9g-sandbox-3399, poll_seconds=1.0)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-s1hw14bh-sadh4fc4rf-dc2lup02urtmgq8ffc9g-sandbox-3929, poll_seconds=1.0)"
   ]
 }
