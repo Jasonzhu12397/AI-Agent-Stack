@@ -6,6 +6,7 @@ from core import chat_runtime, chat_tools
 from core.chat_models import AgentChatThread
 from core.models import (
     AgentCommand,
+    ClusterDeployment,
     AgentNode,
     AgentPluginDefinition,
     AgentPluginInstallation,
@@ -334,3 +335,27 @@ def test_plan_deployment_reports_the_spec_error(scope):
     assert payload["ok"] is False
     assert payload["code"] == "DEPLOYMENT_SPEC_INVALID"
     assert "cluster_name" in payload["error"] or "cluster_spec" in payload["error"]
+
+
+def test_plan_deployment_files_the_preflight(scope):
+    tools = chat_tools.build_tools(scope["thread"], {})
+    tool = next(item for item in tools if item.name == "stack_plan_deployment")
+    payload = chat_tools.run_tool(
+        tool,
+        {
+            "eph_node_id": str(scope["node"].id),
+            "cluster_spec": {
+                "cluster_name": "chat-demo",
+                "kubernetes_version": "v1.30.2",
+                "control_plane_replicas": 1,
+                "worker_replicas": 1,
+            },
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["created"] is True
+    assert payload["deployment"]["status"] == "preflight_queued"
+    deployment = ClusterDeployment.objects.get(id=payload["deployment"]["id"])
+    assert deployment.preflight_result["ironic_workload"]["warnings"] == [
+        "IRONIC_WORKLOAD_CR_REQUIRED"
+    ]
