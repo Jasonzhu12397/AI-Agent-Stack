@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T15:12:54Z",
+  "checked_at": "2026-11-24T15:25:24Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -13,23 +13,23 @@
   },
   "workflow": {
     "status": "succeeded",
-    "run_id": "6ff0c25e",
+    "run_id": "3d1976ae",
     "error": null
   },
   "ok": true,
   "api_log": [
-    "127.0.0.1:44852 - - [24/Nov/2026:23:12:51] \"GET /\" 200 452",
-    "127.0.0.1:44866 - - [24/Nov/2026:23:12:51] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44874 - - [24/Nov/2026:23:12:52] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:44890 - - [24/Nov/2026:23:12:52] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44898 - - [24/Nov/2026:23:12:52] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:44914 - - [24/Nov/2026:23:12:52] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44924 - - [24/Nov/2026:23:12:52] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:44930 - - [24/Nov/2026:23:12:52] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:44944 - - [24/Nov/2026:23:12:52] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:44954 - - [24/Nov/2026:23:12:53] \"POST /api/v1/workflows/bf9a378e-cdaa-4bf5-b2fb-02fa98a5cf12/publish/\" 201 318",
-    "127.0.0.1:44956 - - [24/Nov/2026:23:12:53] \"POST /api/v1/workflows/bf9a378e-cdaa-4bf5-b2fb-02fa98a5cf12/runs/\" 202 435",
-    "127.0.0.1:44972 - - [24/Nov/2026:23:12:54] \"GET /api/v1/workflows/bf9a378e-cdaa-4bf5-b2fb-02fa98a5cf12/runs/\" 200 1553"
+    "127.0.0.1:54002 - - [24/Nov/2026:23:25:22] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:54008 - - [24/Nov/2026:23:25:22] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:54022 - - [24/Nov/2026:23:25:22] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:54024 - - [24/Nov/2026:23:25:22] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:54038 - - [24/Nov/2026:23:25:22] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:54052 - - [24/Nov/2026:23:25:22] \"POST /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/publish/\" 201 318",
+    "127.0.0.1:54068 - - [24/Nov/2026:23:25:22] \"POST /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/runs/\" 202 435",
+    "Bad Request: /api/v1/agent-runtime/heartbeat/",
+    "2026-11-24 23:25:23,684 WARNING  Bad Request: /api/v1/agent-runtime/heartbeat/",
+    "127.0.0.1:54074 - - [24/Nov/2026:23:25:23] \"POST /api/v1/agent-runtime/heartbeat/\" 400 87",
+    "127.0.0.1:54090 - - [24/Nov/2026:23:25:23] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:54106 - - [24/Nov/2026:23:25:24] \"GET /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/runs/\" 200 1553"
   ],
   "web_log": [
     "",
