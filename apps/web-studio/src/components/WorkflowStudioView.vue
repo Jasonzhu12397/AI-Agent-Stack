@@ -59,7 +59,7 @@ function fitCanvas(force = false): void {
   const layout = canvasLayout.value;
   if (!width || !height || !layout.width || !layout.height) return;
   const raw = Math.min(width / layout.width, height / layout.height);
-  const scale = Math.max(0.6, Math.min(2, Number(raw.toFixed(3))));
+  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(raw.toFixed(3))));
   canvasScale.value = scale;
   paintWidth.value = Math.max(layout.width, Math.round(width / scale));
   paintHeight.value = Math.max(layout.height, Math.round(height / scale));
@@ -109,6 +109,11 @@ function fitView(): void {
   viewLocked.value = false;
   fitCanvas(true);
   void nextTick(() => {
+    const box = canvasScroll.value;
+    if (box) {
+      box.scrollLeft = 0;
+      box.scrollTop = 0;
+    }
     syncViewport();
     scheduleSaveViewport();
   });
@@ -1177,6 +1182,37 @@ onUnmounted(() => {
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-canvas-grid" :class="{ solo: !inspectorOpen }">
           <div class="workflow-canvas-shell">
+<div class="canvas-toolbar">
+            <button type="button" class="canvas-tool" :title="t('Zoom out')" @click="zoomBy(1 / 1.2)">－</button>
+            <span class="canvas-zoom">{{ zoomLabel }}</span>
+            <button type="button" class="canvas-tool" :title="t('Zoom in')" @click="zoomBy(1.2)">＋</button>
+            <button type="button" class="canvas-tool canvas-tool-text" :title="t('Fit view')" @click="fitView">
+              {{ t("Fit") }}
+            </button>
+            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(1)">100%</button>
+            <button type="button" class="canvas-tool canvas-tool-text canvas-tool-preset" @click="zoomTo(0.5)">50%</button>
+            <button
+              type="button"
+              class="canvas-tool canvas-tool-text"
+              :class="{ on: minimapOpen }"
+              :title="t('Minimap')"
+              @click="minimapOpen = !minimapOpen"
+            >
+              ▦
+            </button>
+            <button
+              type="button"
+              class="canvas-tool"
+              :class="{ on: inspectorOpen }"
+              :title="t('Inspector')"
+              @click="toggleInspector()"
+            >
+              ▤
+            </button>
+            <button type="button" class="canvas-tool" :title="t('Fullscreen')" @click="toggleFocus">
+              {{ isFullscreen ? "⤡" : "⤢" }}
+            </button>
+          </div>
           <div ref="canvasScroll" class="workflow-canvas-scroll" @scroll.passive="onCanvasScroll">
           <div ref="canvasFrame" class="workflow-canvas-frame" :style="{ width: scaledWidth + 'px', height: scaledHeight + 'px' }">
           <div
@@ -1241,37 +1277,7 @@ onUnmounted(() => {
           </div>
           </div>
           </div>
-          <div class="canvas-toolbar">
-            <button type="button" class="canvas-tool" :title="t('Zoom out')" @click="zoomBy(1 / 1.2)">－</button>
-            <span class="canvas-zoom">{{ zoomLabel }}</span>
-            <button type="button" class="canvas-tool" :title="t('Zoom in')" @click="zoomBy(1.2)">＋</button>
-            <button type="button" class="canvas-tool canvas-tool-text" :title="t('Fit view')" @click="fitView">
-              {{ t("Fit") }}
-            </button>
-            <button type="button" class="canvas-tool canvas-tool-text" @click="zoomTo(1)">100%</button>
-            <button type="button" class="canvas-tool canvas-tool-text" @click="zoomTo(0.5)">50%</button>
-            <button
-              type="button"
-              class="canvas-tool canvas-tool-text"
-              :class="{ on: minimapOpen }"
-              :title="t('Minimap')"
-              @click="minimapOpen = !minimapOpen"
-            >
-              ▦
-            </button>
-            <button
-              type="button"
-              class="canvas-tool"
-              :class="{ on: inspectorOpen }"
-              :title="t('Inspector')"
-              @click="toggleInspector()"
-            >
-              ▤
-            </button>
-            <button type="button" class="canvas-tool" :title="t('Fullscreen')" @click="toggleFocus">
-              {{ isFullscreen ? "⤡" : "⤢" }}
-            </button>
-          </div>
+          
           <div v-if="minimapOpen" class="canvas-minimap" :title="t('Minimap')" @click="jumpFromMinimap">
             <span
               v-for="node in canvasLayout.nodes"

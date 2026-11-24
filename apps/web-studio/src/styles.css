@@ -244,7 +244,8 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-canvas-frame { position: relative; }
 
 /* Canvas controls float over the sheet so the graph keeps the whole box. */
-.canvas-toolbar { position: absolute; top: 10px; left: 10px; z-index: 4; display: flex; align-items: center; gap: 4px; max-width: calc(100% - 20px); overflow-x: auto; padding: 4px; background: #ffffffdd; border: 1px solid #e3eaf2; border-radius: 10px; backdrop-filter: blur(6px); box-shadow: 0 6px 18px #05080f14; }
+/* The bar sits on its own row: floating over the graph would hide the first nodes. */
+.canvas-toolbar { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; overflow-x: auto; margin: 0 0 6px; padding: 3px 4px; background: #f8fbfe; border: 1px solid #e3eaf2; border-radius: 10px; }
 .canvas-tool { display: grid; place-items: center; flex: 0 0 auto; min-width: 28px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #16232d; font: inherit; font-size: 12px; cursor: pointer; }
 .canvas-tool:hover { border-color: #d5e2ee; background: #f2f7fb; }
 .canvas-tool.on { border-color: #8fd3b4; background: #effbf5; color: #0a6b4a; }
@@ -966,6 +967,8 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   .workspace-focus .workflow-pipeline { padding-left: 2px; padding-right: 2px; }
   .workspace-focus .workflow-canvas-grid { gap: 8px; }
   .workspace-focus .canvas-minimap { width: 104px; height: 68px; }
+  /* Phones keep zoom, fit and view toggles; the fixed presets are overflow. */
+  .workspace-focus .canvas-tool-preset { display: none; }
   /* Node buttons stay on one swipeable row instead of stacking above the graph. */
   .workspace-focus .workflow-node-toolbar { flex-wrap: nowrap; overflow-x: auto; margin: 6px 0 8px; padding-bottom: 2px; }
   .workspace-focus .workflow-node-toolbar .task-note { flex: 0 0 auto; }
