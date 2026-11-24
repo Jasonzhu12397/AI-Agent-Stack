@@ -12,6 +12,7 @@ type Health = { status: string; database?: string };
 const route = useRoute();
 const router = useRouter();
 const elementLocale = computed(() => (locale.value === "zh" ? zhCn : en));
+const appVersion = __APP_VERSION__;
 
 const navItems = [
   { to: "/", label: "Overview" },
@@ -90,7 +91,7 @@ onUnmounted(() => {
           <span>AI Agent <strong>Studio</strong></span>
         </router-link>
         <div class="account-actions">
-          <el-tag effect="plain" type="info">DUAL-AGENT PREVIEW</el-tag>
+          <el-tag effect="plain" type="info" size="small">v{{ appVersion }}</el-tag>
           <span v-if="currentUser" class="account-name">{{ currentUser.username }}</span>
           <el-button-group class="locale-switch" size="small">
             <el-button :type="locale === 'en' ? 'primary' : 'default'" @click="setLocale('en')">English</el-button>
@@ -165,7 +166,7 @@ onUnmounted(() => {
                 { code: 'M0', title: 'Platform foundation', detail: 'Django API, Vue Studio, PostgreSQL, Worker and Compose' },
                 { code: 'M1', title: 'Agent runtime', detail: 'Published Agent versions and asynchronous LLM runs' },
                 { code: 'M2', title: 'Workflow engine', detail: 'Versioned DAG, LLM/Condition nodes and persisted steps' },
-                { code: 'M3', title: 'Dual-agent control', detail: 'EPH and Target Cluster enrollment, command leases and approval gate' }
+                { code: 'M3', title: 'Multi-agent control', detail: 'Cloud Control, Target and EPH agents: enrollment, command leases and approval gate' }
               ]"
               :key="item.code"
               class="milestone"

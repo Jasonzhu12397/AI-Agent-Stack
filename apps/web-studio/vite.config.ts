@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
+const packageJson = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+) as { version: string };
+
 export default defineConfig({
   plugins: [vue()],
+  // The shell header shows the shipped version, so it cannot drift from the build.
+  define: { __APP_VERSION__: JSON.stringify(packageJson.version) },
   resolve: {
     alias: [
       {

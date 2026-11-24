@@ -34,15 +34,15 @@ export const HELP_LINKS: { label: string; href: string }[] = [
   },
   {
     label: "Platform documentation",
-    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/tree/feature/dual-agent-control-plane/docs",
+    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/tree/main/docs",
   },
   {
     label: "Settings center contract",
-    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/settings-center-contract.md",
+    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/main/docs/settings-center-contract.md",
   },
   {
     label: "Verification matrix",
-    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/feature/dual-agent-control-plane/docs/verification-matrix.md",
+    href: "https://github.com/Jasonzhu12397/AI-Agent-Stack/blob/main/docs/verification-matrix.md",
   },
 ];
 
