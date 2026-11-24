@@ -178,6 +178,7 @@ def publish_via_git(payload: str) -> None:
 
     worktree = Path("/tmp/codespace-status")
     try:
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=str(REPO_ROOT), check=True)
         subprocess.run(
             ["git", "worktree", "add", "--force", "--detach", str(worktree), f"origin/{BRANCH}"],
             cwd=str(REPO_ROOT),

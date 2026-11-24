@@ -8,6 +8,7 @@ Every step is idempotent, which makes repeated attaches cheap.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +20,8 @@ DB_PATH = DATA_DIR / "console.db"
 
 
 def main() -> None:
-    env = {"PYTHONUNBUFFERED": "1"}
+    # Keep the inherited environment: git and gh need HOME and PATH to work.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     if not DB_PATH.exists():
         print("preparing environment (first run)", flush=True)
         subprocess.run(

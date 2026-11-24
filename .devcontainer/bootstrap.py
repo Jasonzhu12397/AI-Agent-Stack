@@ -11,16 +11,55 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 PLATFORM_API = REPO_ROOT / "apps" / "platform-api"
 WEB_STUDIO = REPO_ROOT / "apps" / "web-studio"
 DATA_DIR = REPO_ROOT / ".devdata"
 
 
+LOG_PATH = DATA_DIR / "bootstrap.log"
+
+
+def log(message: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    line = f"{stamp} {message}"
+    print(line, flush=True)
+    with LOG_PATH.open("a") as handle:
+        handle.write(line + "\n")
+
+
+def report(stage: str, ok: bool = False) -> None:
+    """Publish progress so a failing setup is diagnosable from outside."""
+
+    try:
+        sys.path.insert(0, str(HERE))
+        import healthcheck
+
+        healthcheck.publish(
+            {
+                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "stage": stage,
+                "ok": ok,
+                "bootstrap_log": log_tail(),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - reporting must never break setup
+        log(f"report failed: {type(exc).__name__}: {exc}")
+
+
+def log_tail(lines: int = 15) -> list[str]:
+    if not LOG_PATH.exists():
+        return []
+    return LOG_PATH.read_text(errors="replace").splitlines()[-lines:]
+
+
 def run(command: list[str], *, cwd: Path, env: dict | None = None) -> None:
-    print("+", " ".join(command), flush=True)
+    log("+ " + " ".join(command))
     subprocess.run(command, cwd=str(cwd), env={**os.environ, **(env or {})}, check=True)
 
 
@@ -65,11 +104,16 @@ def seed() -> None:
 
 
 def main() -> None:
+    report("starting")
     install_python()
+    report("python-deps")
     install_frontend()
+    report("frontend-deps")
     migrate()
+    report("migrated")
     seed()
-    print("codespace prepared: run `python3 .devcontainer/start.py` to serve the console")
+    report("seeded")
+    log("codespace prepared: run `python3 .devcontainer/start.py` to serve the console")
 
 
 if __name__ == "__main__":
