@@ -91,3 +91,14 @@ def test_workspace_key_resolves_for_any_member(workspace, monkeypatch):
     monkeypatch.setenv(PLATFORM_ENV, "sk-workspace")
     user, _, _ = workspace
     assert resolve_credential("env://" + PLATFORM_ENV, user) == "sk-workspace"
+
+
+def test_catalogue_exposes_the_vendor_console_for_each_platform():
+    """The authorize dialog links to the vendor page, so the URL must be data."""
+
+    from core.provider_accounts import catalogue
+
+    presets = {row["key"]: row for row in catalogue()}
+    assert presets["openai"]["console_url"] == "https://platform.openai.com/api-keys"
+    for key, row in presets.items():
+        assert row["console_url"].startswith("https://"), key

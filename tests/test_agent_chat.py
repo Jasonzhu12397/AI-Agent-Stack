@@ -206,3 +206,24 @@ def test_other_tenant_cannot_read_a_thread(chat_workspace):
     other = APIClient()
     other.force_authenticate(user=outsider)
     assert other.get(f"/api/v1/agent-chat/threads/{thread['id']}/").status_code == 404
+
+
+@pytest.mark.django_db
+def test_context_reports_whether_a_plugin_still_needs_authorization(chat_workspace):
+    """The composer disables an unauthorized connector and offers the authorize jump."""
+
+    user, tenant, project, _model, installation = chat_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-chat/context/"
+
+    unauthorized = client.get(url)
+    assert unauthorized.status_code == 200, unauthorized.content
+    row = unauthorized.json()["plugins"][0]
+    assert row["auth_required"] is True
+    assert row["credential_configured"] is False
+
+    installation.credential_ref = "env://PLUGIN_SECRET_OPS_AGENT_TOKEN"
+    installation.save(update_fields=["credential_ref"])
+    authorized = client.get(url).json()["plugins"][0]
+    assert authorized["credential_configured"] is True

@@ -124,7 +124,7 @@ onMounted(() => void refresh());
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
     <p class="robot-hint">
-      钉钉、企业微信群、飞书群机器人各一条 Webhook；地址与加签密钥加密存储，只显示是否已送达。
+      One webhook each for DingTalk, WeCom and Feishu group robots. Addresses and signing secrets are stored encrypted; only delivery status is shown.
     </p>
     <el-table v-loading="loading" :data="rows" size="small" :border="false">
       <el-table-column :label="t('Channel')" width="180">
@@ -147,7 +147,7 @@ onMounted(() => void refresh());
         </template>
       </el-table-column>
     </el-table>
-    <p v-if="!rows.length && !loading" class="muted">还没有群机器人，先加一个钉钉或企微群。</p>
+    <p v-if="!rows.length && !loading" class="muted">No group robot yet. Add a DingTalk or WeCom group first.</p>
 
     <el-dialog v-model="dialogOpen" :title="t('Add robot')" width="560px">
       <el-form label-position="top">

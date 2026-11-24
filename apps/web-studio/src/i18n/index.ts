@@ -88,8 +88,10 @@ function translateAttributes(element: Element): void {
 }
 
 function translateElement(element: Element): void {
-  if (SKIP_TAGS.has(element.tagName)) return;
+  // Attributes still localize on skipped tags: a textarea's placeholder is copy,
+  // not user input, and leaving it English breaks the switch.
   translateAttributes(element);
+  if (SKIP_TAGS.has(element.tagName)) return;
   for (const child of Array.from(element.childNodes)) {
     if (child.nodeType === Node.TEXT_NODE) translateTextNode(child as Text);
     else if (child.nodeType === Node.ELEMENT_NODE) translateElement(child as Element);

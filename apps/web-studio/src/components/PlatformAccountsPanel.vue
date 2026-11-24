@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { t } from "../i18n";
 import {
   createAccountProvider,
   exchangeProviderOAuth,
@@ -33,6 +34,10 @@ const info = ref("");
 
 const dialogOpen = ref(false);
 const dialogPreset = ref("");
+const dialogPresetInfo = computed(() =>
+  (catalog.value?.presets ?? []).find((item) => item.key === dialogPreset.value) ?? null,
+);
+const dialogConsoleUrl = computed(() => dialogPresetInfo.value?.console_url ?? "");
 const credential = ref("");
 const accountLabel = ref("");
 const saving = ref(false);
@@ -283,7 +288,17 @@ defineExpose({ openPreset: openDialog });
     <el-dialog v-model="dialogOpen" title="Authorize a platform account" width="460px">
       <el-form label-position="top">
         <el-form-item label="Platform">
-          <el-input :model-value="dialogPreset" disabled />
+          <el-input :model-value="dialogPresetInfo?.label ?? dialogPreset" disabled />
+          <el-link
+            v-if="dialogConsoleUrl"
+            :href="dialogConsoleUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            type="primary"
+            class="hint"
+          >
+            {{ t("Open the platform console to authorize") }} ↗
+          </el-link>
         </el-form-item>
         <el-form-item label="Account access credential">
           <el-input

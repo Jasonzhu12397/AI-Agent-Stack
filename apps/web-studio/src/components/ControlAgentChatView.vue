@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { t } from "../i18n";
 import {
   apiErrorCode,
   createChatThread,
@@ -178,6 +179,12 @@ function pluginKey(pluginId: string): string {
   return context.value?.plugins.find((item) => item.id === pluginId)?.key ?? "";
 }
 
+// A connector that declares auth cannot run until its installation carries a
+// credential reference, so the row offers authorization instead of selection.
+function pluginNeedsAuth(plugin: { auth_required?: boolean; credential_configured?: boolean }): boolean {
+  return Boolean(plugin.auth_required) && !plugin.credential_configured;
+}
+
 function openProviderAccounts(): void {
   void router.push({ path: "/marketplace", query: { provider: "openai" } });
 }
@@ -285,7 +292,7 @@ watch(
             <p class="bubble-body">{{ message.content }}</p>
             <div v-if="message.context.skills?.length || message.context.plugins?.length" class="bubble-context">
               <el-tag v-for="skill in message.context.skills ?? []" :key="skill" size="small" effect="plain">
-                skill · {{ skill }}
+                {{ t("Skill") }} · {{ skill }}
               </el-tag>
               <el-tag
                 v-for="plugin in message.context.plugins ?? []"
@@ -294,7 +301,7 @@ watch(
                 type="success"
                 effect="plain"
               >
-                plugin · {{ pluginName(plugin) }}
+                {{ t("Plugin") }} · {{ pluginName(plugin) }}
               </el-tag>
             </div>
           </article>
@@ -309,7 +316,7 @@ watch(
               closable
               @close="toggleSkill(skill)"
             >
-              技能 · {{ skillName(skill) }}
+              {{ t("Skill") }} · {{ skillName(skill) }}
             </el-tag>
             <el-tag
               v-for="plugin in selectedPlugins"
@@ -319,7 +326,7 @@ watch(
               closable
               @close="togglePlugin(plugin)"
             >
-              插件 · {{ pluginName(plugin) }}
+              {{ t("Plugin") }} · {{ pluginName(plugin) }}
             </el-tag>
           </div>
           <el-input
@@ -333,11 +340,11 @@ watch(
           <div class="composer-actions">
             <div class="composer-pickers">
               <span class="picker-label" title="Project in scope">
-                项目 · {{ context?.project.name ?? "—" }}
+                {{ t("Project") }} · {{ context?.project.name ?? "—" }}
               </span>
               <el-popover placement="top" trigger="click" :width="320">
                 <template #reference>
-                  <el-button size="small" text>技能 ({{ selectedSkills.length }})</el-button>
+                  <el-button size="small" text>{{ t("Skills") }} ({{ selectedSkills.length }})</el-button>
                 </template>
                 <p class="popover-title">Skills granted by installed plugins</p>
                 <div v-for="skill in context?.skills ?? []" :key="skill.id" class="popover-row">
@@ -352,12 +359,13 @@ watch(
               </el-popover>
               <el-popover placement="top" trigger="click" :width="340">
                 <template #reference>
-                  <el-button size="small" text>插件 ({{ selectedPlugins.length }})</el-button>
+                  <el-button size="small" text>{{ t("Plugins") }} ({{ selectedPlugins.length }})</el-button>
                 </template>
                 <p class="popover-title">Plugins installed in this project</p>
                 <div v-for="plugin in context?.plugins ?? []" :key="plugin.id" class="popover-row">
                   <el-checkbox
                     :model-value="selectedPlugins.includes(plugin.id)"
+                    :disabled="pluginNeedsAuth(plugin)"
                     @change="togglePlugin(plugin.id)"
                   >
                     {{ plugin.name }} · {{ plugin.version }}
@@ -366,9 +374,10 @@ watch(
                     text
                     size="small"
                     class="popover-open"
+                    :type="pluginNeedsAuth(plugin) ? 'warning' : ''"
                     @click="openPlugin(plugin.key)"
                   >
-                    打开 ↗
+                    {{ pluginNeedsAuth(plugin) ? t("Authorize") : t("Open") }} ↗
                   </el-button>
                 </div>
                 <p v-if="!(context?.plugins ?? []).length" class="rail-empty">No plugin installed yet.</p>

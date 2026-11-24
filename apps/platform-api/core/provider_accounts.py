@@ -28,6 +28,7 @@ from core.models import ModelProvider, ProviderAccountLink, ProviderAccountUsage
 #: serves all of them and a new platform is a line in this table.
 PROVIDER_PRESETS: dict[str, dict] = {
     "openai": {
+        "console_url": "https://platform.openai.com/api-keys",
         "platform_env": "PLATFORM_OPENAI_KEY",
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
@@ -38,6 +39,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "google": {
+        "console_url": "https://aistudio.google.com/app/apikey",
         "platform_env": "PLATFORM_GOOGLE_KEY",
         "label": "Google Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -48,6 +50,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "deepseek": {
+        "console_url": "https://platform.deepseek.com/api_keys",
         "platform_env": "PLATFORM_DEEPSEEK_KEY",
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
@@ -57,6 +60,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "zhipu": {
+        "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
         "platform_env": "PLATFORM_ZHIPU_KEY",
         "label": "智谱 GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -66,6 +70,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "moonshot": {
+        "console_url": "https://platform.moonshot.cn/console/api-keys",
         "platform_env": "PLATFORM_MOONSHOT_KEY",
         "label": "Moonshot Kimi",
         "base_url": "https://api.moonshot.cn/v1",
@@ -75,6 +80,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "minimax": {
+        "console_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
         "platform_env": "PLATFORM_MINIMAX_KEY",
         "label": "MiniMax",
         "base_url": "https://api.minimax.chat/v1",
@@ -84,6 +90,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "qwen": {
+        "console_url": "https://bailian.console.aliyun.com/?apiKey=1#/api-key",
         "platform_env": "PLATFORM_QWEN_KEY",
         "label": "Qwen",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -94,6 +101,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "openrouter": {
+        "console_url": "https://openrouter.ai/keys",
         "platform_env": "PLATFORM_OPENROUTER_KEY",
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
@@ -192,6 +200,9 @@ def catalogue() -> list[dict]:
             "key": key,
             "label": preset["label"],
             "base_url": preset["base_url"],
+            #: The platform page that issues an API key, so the dialog can send
+            #: the member to the vendor UI instead of leaving them to guess.
+            "console_url": preset.get("console_url", ""),
             "models": [dict(item) for item in preset["models"]],
             #: True when the platform can grant access itself, so the console
             #: offers "Authorize" instead of asking for a pasted key.

@@ -277,6 +277,10 @@ class AgentChatContextView(APIView):
                     "name": installation.plugin.name,
                     "version": installation.plugin_version,
                     "protocol": installation.plugin.protocol,
+                    # The composer marks a plugin that still needs a credential so
+                    # the member can jump straight to its authorization form.
+                    "auth_required": bool(installation.plugin.auth_required),
+                    "credential_configured": bool(installation.credential_ref),
                 }
             )
             for capability in installation.granted_capabilities or []:

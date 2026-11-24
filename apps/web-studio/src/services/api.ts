@@ -40,6 +40,8 @@ export type ProviderPreset = {
   models: { model_name: string; display_name: string }[];
   //: Platforms that can grant access themselves offer a one-click flow.
   oauth?: boolean;
+  //: Vendor page that issues an API key, opened from the authorize dialog.
+  console_url?: string;
 };
 export type ProviderCatalog = {
   presets: ProviderPreset[];
@@ -2241,7 +2243,15 @@ export type ChatContext = {
   project: ChatContextItem;
   projects: ChatContextItem[];
   skills: ChatContextItem[];
-  plugins: (ChatContextItem & { key: string; version: string; protocol: string })[];
+  plugins: (ChatContextItem & {
+    key: string;
+    version: string;
+    protocol: string;
+    /** The plugin connector cannot run until a credential reference is bound. */
+    auth_required?: boolean;
+    /** True once the installation points at a credential reference. */
+    credential_configured?: boolean;
+  })[];
   models: ChatModelOption[];
 };
 export type ChatMessage = {
