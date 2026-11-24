@@ -8,16 +8,18 @@ only the scheme and the variable name are shown, never the secret.
 
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/workspaces/AI-Agent-Stack/apps/platform-api")
-sys.path.insert(0, "/workspaces/AI-Agent-Stack")
+#: Resolve the checkout from this file, so the probe reads the same database
+#: the console writes to even if the codespace folder name differs.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "apps" / "platform-api"))
+sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "platform_api.settings")
 # The console runs on a sqlite file under .devdata; without this the probe
 # would try the default Postgres settings and report a connection error.
-os.environ.setdefault(
-    "DATABASE_URL", "sqlite:////workspaces/AI-Agent-Stack/.devdata/console.db"
-)
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{REPO_ROOT / '.devdata' / 'console.db'}")
 os.environ.setdefault("SECRET_KEY", "codespace-demo-secret-key-not-for-production-use")
 
 import django  # noqa: E402
@@ -40,6 +42,7 @@ def describe(reference):
     return f"raw/<no-scheme> len={len(reference)}"
 
 
+print(f"== db == {os.environ['DATABASE_URL']} exists={Path(os.environ['DATABASE_URL'][len('sqlite:///'):]).exists()}")
 print("== providers ==")
 for provider in ModelProvider.objects.select_related("tenant").order_by("name"):
     print(
