@@ -98,6 +98,8 @@ from core.plugin_views import (
 from core.mcp_views import PluginConnectionToolSyncView
 from core.model_views import (
     ModelConfigListCreateView,
+    ModelProviderAccountView,
+    ModelProviderCatalogView,
     ModelProviderListCreateView,
     ModelTestView,
 )
@@ -596,6 +598,16 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/model-providers/",
         ModelProviderListCreateView.as_view(),
         name="model-provider-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/model-providers/catalog/",
+        ModelProviderCatalogView.as_view(),
+        name="model-provider-catalog",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/model-providers/<uuid:provider_id>/account/",
+        ModelProviderAccountView.as_view(),
+        name="model-provider-account",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/model-providers/<uuid:provider_id>/models/",

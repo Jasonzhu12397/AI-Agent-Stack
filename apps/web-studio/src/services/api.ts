@@ -9,13 +9,35 @@ export type CurrentUser = {
 
 export type Tenant = { id: string; name: string; slug: string };
 export type Project = { id: string; tenant_id: string; name: string; slug: string };
+export type ProviderAccount = {
+  linked: boolean;
+  account_label?: string;
+  linked_at?: string | null;
+  free_daily_tokens: number;
+  used_today: number;
+  remaining_today: number;
+  exhausted: boolean;
+};
 export type ModelProvider = {
   id: string;
   name: string;
   provider_type: string;
+  auth_mode: "tenant_secret" | "user_account";
+  preset_key: string;
   base_url: string;
   credential_configured: boolean;
+  account: ProviderAccount | null;
   enabled: boolean;
+};
+export type ProviderPreset = {
+  key: string;
+  label: string;
+  base_url: string;
+  models: { model_name: string; display_name: string }[];
+};
+export type ProviderCatalog = {
+  presets: ProviderPreset[];
+  free_daily_tokens: number;
 };
 export type ModelConfig = {
   id: string;
@@ -2051,5 +2073,54 @@ export function getProjectAgentCapabilities(
 ): Promise<AgentCapabilityResponse> {
   return request(
     "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-capabilities/",
+  );
+}
+
+
+export function getProviderCatalog(tenantId: string): Promise<ProviderCatalog> {
+  return request<ProviderCatalog>(
+    `/api/v1/tenants/${tenantId}/model-providers/catalog/`,
+  );
+}
+
+export function createAccountProvider(
+  tenantId: string,
+  presetKey: string,
+  name: string,
+): Promise<ModelProvider> {
+  return request<ModelProvider>(`/api/v1/tenants/${tenantId}/model-providers/`, {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      provider_type: "openai_compatible",
+      auth_mode: "user_account",
+      preset_key: presetKey,
+      config: {},
+    }),
+  });
+}
+
+export function linkProviderAccount(
+  tenantId: string,
+  providerId: string,
+  credentialRef: string,
+  accountLabel = "",
+): Promise<ProviderAccount> {
+  return request<ProviderAccount>(
+    `/api/v1/tenants/${tenantId}/model-providers/${providerId}/account/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ credential_ref: credentialRef, account_label: accountLabel }),
+    },
+  );
+}
+
+export function unlinkProviderAccount(
+  tenantId: string,
+  providerId: string,
+): Promise<ProviderAccount> {
+  return request<ProviderAccount>(
+    `/api/v1/tenants/${tenantId}/model-providers/${providerId}/account/`,
+    { method: "DELETE" },
   );
 }

@@ -9,6 +9,7 @@ from core.models import ModelConfig, ModelProvider
 
 class ModelProviderReadSerializer(serializers.ModelSerializer):
     credential_configured = serializers.SerializerMethodField()
+    account = serializers.SerializerMethodField()
 
     class Meta:
         model = ModelProvider
@@ -16,8 +17,11 @@ class ModelProviderReadSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "provider_type",
+            "auth_mode",
+            "preset_key",
             "base_url",
             "credential_configured",
+            "account",
             "enabled",
             "created_at",
         ]
@@ -25,6 +29,20 @@ class ModelProviderReadSerializer(serializers.ModelSerializer):
 
     def get_credential_configured(self, obj):
         return bool(obj.credential_ref)
+
+    def get_account(self, obj):
+        """Link state and free allowance for the requesting member, when asked."""
+
+        context = self.context or {}
+        user = context.get("account_user")
+        if obj.auth_mode != ModelProvider.AuthMode.USER_ACCOUNT or user is None:
+            return None
+        from core import provider_accounts
+
+        link = provider_accounts.active_link(user, obj)
+        payload = provider_accounts.describe_account(link)
+        payload.update(provider_accounts.quota_snapshot(user, obj))
+        return payload
 
 
 def contains_secret_key(value):
@@ -54,13 +72,60 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ModelProvider
-        fields = ["name", "provider_type", "base_url", "credential_ref", "config"]
+        fields = [
+            "name",
+            "provider_type",
+            "auth_mode",
+            "preset_key",
+            "base_url",
+            "credential_ref",
+            "config",
+        ]
 
     def validate(self, attrs):
         provider_type = attrs.get("provider_type")
+        auth_mode = attrs.get("auth_mode") or ModelProvider.AuthMode.TENANT_SECRET
+        preset_key = attrs.get("preset_key", "")
         base_url = attrs.get("base_url", "")
         credential_ref = attrs.get("credential_ref", "")
         config = attrs.get("config", {})
+        attrs["auth_mode"] = auth_mode
+        if auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
+            # An account-billed provider is a preset entry: the member's own
+            # credential arrives per call from their link, never on this row.
+            from core import provider_accounts
+
+            try:
+                preset = provider_accounts.preset_for(preset_key)
+            except provider_accounts.ProviderAccountError as exc:
+                raise serializers.ValidationError({"preset_key": str(exc)}) from exc
+            attrs["base_url"] = base_url or preset["base_url"]
+            attrs["credential_ref"] = ""
+            if credential_ref:
+                raise serializers.ValidationError(
+                    {"credential_ref": "Account providers never store a tenant credential."}
+                )
+            if provider_type not in (None, ModelProvider.ProviderType.OPENAI_COMPATIBLE):
+                raise serializers.ValidationError(
+                    {"provider_type": "Account providers use the OpenAI-compatible transport."}
+                )
+            attrs["provider_type"] = ModelProvider.ProviderType.OPENAI_COMPATIBLE
+            base_url = attrs["base_url"]
+            parsed = urlsplit(base_url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username:
+                raise serializers.ValidationError(
+                    {"base_url": "Account providers call a public HTTPS platform endpoint."}
+                )
+            expected = preset["base_url"]
+            if base_url.rstrip("/") != expected.rstrip("/"):
+                raise serializers.ValidationError(
+                    {"base_url": f"The {preset['label']} preset is fixed at {expected}."}
+                )
+            return attrs
+        elif preset_key:
+            raise serializers.ValidationError(
+                {"preset_key": "Only account-billed providers carry a platform preset."}
+            )
         if not isinstance(config, dict):
             raise serializers.ValidationError({"config": "Config must be a JSON object."})
         if contains_secret_key(config):
@@ -106,15 +171,15 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"base_url": "Provider URL contains unsupported components."}
                 )
-            if local_http and credential_ref and not re.fullmatch(
-                r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref
+            if (
+                local_http
+                and credential_ref
+                and not re.fullmatch(r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref)
             ):
                 raise serializers.ValidationError(
                     {"credential_ref": "Use an environment reference such as env:LOCAL_MODEL_KEY."}
                 )
-            if remote_https and not re.fullmatch(
-                r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref
-            ):
+            if remote_https and not re.fullmatch(r"env:[A-Z][A-Z0-9_]{0,127}", credential_ref):
                 raise serializers.ValidationError(
                     {"credential_ref": "Remote providers require an env: credential reference."}
                 )

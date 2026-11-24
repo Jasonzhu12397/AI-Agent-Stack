@@ -81,8 +81,31 @@ def _is_local_http_provider(provider):
 
 
 class ModelGateway:
-    def __init__(self, guard=None):
+    def __init__(self, guard=None, account=None):
         self._guard = guard
+        self._account = account
+
+    def _guard_for(self, provider):
+        """Pick the billed pool for this provider.
+
+        Account providers spend the member's free allowance, everything else
+        spends the tenant's purchased balance, so a deployment never has to
+        guess which ledger a call belongs to.
+        """
+
+        if getattr(provider, "auth_mode", "") == ModelProvider.AuthMode.USER_ACCOUNT:
+            return self._require_account()
+        return self._require_guard()
+
+    def _require_account(self):
+        account = self._account
+        if account is None or not getattr(account, "authorized", False):
+            raise ModelGatewayError(
+                "PROVIDER_ACCOUNT_NOT_LINKED",
+                "Link your own account on this platform before calling its models.",
+                retryable=False,
+            )
+        return account
 
     def _require_guard(self):
         if self._guard is None or not getattr(self._guard, "authorized", False):
@@ -107,7 +130,10 @@ class ModelGateway:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
         for message in messages:
             if not isinstance(message, dict) or message.get("role") not in {
-                "system", "user", "assistant", "tool"
+                "system",
+                "user",
+                "assistant",
+                "tool",
             }:
                 raise ModelGatewayError(
                     "INVALID_MESSAGES",
@@ -143,9 +169,7 @@ class ModelGateway:
         elif tool_choice is not None:
             raise ModelGatewayError("INVALID_TOOL_CHOICE", "tool_choice requires a tools list.")
         if max_tokens is not None and (
-            not isinstance(max_tokens, int)
-            or isinstance(max_tokens, bool)
-            or max_tokens < 1
+            not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1
         ):
             raise ModelGatewayError("INVALID_MAX_TOKENS", "max_tokens must be a positive integer.")
         if (
@@ -155,6 +179,10 @@ class ModelGateway:
         ):
             raise ModelGatewayError("INVALID_TIMEOUT", "timeout_seconds must be positive.")
         provider = model_config.provider
+        credential_ref = provider.credential_ref
+        if getattr(provider, "auth_mode", "") == ModelProvider.AuthMode.USER_ACCOUNT:
+            account = self._require_account()
+            credential_ref = account.credential_ref
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
         effective_max_tokens = min(
@@ -185,7 +213,7 @@ class ModelGateway:
                 "MODEL_CONTEXT_WINDOW_EXCEEDED",
                 "The estimated prompt and reserved output exceed the model context window.",
             )
-        guard = self._require_guard()
+        guard = self._guard_for(provider)
         requested_tokens = estimated_input_tokens + effective_max_tokens
         reservation = guard.reserve(
             idempotency_key=idempotency_key,
@@ -216,9 +244,8 @@ class ModelGateway:
                     raise ModelGatewayError(
                         "PROVIDER_UNSUPPORTED", "The provider type is not supported."
                     )
-                if (
-                    urlsplit(provider.base_url).scheme == "http"
-                    and not _is_local_http_provider(provider)
+                if urlsplit(provider.base_url).scheme == "http" and not _is_local_http_provider(
+                    provider
                 ):
                     raise ModelGatewayError(
                         "LOCAL_MODEL_HOST_NOT_ALLOWED",
@@ -231,13 +258,10 @@ class ModelGateway:
                         "model": model_config.model_name,
                         "messages": messages,
                         "max_tokens": effective_max_tokens,
-                        **(
-                            {"tools": tools, "tool_choice": tool_choice or "auto"}
-                            if tools
-                            else {}
-                        ),
+                        **({"tools": tools, "tool_choice": tool_choice or "auto"} if tools else {}),
                     },
                     timeout_seconds,
+                    credential_ref=credential_ref,
                 )
                 try:
                     message = payload["choices"][0]["message"]
@@ -298,8 +322,10 @@ class ModelGateway:
         return response
 
     def embed(self, model_config, inputs, timeout_seconds=45, idempotency_key=None):
-        if not isinstance(inputs, list) or not inputs or any(
-            not isinstance(item, str) or not item.strip() for item in inputs
+        if (
+            not isinstance(inputs, list)
+            or not inputs
+            or any(not isinstance(item, str) or not item.strip() for item in inputs)
         ):
             raise ModelGatewayError(
                 "INVALID_EMBEDDING_INPUT",
@@ -316,6 +342,10 @@ class ModelGateway:
                 "and 256 KiB total UTF-8 input.",
             )
         provider = model_config.provider
+        credential_ref = provider.credential_ref
+        if getattr(provider, "auth_mode", "") == ModelProvider.AuthMode.USER_ACCOUNT:
+            account = self._require_account()
+            credential_ref = account.credential_ref
         if not provider.enabled or not model_config.enabled:
             raise ModelGatewayError("MODEL_DISABLED", "The selected model is disabled.")
         if "embeddings" not in (model_config.capabilities or []):
@@ -348,6 +378,7 @@ class ModelGateway:
                 "embeddings",
                 {"model": model_config.model_name, "input": inputs},
                 timeout_seconds,
+                credential_ref=credential_ref,
             )
             try:
                 rows = payload["data"]
@@ -384,7 +415,7 @@ class ModelGateway:
             latency_ms=int((time.monotonic() - started) * 1000),
         )
 
-    def _post_json(self, provider, endpoint, body, timeout_seconds):
+    def _post_json(self, provider, endpoint, body, timeout_seconds, credential_ref=None):
         parsed = urlsplit(provider.base_url)
         is_local_http = parsed.scheme == "http" and _is_local_http_provider(provider)
         if parsed.scheme != "https" and not is_local_http:
@@ -393,8 +424,9 @@ class ModelGateway:
                 "Model endpoints must use HTTPS or an allowlisted local HTTP endpoint.",
             )
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if provider.credential_ref:
-            credential = resolve_credential(provider.credential_ref)
+        credential_ref = credential_ref or provider.credential_ref
+        if credential_ref:
+            credential = resolve_credential(credential_ref)
             headers["Authorization"] = f"Bearer {credential}"
         elif not is_local_http:
             raise ModelGatewayError(

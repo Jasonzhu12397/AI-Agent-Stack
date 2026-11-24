@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -159,8 +160,27 @@ class ModelProvider(models.Model):
         on_delete=models.PROTECT,
         related_name="created_model_providers",
     )
+    class AuthMode(models.TextChoices):
+        """Who pays for the calls this provider serves.
+
+        ``tenant_secret`` is the platform-issued key billed against the tenant
+        pool. ``user_account`` means the caller brings their own account for
+        the upstream platform: the provider is only a catalogue entry, the
+        credential belongs to a linked user, and calls draw on that user's
+        free allowance instead of the tenant's purchased balance.
+        """
+
+        TENANT_SECRET = "tenant_secret", "Tenant credential"
+        USER_ACCOUNT = "user_account", "Linked user account"
+
     name = models.CharField(max_length=120)
     provider_type = models.CharField(max_length=32, choices=ProviderType.choices)
+    auth_mode = models.CharField(
+        max_length=32,
+        choices=AuthMode.choices,
+        default=AuthMode.TENANT_SECRET,
+    )
+    preset_key = models.CharField(max_length=32, blank=True, default="")
     base_url = models.URLField(max_length=500, blank=True)
     credential_ref = models.CharField(max_length=160, blank=True)
     config = models.JSONField(default=dict)
@@ -213,6 +233,94 @@ class ModelConfig(models.Model):
                 name="uniq_model_config_version",
             )
         ]
+
+
+class ProviderAccountLink(models.Model):
+    """A user's own account on an upstream model platform.
+
+    Nothing secret lives here: the row records that the user proved ownership
+    of the account, which credential reference their calls should resolve, and
+    whether the link is still active. Revoking keeps the row so audit history
+    survives, which is why the uniqueness constraint only covers active links.
+    """
+
+    class Status(models.TextChoices):
+        LINKED = "linked", "Linked"
+        REVOKED = "revoked", "Revoked"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="provider_account_links",
+    )
+    provider = models.ForeignKey(
+        ModelProvider,
+        on_delete=models.CASCADE,
+        related_name="account_links",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.LINKED)
+    account_label = models.CharField(max_length=120, blank=True, default="")
+    credential_ref = models.CharField(max_length=160, blank=True)
+    linked_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-linked_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "provider"],
+                condition=Q(status="linked"),
+                name="uniq_active_provider_account_link",
+            )
+        ]
+        indexes = [models.Index(fields=["user", "status"])]
+
+
+class ProviderAccountUsage(models.Model):
+    """Free-allowance ledger for calls made with a linked user account.
+
+    Separate from the tenant ledger on purpose: a free call must never move the
+    tenant's purchased balance, and a purchased call must never be reported as
+    free usage. ``idempotency_key`` mirrors the tenant ledger so retries settle
+    the same row instead of double-counting.
+    """
+
+    class Status(models.TextChoices):
+        RESERVED = "reserved", "Reserved"
+        SETTLED = "settled", "Settled"
+        RELEASED = "released", "Released"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="provider_account_usages",
+    )
+    provider = models.ForeignKey(
+        ModelProvider,
+        on_delete=models.CASCADE,
+        related_name="account_usages",
+    )
+    idempotency_key = models.CharField(max_length=160)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.RESERVED)
+    reserved_tokens = models.BigIntegerField(default=0)
+    consumed_tokens = models.BigIntegerField(default=0)
+    expires_at = models.DateTimeField()
+    settled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "provider", "idempotency_key"],
+                name="uniq_provider_account_usage_key",
+            )
+        ]
+        indexes = [models.Index(fields=["user", "provider", "settled_at"])]
 
 
 class AgentDefinition(models.Model):

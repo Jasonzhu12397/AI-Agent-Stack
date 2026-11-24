@@ -201,7 +201,25 @@ def contract_exception_handler(exc, context):
     if isinstance(response.data, dict) and "error" in response.data:
         return response
     if isinstance(exc, APIException):
-        code = (getattr(exc, "default_code", None) or "error").upper()
+        generic = {
+            "invalid",
+            "parse_error",
+            "not_acceptable",
+            "unsupported_media_type",
+            "method_not_allowed",
+            "not_found",
+            "permission_denied",
+            "not_authenticated",
+            "authentication_failed",
+            "throttled",
+        }
+        default_code = (getattr(exc, "default_code", None) or "error").lower()
+        # Validation, parse and method failures share one stable code per
+        # status so a client sees INVALID_REQUEST rather than INVALID.
+        if default_code in generic:
+            code = STATUS_ERROR_CODES.get(response.status_code, default_code.upper())
+        else:
+            code = default_code.upper()
         details = _extract_details(exc)
         detail = getattr(exc, "detail", None)
         if isinstance(detail, (dict, list)):
