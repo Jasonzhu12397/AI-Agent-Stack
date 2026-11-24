@@ -114,21 +114,7 @@ class ModelProviderListCreateView(APIView):
 
 
 def _seed_preset_models(provider):
-    """Publish the preset's models so a linked member has something to call."""
-
-    preset = provider_accounts.PROVIDER_PRESETS.get(provider.preset_key) or {"models": []}
-    for item in preset["models"]:
-        ModelConfig.objects.get_or_create(
-            provider=provider,
-            model_name=item["model_name"],
-            version=1,
-            defaults={
-                "display_name": item["display_name"],
-                "capabilities": ["chat", "tools"],
-                "input_cost_per_million": 0,
-                "output_cost_per_million": 0,
-            },
-        )
+    provider_accounts.seed_preset_models(provider)
 
 
 class ModelConfigListCreateView(APIView):

@@ -36,6 +36,8 @@ export type ProviderPreset = {
   label: string;
   base_url: string;
   models: { model_name: string; display_name: string }[];
+  //: Platforms that can grant access themselves offer a one-click flow.
+  oauth?: boolean;
 };
 export type ProviderCatalog = {
   presets: ProviderPreset[];
@@ -2134,6 +2136,31 @@ export function getProjectAgentCapabilities(
 export function getProviderCatalog(tenantId: string): Promise<ProviderCatalog> {
   return request<ProviderCatalog>(
     `/api/v1/tenants/${tenantId}/model-providers/catalog/`,
+  );
+}
+
+export type ProviderOAuthStart = { authorization_url: string; state: string };
+
+export function startProviderOAuth(
+  tenantId: string,
+  presetKey: string,
+  redirectUri: string,
+): Promise<ProviderOAuthStart> {
+  return request<ProviderOAuthStart>(
+    `/api/v1/tenants/${tenantId}/model-providers/oauth/${presetKey}/start/`,
+    { method: "POST", body: JSON.stringify({ redirect_uri: redirectUri }) },
+  );
+}
+
+export function exchangeProviderOAuth(
+  tenantId: string,
+  presetKey: string,
+  code: string,
+  state: string,
+): Promise<{ provider: ModelProvider; account: ProviderAccount }> {
+  return request<{ provider: ModelProvider; account: ProviderAccount }>(
+    `/api/v1/tenants/${tenantId}/model-providers/oauth/${presetKey}/exchange/`,
+    { method: "POST", body: JSON.stringify({ code, state }) },
   );
 }
 

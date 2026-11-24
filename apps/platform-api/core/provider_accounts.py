@@ -95,6 +95,25 @@ PROVIDER_PRESETS: dict[str, dict] = {
             {"model_name": "yi-lightning", "display_name": "Yi Lightning"},
         ],
     },
+    "openrouter": {
+        "label": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models": [
+            {"model_name": "openai/gpt-4o-mini", "display_name": "GPT-4o mini (via OpenRouter)"},
+            {"model_name": "openai/gpt-4o", "display_name": "GPT-4o (via OpenRouter)"},
+            {
+                "model_name": "deepseek/deepseek-chat",
+                "display_name": "DeepSeek Chat (via OpenRouter)",
+            },
+        ],
+        #: OpenRouter is the platform that can authorize an account and issue
+        #: the key itself, so the member never copies one.
+        "oauth": {
+            "authorize_url": "https://openrouter.ai/auth",
+            "key_endpoint": "https://openrouter.ai/api/v1/auth/keys",
+            "key_label": "AI Agent Studio",
+        },
+    },
     "qwen": {
         "label": "Qwen",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -110,6 +129,32 @@ PROVIDER_PRESETS: dict[str, dict] = {
 DEFAULT_FREE_DAILY_TOKENS = 50_000
 RESERVATION_TTL_SECONDS = 300
 MAX_ACCOUNT_LABEL_LENGTH = 120
+
+
+class ProviderOAuthState(models.Model):
+    """One in-flight authorization attempt for a member and a platform."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="provider_oauth_states",
+    )
+    tenant = models.ForeignKey("core.Tenant", on_delete=models.CASCADE, related_name="+")
+    preset_key = models.CharField(max_length=64)
+    state = models.CharField(max_length=128, unique=True)
+    sealed_verifier = models.TextField()
+    redirect_uri = models.TextField()
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"oauth-state:{self.preset_key}:{self.user_id}"
 
 
 class ProviderAccountError(Exception):
@@ -153,6 +198,9 @@ def catalogue() -> list[dict]:
             "label": preset["label"],
             "base_url": preset["base_url"],
             "models": [dict(item) for item in preset["models"]],
+            #: True when the platform can grant access itself, so the console
+            #: offers "Authorize" instead of asking for a pasted key.
+            "oauth": bool(preset.get("oauth")),
         }
         for key, preset in PROVIDER_PRESETS.items()
     ]
@@ -215,6 +263,68 @@ def link_account(
         credential_ref=reference,
         account_label=label,
     )
+
+
+def seed_preset_models(provider) -> int:
+    """Publish the preset's models so a linked member has something to call."""
+
+    from core.models import ModelConfig
+
+    preset = PROVIDER_PRESETS.get(provider.preset_key) or {"models": []}
+    created = 0
+    for item in preset["models"]:
+        _, made = ModelConfig.objects.get_or_create(
+            provider=provider,
+            model_name=item["model_name"],
+            version=1,
+            defaults={
+                "display_name": item["display_name"],
+                "capabilities": ["chat", "tools"],
+                "input_cost_per_million": 0,
+                "output_cost_per_million": 0,
+            },
+        )
+        created += int(made)
+    return created
+
+
+def ensure_account_provider(*, tenant, user, preset_key: str) -> ModelProvider:
+    """The member's own catalogue row for a platform, created once.
+
+    Authorization returns to a tenant where the row may not exist yet, so this
+    is the single place that decides the name, the preset and the seeded models.
+    """
+
+    preset = PROVIDER_PRESETS.get(preset_key)
+    if preset is None:
+        raise ProviderAccountError(
+            "PROVIDER_PRESET_UNKNOWN", f"No platform preset named '{preset_key}'."
+        )
+    existing = ModelProvider.objects.filter(
+        tenant=tenant,
+        created_by=user,
+        preset_key=preset_key,
+        auth_mode=ModelProvider.AuthMode.USER_ACCOUNT,
+    ).first()
+    if existing is not None:
+        return existing
+    name = f"{preset['label']} (my account)"
+    candidate, suffix = name, 2
+    with transaction.atomic():
+        while ModelProvider.objects.filter(tenant=tenant, name=candidate).exists():
+            candidate = f"{name} {suffix}"
+            suffix += 1
+        provider = ModelProvider.objects.create(
+            tenant=tenant,
+            created_by=user,
+            name=candidate,
+            provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+            auth_mode=ModelProvider.AuthMode.USER_ACCOUNT,
+            preset_key=preset_key,
+            base_url=preset["base_url"],
+        )
+        seed_preset_models(provider)
+    return provider
 
 
 _MEMBER_REF_PREFIX = "member://"

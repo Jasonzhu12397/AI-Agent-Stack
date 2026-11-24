@@ -104,6 +104,11 @@ from core.plugin_views import (
     PluginInstallationStatusView,
 )
 from core.mcp_views import PluginConnectionToolSyncView
+from core.provider_oauth_views import (
+    ProviderOAuthExchangeView,
+    ProviderOAuthStartView,
+)
+
 from core.model_views import (
     ModelConfigListCreateView,
     ModelProviderAccountView,
@@ -610,6 +615,16 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/model-providers/catalog/",
         ModelProviderCatalogView.as_view(),
         name="model-provider-catalog",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/model-providers/oauth/<str:preset_key>/start/",
+        ProviderOAuthStartView.as_view(),
+        name="model-provider-oauth-start",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/model-providers/oauth/<str:preset_key>/exchange/",
+        ProviderOAuthExchangeView.as_view(),
+        name="model-provider-oauth-exchange",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/model-providers/<uuid:provider_id>/account/",
