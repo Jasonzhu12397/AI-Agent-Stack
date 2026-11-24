@@ -1,8 +1,9 @@
-"""Enforcement tests for the mandatory token-budget guard on every provider call.
+"""Enforcement tests for the mandatory metering on every provider call.
 
 The gateway is the single metering entry point: a call without an authorized
 guard must fail before any network request is issued, and every metered call
-leaves a row in the tenant token usage ledger.
+leaves a row in the ledger that owns it - the tenant pool for a paid provider,
+the member's free allowance for a linked account.
 """
 
 from pathlib import Path
@@ -238,7 +239,10 @@ def test_no_unmetered_gateway_construction_in_source():
                 line_start = text.rfind("\n", 0, match.start()) + 1
                 line_end = text.find("\n", match.end())
                 line = text[line_start:line_end]
-                if "guard=" not in line:
+                # Two metered paths exist: the tenant pool (``guard=``) and a
+                # member's linked account free allowance (``account=``). Either
+                # one is acceptable; a bare construction is not.
+                if "guard=" not in line and "account=" not in line:
                     offenders.append(f"{path.relative_to(REPO_ROOT)}: {line.strip()}")
             for match in bare_call.finditer(text):
                 offenders.append(
