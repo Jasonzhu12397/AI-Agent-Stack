@@ -74,7 +74,9 @@ def test_completed_flow_creates_a_linked_provider(workspace, monkeypatch):
     assert seen["payload"]["code"] == "auth-code"
     assert "code_verifier" in seen["payload"]
     assert provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT
-    assert provider.models.count() == 3
+    assert provider.models.count() == len(
+        provider_accounts.PROVIDER_PRESETS["openrouter"]["models"]
+    )
     assert link.credential_ref.startswith("member://")
     assert provider_accounts.resolve_member_secret(link.credential_ref, member) == (
         "sk-or-issued-by-platform"
@@ -170,3 +172,48 @@ def test_api_start_and_exchange(workspace, monkeypatch):
     payload = exchanged.json()
     assert payload["account"]["linked"] is True
     assert payload["provider"]["preset_key"] == "openrouter"
+
+
+@pytest.mark.django_db
+def test_catalogue_refresh_replaces_retired_models(workspace):
+    """A member authorized last quarter must not keep calling a retired model."""
+
+    _opener, tenant, member = workspace
+    provider = provider_accounts.ensure_account_provider(
+        tenant=tenant, user=member, preset_key="openai"
+    )
+    from core.models import ModelConfig
+
+    legacy = ModelConfig.objects.create(
+        provider=provider,
+        model_name="gpt-4o-mini",
+        version=1,
+        display_name="GPT-4o mini",
+        capabilities=["chat", "tools"],
+        input_cost_per_million=0,
+        output_cost_per_million=0,
+    )
+    operator_model = ModelConfig.objects.create(
+        provider=provider,
+        model_name="gpt-5-custom",
+        version=1,
+        display_name="Operator tuned",
+        capabilities=["chat"],
+        input_cost_per_million=3,
+        output_cost_per_million=6,
+    )
+
+    result = provider_accounts.refresh_preset_models(provider)
+
+    assert result == {"added": 0, "retired": 1}
+    legacy.refresh_from_db()
+    operator_model.refresh_from_db()
+    assert legacy.enabled is False
+    assert operator_model.enabled is True
+    current = set(
+        provider.models.filter(enabled=True).values_list("model_name", flat=True)
+    )
+    preset_names = {
+        item["model_name"] for item in provider_accounts.PROVIDER_PRESETS["openai"]["models"]
+    }
+    assert preset_names <= current

@@ -55,7 +55,13 @@ def test_catalog_is_readable_by_a_member_without_a_purchase(member):
     assert response.status_code == 200
     keys = [item["key"] for item in response.data["presets"]]
     assert keys[:3] == ["openai", "google", "deepseek"]
-    assert {"qwen", "zhipu", "moonshot", "minimax", "baichuan", "stepfun", "yi"} <= set(keys)
+    assert {"qwen", "zhipu", "moonshot", "minimax", "openrouter"} <= set(keys)
+    # The catalogue ships the platforms' current flagship families, not retired
+    # models: a member who authorizes today must land on a callable model.
+    openai_models = [
+        item["model_name"] for item in provider_accounts.PROVIDER_PRESETS["openai"]["models"]
+    ]
+    assert all(name.startswith("gpt-5") for name in openai_models)
     assert response.data["free_daily_tokens"] == provider_accounts.free_daily_tokens()
     for item in response.data["presets"]:
         assert item["base_url"].startswith("https://")

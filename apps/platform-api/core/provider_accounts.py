@@ -31,80 +31,75 @@ PROVIDER_PRESETS: dict[str, dict] = {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "models": [
-            {"model_name": "gpt-4o-mini", "display_name": "GPT-4o mini"},
-            {"model_name": "gpt-4o", "display_name": "GPT-4o"},
+            {"model_name": "gpt-5.6", "display_name": "GPT-5.6"},
+            {"model_name": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra"},
+            {"model_name": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna"},
         ],
     },
     "google": {
         "label": "Google Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "models": [
-            {"model_name": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash"},
-            {"model_name": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro"},
+            {"model_name": "gemini-3.6-flash", "display_name": "Gemini 3.6 Flash"},
+            {"model_name": "gemini-3.1-pro-preview", "display_name": "Gemini 3.1 Pro"},
+            {"model_name": "gemini-3.5-flash-lite", "display_name": "Gemini 3.5 Flash-Lite"},
         ],
     },
     "deepseek": {
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
         "models": [
-            {"model_name": "deepseek-chat", "display_name": "DeepSeek Chat"},
-            {"model_name": "deepseek-reasoner", "display_name": "DeepSeek Reasoner"},
+            {"model_name": "deepseek-v4.1-flash", "display_name": "DeepSeek V4.1 Flash"},
+            {"model_name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro"},
         ],
     },
     "zhipu": {
         "label": "智谱 GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "models": [
-            {"model_name": "glm-4-plus", "display_name": "GLM-4 Plus"},
-            {"model_name": "glm-4-flash", "display_name": "GLM-4 Flash"},
+            {"model_name": "glm-5.4", "display_name": "GLM-5.4"},
+            {"model_name": "glm-5.3-flash", "display_name": "GLM-5.3 Flash"},
         ],
     },
     "moonshot": {
         "label": "Moonshot Kimi",
         "base_url": "https://api.moonshot.cn/v1",
         "models": [
-            {"model_name": "moonshot-v1-8k", "display_name": "Kimi 8K"},
-            {"model_name": "moonshot-v1-32k", "display_name": "Kimi 32K"},
+            {"model_name": "kimi-k3.1-pro", "display_name": "Kimi K3.1 Pro"},
+            {"model_name": "kimi-k3", "display_name": "Kimi K3"},
         ],
     },
     "minimax": {
         "label": "MiniMax",
         "base_url": "https://api.minimax.chat/v1",
         "models": [
-            {"model_name": "abab6.5s-chat", "display_name": "MiniMax abab6.5s"},
+            {"model_name": "MiniMax-M3", "display_name": "MiniMax M3"},
+            {"model_name": "MiniMax-M2.7", "display_name": "MiniMax M2.7"},
         ],
     },
-    "baichuan": {
-        "label": "百川",
-        "base_url": "https://api.baichuan-ai.com/v1",
+    "qwen": {
+        "label": "Qwen",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "models": [
-            {"model_name": "Baichuan4", "display_name": "Baichuan4"},
-        ],
-    },
-    "stepfun": {
-        "label": "阶跃星辰",
-        "base_url": "https://api.stepfun.com/v1",
-        "models": [
-            {"model_name": "step-1-8k", "display_name": "Step-1 8K"},
-        ],
-    },
-    "yi": {
-        "label": "零一万物",
-        "base_url": "https://api.lingyiwanwu.com/v1",
-        "models": [
-            {"model_name": "yi-lightning", "display_name": "Yi Lightning"},
+            {"model_name": "qwen3.8-max", "display_name": "Qwen3.8 Max"},
+            {"model_name": "qwen3.8-plus", "display_name": "Qwen3.8 Plus"},
+            {"model_name": "qwen3.8-flash", "display_name": "Qwen3.8 Flash"},
         ],
     },
     "openrouter": {
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "models": [
-            {"model_name": "openai/gpt-4o-mini", "display_name": "GPT-4o mini (via OpenRouter)"},
-            {"model_name": "openai/gpt-4o", "display_name": "GPT-4o (via OpenRouter)"},
             {
-                "model_name": "deepseek/deepseek-chat",
-                "display_name": "DeepSeek Chat (via OpenRouter)",
+                "model_name": "openai/gpt-5.6-terra",
+                "display_name": "GPT-5.6 Terra (via OpenRouter)",
             },
+            {"model_name": "openai/gpt-5.6-luna", "display_name": "GPT-5.6 Luna (via OpenRouter)"},
+            {
+                "model_name": "deepseek/deepseek-v4.1-flash",
+                "display_name": "DeepSeek V4.1 Flash (via OpenRouter)",
+            },
+            {"model_name": "minimax/minimax-m3", "display_name": "MiniMax M3 (via OpenRouter)"},
         ],
         #: OpenRouter is the platform that can authorize an account and issue
         #: the key itself, so the member never copies one.
@@ -113,14 +108,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "key_endpoint": "https://openrouter.ai/api/v1/auth/keys",
             "key_label": "AI Agent Studio",
         },
-    },
-    "qwen": {
-        "label": "Qwen",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": [
-            {"model_name": "qwen-plus", "display_name": "Qwen Plus"},
-            {"model_name": "qwen-max", "display_name": "Qwen Max"},
-        ],
     },
 }
 
@@ -246,6 +233,8 @@ def link_account(
             "A credential reference for your own account is required.",
         )
     label = (account_label or "").strip()[:MAX_ACCOUNT_LABEL_LENGTH]
+    # A fresh key is also the moment to pick up the platform's current models.
+    refresh_preset_models(provider)
     existing = ProviderAccountLink.objects.filter(
         user=user,
         provider=provider,
@@ -286,6 +275,47 @@ def seed_preset_models(provider) -> int:
         )
         created += int(made)
     return created
+
+
+def refresh_preset_models(provider) -> dict:
+    """Bring a preset-backed provider up to the catalogue's current models.
+
+    Platform catalogues move; a member who authorized last quarter should not
+    keep calling a retired model. Models the catalogue no longer lists are
+    disabled when they still look like our own seeding (chat/tools, zero price),
+    so a model an operator added by hand keeps working.
+    """
+
+    from core.models import ModelConfig
+
+    preset = PROVIDER_PRESETS.get(provider.preset_key) or {"models": []}
+    wanted = {item["model_name"]: item["display_name"] for item in preset["models"]}
+    added = 0
+    for model_name, display_name in wanted.items():
+        _, made = ModelConfig.objects.get_or_create(
+            provider=provider,
+            model_name=model_name,
+            version=1,
+            defaults={
+                "display_name": display_name,
+                "capabilities": ["chat", "tools"],
+                "input_cost_per_million": 0,
+                "output_cost_per_million": 0,
+            },
+        )
+        added += int(made)
+    retired = 0
+    for model in provider.models.all():
+        if model.model_name in wanted or not model.enabled:
+            continue
+        if list(model.capabilities or []) != ["chat", "tools"]:
+            continue
+        if model.input_cost_per_million or model.output_cost_per_million:
+            continue
+        model.enabled = False
+        model.save(update_fields=["enabled"])
+        retired += 1
+    return {"added": added, "retired": retired}
 
 
 def ensure_account_provider(*, tenant, user, preset_key: str) -> ModelProvider:
