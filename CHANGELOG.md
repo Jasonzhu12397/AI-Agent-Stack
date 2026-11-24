@@ -8,6 +8,13 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- Local execution: `Local computer` threads run real read-only probes on the
+  enrolled `local_runner` node (`apps/local-agent`), with the command, lease
+  and result recorded by the platform. Tasks: `local.system_info`,
+  `local.disk_usage`.
+- Connector catalog: `deploy/agent-plugins/catalog.json` plus
+  `manage.py sync_plugin_catalog` registers 企业微信 / 地图 / 天气 connectors,
+  and the composer installs them once their endpoint variable is set.
 - Chat tool calls: the console now executes the skills and plugins selected in
   the composer (platform control-plane tools plus connector capabilities),
   persists every call on the assistant message and renders one status chip per

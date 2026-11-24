@@ -9,6 +9,7 @@ import {
   deleteChatAttachment,
   getChatAttachments,
   getChatContext,
+  installChatPlugin,
   getChatThread,
   getKnowledgeBases,
   getKnowledgeDocuments,
@@ -16,6 +17,7 @@ import {
   updateChatThread,
   uploadChatAttachment,
   type ChatAttachment,
+  type ChatCatalogEntry,
   type ChatContext,
   type ChatMessage,
   type ChatThread,
@@ -52,7 +54,29 @@ const detailOpen = ref(false);
 const abortController = ref<AbortController | null>(null);
 
 const selectedSkills = ref<string[]>([]);
+const installingPlugin = ref("");
+const toolTag = (kind: string) =>
+  kind === "plugin" ? "PLUGIN" : kind === "local" ? "LOCAL" : "PLATFORM";
+
 const selectedPlugins = ref<string[]>([]);
+async function installCatalogPlugin(entry: ChatCatalogEntry): Promise<void> {
+  if (!activeTenantId.value || !activeProjectId.value) return;
+  installingPlugin.value = entry.key;
+  try {
+    const installation = await installChatPlugin(
+      activeTenantId.value,
+      activeProjectId.value,
+      entry.key,
+      entry.capabilities,
+    );
+    await loadContext();
+    selectedPlugins.value = toggleIn(selectedPlugins.value, installation.id);
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : String(caught);
+  } finally {
+    installingPlugin.value = "";
+  }
+}
 const selectedAttachments = ref<string[]>([]);
 const selectedDocuments = ref<string[]>([]);
 const selectedModelId = ref("");
@@ -448,7 +472,7 @@ onMounted(async () => {
           </div>
           <ul v-if="message.role === 'assistant' && message.tool_calls?.length" class="chat-tools">
             <li v-for="(call, index) in message.tool_calls" :key="index" :class="{ failed: !call.ok }">
-              <span class="chat-tool-tag">{{ call.kind === "plugin" ? "PLUGIN" : "PLATFORM" }}</span>
+              <span class="chat-tool-tag">{{ toolTag(call.kind) }}</span>
               <strong>{{ call.identifier }}</strong>
               <span v-if="call.code" class="chat-tool-code">{{ call.code }}</span>
               <span class="chat-tool-meta">{{ call.duration_ms }}ms</span>
@@ -643,6 +667,22 @@ onMounted(async () => {
                 <span v-if="!plugin.credential_configured"> · {{ t("authorize") }}</span>
               </button>
               <p v-if="!(context?.plugins ?? []).length" class="chat-menu-empty">{{ t("No plugin installed in this project") }}</p>
+              <template v-if="(context?.catalog ?? []).length">
+                <p class="chat-menu-label">{{ t("Available connectors") }}</p>
+                <template v-for="entry in context?.catalog ?? []" :key="entry.key">
+                  <button
+                    v-if="entry.enabled"
+                    type="button"
+                    :disabled="installingPlugin === entry.key"
+                    @click="installCatalogPlugin(entry)"
+                  >
+                    {{ entry.name }} · {{ t("install") }}
+                  </button>
+                  <p v-else class="chat-menu-hint">
+                    <strong>{{ entry.name }}</strong> · {{ entry.description }}
+                  </p>
+                </template>
+              </template>
               <button type="button" @click="pluginOpen = false; router.push('/integrations')">{{ t("Add a plugin") }}</button>
               <button type="button" @click="pluginOpen = false; router.push('/integrations')">{{ t("Manage plugins") }}</button>
             </div>
@@ -822,6 +862,7 @@ onMounted(async () => {
 .chat-menu button:hover, .chat-menu-link:hover { background: #eef5f9; }
 .chat-menu button.on { background: #e3f2ec; color: #0a7f58; font-weight: 600; }
 .chat-menu button.warn { color: #a9640a; }
+.chat-menu-hint { margin: 4px 0 0; color: #8a9aa6; font-size: 10.5px; line-height: 1.5; }
 .chat-menu-empty { margin: 0; padding: 6px 9px; color: #93a3af; font-size: 11px; }
 .chat-menu-muted { color: #8a9aa6; }
 .chat-detail { display: grid; gap: 18px; }

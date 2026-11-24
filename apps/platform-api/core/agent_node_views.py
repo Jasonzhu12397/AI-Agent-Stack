@@ -107,6 +107,11 @@ def _network_observation(inventory: Any, result: Any) -> dict[str, Any] | None:
 #: approval policy, not an Agent capability.
 EPH_COMMANDS = EPH_AGENT_COMMANDS
 TARGET_COMMANDS = TARGET_AGENT_COMMANDS
+#: Read-only probes a runner executes on the machine that hosts the console.
+LOCAL_COMMANDS = {
+    "local.system_info",
+    "local.disk_usage",
+}
 MUTATING_COMMANDS = {
     "target.capi.pivot",
     "target.worker.provision",
@@ -646,7 +651,8 @@ class AgentNodeListCreateView(APIView):
             )
         if node_type not in AgentNode.NodeType.values:
             return legacy_error_response(
-                "node_type must be eph_node or target_cluster.", http_status=400
+                "node_type must be eph_node, target_cluster or local_runner.",
+                http_status=400,
             )
         capabilities = request.data.get("capabilities", [])
         labels = request.data.get("labels", {})
@@ -2774,9 +2780,12 @@ class AgentRuntimePollView(APIView):
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
                 return legacy_error_response("Invalid or revoked node credential.", http_status=401)
-            allowed_commands = (
-                EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
-            )
+            if node.node_type == AgentNode.NodeType.LOCAL_RUNNER:
+                allowed_commands = LOCAL_COMMANDS
+            elif node.node_type == AgentNode.NodeType.EPH_NODE:
+                allowed_commands = EPH_COMMANDS
+            else:
+                allowed_commands = TARGET_COMMANDS
             pending_commands = (
                 AgentCommand.objects.select_for_update(skip_locked=True)
                 .filter(node=node)

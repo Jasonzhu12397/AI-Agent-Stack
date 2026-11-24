@@ -141,6 +141,42 @@ filled from the user's sentence; a plugin whose endpoint is not reachable
 reports a real error code (`CAPABILITY_INVOCATION_FAILED`) rather than a
 fabricated success.
 
+## Local execution
+
+The composer's `Cloud computer` / `Local computer` switch is a real execution
+choice, not a label on the prompt:
+
+- A thread with `execution_target=local` adds `local_system_info` and
+  `local_disk_usage` to the tool list and the prompt stops assuming a cloud
+  cluster.
+- Those tools queue a `local.*` **AgentCommand** for the project's enrolled
+  `local_runner` node and block until that node reports the result, so the
+  answer contains numbers produced on the operator's machine.
+- With no runner online the call fails with `LOCAL_RUNNER_OFFLINE`; a lease
+  that dies leaves `LOCAL_COMMAND_FAILED` / `LOCAL_COMMAND_TIMEOUT`, never a
+  fabricated value.
+- `apps/local-agent/local_agent.py` is the agent that serves it: it heartbeats,
+  leases commands over `/api/v1/agent-runtime/*`, runs read-only probes with
+  the standard library and posts the result. `manage.py enroll_local_runner`
+  registers the machine and writes its bearer token; `.devcontainer/start.py`
+  starts both in a development deployment.
+
+## Connector catalog
+
+`deploy/agent-plugins/catalog.json` declares the connectors the plugin menu
+offers — 企业微信, 地图, 天气 and anything appended later — as data: plugin key,
+protocol, capability list and the environment variable that carries its HTTPS
+origin. `manage.py sync_plugin_catalog` upserts one definition per tenant and
+is run by the deployment after seeding.
+
+A connector whose variable is unset is still registered but disabled, and the
+composer lists it with the variable it needs instead of a dead button. Set
+`WECOM_CONNECTOR_URL` (plus a credential reference for the auth-required
+ones), `MAP_CONNECTOR_URL` or `WEATHER_CONNECTOR_URL`, re-run the command and
+the row becomes installable; installation goes through the ordinary
+`agent-plugin-installations` endpoint, so grants, credential validation and
+the invocation audit are the same as any other plugin.
+
 ## Local development database
 
 The single-host console runs one daphne process and one worker against the same

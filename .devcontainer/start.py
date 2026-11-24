@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -25,6 +26,7 @@ DATA_DIR = REPO_ROOT / ".devdata"
 PID_FILE = DATA_DIR / "servers.json"
 
 API_PORT = 8000
+UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 WEB_PORT = API_PORT
 
 
@@ -119,8 +121,52 @@ def main() -> None:
         log_name="worker.log",
         env=worker_env,
     )
+    # The local runner lets a conversation be targeted at this machine. Enroll
+    # it idempotently, then start the agent that leases its probe commands.
+    subprocess.run(
+        [sys.executable, "manage.py", "sync_plugin_catalog"],
+        cwd=PLATFORM_API,
+        env=env,
+        check=False,
+    )
+    runner_output = subprocess.run(
+        [
+            sys.executable,
+            "manage.py",
+            "enroll_local_runner",
+            "--name",
+            "Local computer",
+            "--token-file",
+            str(DATA_DIR / "local-runner.token"),
+        ],
+        cwd=PLATFORM_API,
+        env=env,
+        capture_output=True,
+        text=True,
+    ).stdout.strip().splitlines()
+    # The command prints the node id on success; diagnostics may precede it.
+    runner_node = [
+        line.strip() for line in runner_output if UUID_PATTERN.fullmatch(line.strip())
+    ][-1:]
+    local = None
+    if runner_node:
+        local = spawn(
+            [
+                sys.executable,
+                str(REPO_ROOT / "apps" / "local-agent" / "local_agent.py"),
+                "--base-url",
+                f"http://127.0.0.1:{API_PORT}",
+                "--node-id",
+                runner_node[0],
+                "--token-file",
+                str(DATA_DIR / "local-runner.token"),
+            ],
+            cwd=REPO_ROOT / "apps" / "local-agent",
+            log_name="local-agent.log",
+            env=env,
+        )
     # The API serves the built console bundle, so there is no second runtime.
-    PID_FILE.write_text(json.dumps([api, worker]))
+    PID_FILE.write_text(json.dumps([api, worker] + ([local] if local else [])))
     print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
     subprocess.run(

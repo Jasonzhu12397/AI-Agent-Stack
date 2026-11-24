@@ -682,6 +682,7 @@ class AgentNode(models.Model):
     class NodeType(models.TextChoices):
         EPH_NODE = "eph_node", "EPH node"
         TARGET_CLUSTER = "target_cluster", "Target cluster"
+        LOCAL_RUNNER = "local_runner", "Local runner"
 
     class Status(models.TextChoices):
         OFFLINE = "offline", "Offline"

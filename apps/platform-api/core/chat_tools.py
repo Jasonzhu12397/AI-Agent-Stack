@@ -21,10 +21,14 @@ turn collapsing.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from django.utils import timezone
 
 from core.agent_capability_router import CapabilityResolutionError, invoke_capability
 from core.chat_models import AgentChatThread
@@ -249,6 +253,119 @@ def _create_command(thread: AgentChatThread, arguments: dict) -> dict:
     }
 
 
+#: A local runner is a machine that hosts the console; it may only be running
+#: probes, so the turn waits rather than leaving work queued forever.
+LOCAL_COMMAND_TIMEOUT_SECONDS = 25
+LOCAL_RUNNER_STALE_SECONDS = 120
+
+
+def _local_runner(thread: AgentChatThread) -> AgentNode:
+    """The freshest online local runner enrolled in this project."""
+
+    node = (
+        AgentNode.objects.filter(
+            tenant=thread.tenant,
+            project=thread.project,
+            node_type=AgentNode.NodeType.LOCAL_RUNNER,
+            status=AgentNode.Status.ONLINE,
+        )
+        .order_by("-last_seen_at")
+        .first()
+    )
+    if node is None:
+        raise ChatToolError(
+            "LOCAL_RUNNER_OFFLINE",
+            "No local runner is online for this project. Start the local agent on your "
+            "machine and it will appear here.",
+        )
+    seen = node.last_seen_at
+    if seen is None or (timezone.now() - seen).total_seconds() > LOCAL_RUNNER_STALE_SECONDS:
+        raise ChatToolError(
+            "LOCAL_RUNNER_OFFLINE",
+            f"Local runner {node.name} has not sent a heartbeat recently.",
+        )
+    return node
+
+
+def _run_local(thread: AgentChatThread, command_type: str, payload: dict) -> dict:
+    """Queue one read-only probe on the local runner and wait for its result."""
+
+    node = _local_runner(thread)
+    digest = hashlib.sha256(
+        json.dumps({"command_type": command_type, "payload": payload}, sort_keys=True).encode()
+    ).hexdigest()
+    command, created = AgentCommand.objects.get_or_create(
+        idempotency_key=f"chat:{thread.id}:{uuid.uuid5(uuid.NAMESPACE_URL, command_type + digest)}",
+        defaults={
+            "tenant": thread.tenant,
+            "project": thread.project,
+            "node": node,
+            "requested_by": thread.created_by,
+            "command_type": command_type,
+            "payload": payload,
+            "status": AgentCommand.Status.QUEUED,
+            "plan_hash": digest,
+        },
+    )
+    deadline = time.monotonic() + LOCAL_COMMAND_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        command.refresh_from_db()
+        if command.status == AgentCommand.Status.SUCCEEDED:
+            return {
+                "ok": True,
+                "created": created,
+                "runner": node.name,
+                "command_type": command_type,
+                "result": command.result,
+            }
+        if command.status in {
+            AgentCommand.Status.FAILED,
+            AgentCommand.Status.CANCELLED,
+            AgentCommand.Status.EXPIRED,
+        }:
+            raise ChatToolError(
+                "LOCAL_COMMAND_FAILED",
+                f"{node.name} rejected {command_type}: {json.dumps(command.error or {})[:200]}",
+            )
+        time.sleep(0.4)
+    raise ChatToolError(
+        "LOCAL_COMMAND_TIMEOUT",
+        f"{node.name} did not answer {command_type} within {LOCAL_COMMAND_TIMEOUT_SECONDS}s.",
+    )
+
+
+def _local_system_info(thread: AgentChatThread, arguments: dict) -> dict:
+    return _run_local(thread, "local.system_info", {})
+
+
+def _local_disk_usage(thread: AgentChatThread, arguments: dict) -> dict:
+    path = arguments.get("path") or "/"
+    return _run_local(thread, "local.disk_usage", {"path": str(path)})
+
+
+LOCAL_TOOLS: tuple[ChatTool, ...] = (
+    ChatTool(
+        name="local_system_info",
+        kind="local",
+        identifier="local.system_info",
+        description=(
+            "Ask the local runner on this machine for host facts: hostname, operating system, "
+            "kernel, CPU count, load average and uptime."
+        ),
+        schema=_schema({}),
+        handler=_local_system_info,
+    ),
+    ChatTool(
+        name="local_disk_usage",
+        kind="local",
+        identifier="local.disk_usage",
+        description="Ask the local runner for free and total disk space on a path.",
+        schema=_schema({"path": {"type": "string", "description": "Absolute path, default /"}}),
+        handler=_local_disk_usage,
+    ),
+)
+
+
 PLATFORM_TOOLS: tuple[ChatTool, ...] = (
     ChatTool(
         name="stack_list_nodes",
@@ -408,6 +525,8 @@ def _capability_handler(thread: AgentChatThread, capability: str):
 
 def build_tools(thread: AgentChatThread, context: dict) -> list[ChatTool]:
     tools = [_bind_platform(tool, thread) for tool in PLATFORM_TOOLS]
+    if thread.execution_target == "local":
+        tools += [_bind_platform(tool, thread) for tool in LOCAL_TOOLS]
     tools += _plugin_tools(thread, context)
     names = [tool.name for tool in tools]
     if len(names) != len(set(names)):

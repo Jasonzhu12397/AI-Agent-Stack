@@ -1,0 +1,43 @@
+{
+  "plugins": [
+    {
+      "plugin_key": "wecom",
+      "name": "企业微信",
+      "description": "WeCom connector: read conversations and contacts of the bound enterprise app.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "WECOM_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {"name": "wecom.message.list", "description": "List recent messages of one chat"},
+        {"name": "wecom.contact.list", "description": "List members of one department"}
+      ]
+    },
+    {
+      "plugin_key": "map",
+      "name": "地图",
+      "description": "Map connector: place search, reverse geocoding and route planning.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "MAP_CONNECTOR_URL",
+      "auth_required": false,
+      "capabilities": [
+        {"name": "map.place.search", "description": "Search places by keyword"},
+        {"name": "map.route.plan", "description": "Plan a driving route between two places"}
+      ]
+    },
+    {
+      "plugin_key": "weather",
+      "name": "天气",
+      "description": "Weather connector: current conditions and a short forecast for one city.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "WEATHER_CONNECTOR_URL",
+      "auth_required": false,
+      "capabilities": [
+        {"name": "weather.current", "description": "Current conditions for one city"},
+        {"name": "weather.forecast", "description": "Daily forecast for one city"}
+      ]
+    }
+  ]
+}

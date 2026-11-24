@@ -264,14 +264,20 @@ class ModelGateway:
                     if preferred in offered:
                         chosen = preferred
                     else:
-                        # Prefer an installed plugin capability so the demo
-                        # exercises the connector, not just the control plane.
-                        plugin = [
-                            item.get("name")
-                            for item in functions
-                            if str(item.get("description", "")).startswith("[plugin]")
-                        ]
-                        chosen = plugin[0] if plugin else offered[0]
+                        # Prefer tools that run where the member aimed the turn:
+                        # the local runner first, then an installed plugin, so
+                        # the demo exercises something beyond the control plane.
+                        for prefix in ("[local]", "[plugin]"):
+                            scoped = [
+                                item.get("name")
+                                for item in functions
+                                if str(item.get("description", "")).startswith(prefix)
+                            ]
+                            if scoped:
+                                chosen = scoped[0]
+                                break
+                        else:
+                            chosen = offered[0]
                     # Fill the required arguments from the user's own turn so
                     # schema validation runs against realistic values.
                     parameters = next(

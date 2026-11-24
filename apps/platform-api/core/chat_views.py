@@ -24,6 +24,7 @@ from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
 from core.chat_models import AgentChatAttachment, AgentChatMessage, AgentChatThread
 from core.models import (
+    AgentPluginDefinition,
     AgentPluginInstallation,
     AuditEvent,
     KnowledgeDocument,
@@ -87,6 +88,43 @@ def message_payload(message):
     }
 
 
+def _apply_thread_settings(request, thread, data):
+    """Validate and apply the composer settings shared by create and update."""
+
+    if "execution_target" in data:
+        target = str(data.get("execution_target") or "").strip()
+        if target not in chat_runtime.EXECUTION_TARGETS:
+            return legacy_error_response(
+                "execution_target must be cloud or local.",
+                http_status=400,
+                code="INVALID_EXECUTION_TARGET",
+            )
+        thread.execution_target = target
+    if "effort" in data:
+        effort = str(data.get("effort") or "").strip()
+        if effort not in chat_runtime.EFFORTS:
+            return legacy_error_response(
+                "effort must be auto or low.", http_status=400, code="INVALID_EFFORT"
+            )
+        thread.effort = effort
+    if "goal" in data:
+        goal = data.get("goal")
+        if not isinstance(goal, str) or len(goal) > 500:
+            return legacy_error_response(
+                "goal must be a string of at most 500 characters.",
+                http_status=400,
+                code="INVALID_GOAL",
+            )
+        thread.goal = goal.strip()
+    if "plan_first" in data:
+        thread.plan_first = bool(data.get("plan_first"))
+    if "model_config_id" in data:
+        thread.model_config = _resolve_model_config(
+            request, thread.tenant, data.get("model_config_id")
+        )
+    return None
+
+
 class AgentChatThreadListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -119,6 +157,11 @@ class AgentChatThreadListCreateView(APIView):
             title=title.strip()[:200] or "New conversation",
             model_config=model_config,
         )
+        error = _apply_thread_settings(request, thread, request.data)
+        if error is not None:
+            thread.delete()
+            return error
+        thread.save()
         return Response(thread_payload(thread), status=status.HTTP_201_CREATED)
 
 
@@ -159,37 +202,9 @@ class AgentChatThreadDetailView(APIView):
             thread.title = title.strip()[:200]
         if "archived" in request.data:
             thread.archived = bool(request.data.get("archived"))
-        if "execution_target" in request.data:
-            target = str(request.data.get("execution_target") or "").strip()
-            if target not in chat_runtime.EXECUTION_TARGETS:
-                return legacy_error_response(
-                    "execution_target must be cloud or local.",
-                    http_status=400,
-                    code="INVALID_EXECUTION_TARGET",
-                )
-            thread.execution_target = target
-        if "effort" in request.data:
-            effort = str(request.data.get("effort") or "").strip()
-            if effort not in chat_runtime.EFFORTS:
-                return legacy_error_response(
-                    "effort must be auto or low.", http_status=400, code="INVALID_EFFORT"
-                )
-            thread.effort = effort
-        if "goal" in request.data:
-            goal = request.data.get("goal")
-            if not isinstance(goal, str) or len(goal) > 500:
-                return legacy_error_response(
-                    "goal must be a string of at most 500 characters.",
-                    http_status=400,
-                    code="INVALID_GOAL",
-                )
-            thread.goal = goal.strip()
-        if "plan_first" in request.data:
-            thread.plan_first = bool(request.data.get("plan_first"))
-        if "model_config_id" in request.data:
-            thread.model_config = _resolve_model_config(
-                request, thread.tenant, request.data.get("model_config_id")
-            )
+        error = _apply_thread_settings(request, thread, request.data)
+        if error is not None:
+            return error
         thread.save()
         return Response(thread_payload(thread))
 
@@ -323,6 +338,26 @@ class AgentChatContextView(APIView):
                 skills.append(
                     {"id": capability, "name": capability, "installation_id": str(installation.id)}
                 )
+        installed_keys = {item["key"] for item in plugins}
+        catalog = []
+        for definition in AgentPluginDefinition.objects.filter(tenant=tenant).order_by("name"):
+            if definition.plugin_key in installed_keys:
+                continue
+            catalog.append(
+                {
+                    "key": definition.plugin_key,
+                    "name": definition.name,
+                    "description": definition.description,
+                    "protocol": definition.protocol,
+                    "enabled": bool(definition.enabled),
+                    "auth_required": bool(definition.auth_required),
+                    "capabilities": [
+                        item.get("name")
+                        for item in definition.capabilities or []
+                        if isinstance(item, dict) and item.get("name")
+                    ],
+                }
+            )
         projects = Project.objects.filter(tenant=tenant).order_by("name")
         provider_accounts.sync_platform_providers(tenant=tenant, user=request.user)
         models = _available_models(request, tenant)
@@ -334,6 +369,7 @@ class AgentChatContextView(APIView):
                 ],
                 "skills": skills,
                 "plugins": plugins,
+                "catalog": catalog,
                 "models": models,
             }
         )

@@ -323,7 +323,10 @@ for name, kind, _base, _region in providers:
         # tool turn without provisioning a provider credential.
         provider.config = {
             **provider.config,
-            "response": "Demo model: the fleet is reachable. Ask me to inspect nodes, deployments or commands.",
+            "response": (
+                "Demo model: the fleet is reachable. Ask me to inspect nodes, "
+                "deployments or commands."
+            ),
             "tool_call": True,
         }
         provider.save(update_fields=["config"])

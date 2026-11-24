@@ -108,6 +108,10 @@ def migrate() -> None:
     run([sys.executable, "manage.py", "migrate", "--noinput"], cwd=PLATFORM_API, env=runtime_env())
 
 
+def sync_catalog() -> None:
+    run([sys.executable, "manage.py", "sync_plugin_catalog"], cwd=PLATFORM_API, env=runtime_env())
+
+
 def seed() -> None:
     env = runtime_env()
     env["PYTHONPATH"] = f"{PLATFORM_API}:{REPO_ROOT}"
@@ -126,6 +130,8 @@ def main() -> None:
     report("migrated")
     seed()
     report("seeded")
+    sync_catalog()
+    report("catalog")
     log("codespace prepared: run `python3 .devcontainer/start.py` to serve the console")
 
 

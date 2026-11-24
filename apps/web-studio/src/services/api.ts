@@ -2239,10 +2239,22 @@ export type ChatModelOption = {
   account: { linked: boolean; remaining_today: number } | null;
   ready?: boolean;
 };
+export type ChatCatalogEntry = {
+  key: string;
+  name: string;
+  description: string;
+  protocol: string;
+  /** The connector endpoint is configured, so the composer can install it. */
+  enabled: boolean;
+  auth_required: boolean;
+  capabilities: string[];
+};
+
 export type ChatContext = {
   project: ChatContextItem;
   projects: ChatContextItem[];
   skills: ChatContextItem[];
+  catalog?: ChatCatalogEntry[];
   plugins: (ChatContextItem & {
     key: string;
     version: string;
@@ -2294,6 +2306,21 @@ export type ChatThread = {
   updated_at: string;
   last_message?: { role: string; content: string; created_at: string };
 };
+
+export function installChatPlugin(
+  tenantId: string,
+  projectId: string,
+  pluginKey: string,
+  capabilities: string[],
+): Promise<{ id: string }> {
+  return request<{ id: string }>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-plugin-installations/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ plugin_key: pluginKey, granted_capabilities: capabilities }),
+    },
+  );
+}
 
 export function getChatContext(tenantId: string, projectId: string): Promise<ChatContext> {
   return request<ChatContext>(
