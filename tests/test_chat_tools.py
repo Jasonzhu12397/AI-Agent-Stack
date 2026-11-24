@@ -421,3 +421,24 @@ def test_get_deployment_reads_the_preflight(scope):
         detail_tool, {"deployment_id": "00000000-0000-0000-0000-000000000000"}
     )
     assert missing["code"] == "DEPLOYMENT_NOT_FOUND"
+
+
+def test_plan_deployment_accepts_scalars_and_picks_the_online_node(scope):
+    tool = next(
+        item
+        for item in chat_tools.build_tools(scope["thread"], {})
+        if item.name == "stack_plan_deployment"
+    )
+    payload = chat_tools.run_tool(
+        tool,
+        {
+            "cluster_name": "scalar-demo",
+            "kubernetes_version": "v1.30.2",
+            "worker_replicas": 2,
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["deployment"]["eph_node"] == "eph-1"
+    deployment = ClusterDeployment.objects.get(id=payload["deployment"]["id"])
+    assert deployment.spec["worker_replicas"] == 2
+    assert deployment.spec["control_plane_replicas"] == 1

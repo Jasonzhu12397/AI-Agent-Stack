@@ -436,15 +436,20 @@ def _local_disk_usage(thread: AgentChatThread, arguments: dict) -> dict:
 def _plan_deployment(thread: AgentChatThread, arguments: dict) -> dict:
     """File the same preflight a deployment form files, from a chat turn."""
 
-    node_id = arguments.get("eph_node_id")
-    node = AgentNode.objects.filter(
+    node_id = str(arguments.get("eph_node_id") or "").strip()
+    nodes = AgentNode.objects.filter(
         tenant=thread.tenant,
         project=thread.project,
         node_type=AgentNode.NodeType.EPH_NODE,
-        pk=node_id,
-    ).first()
+    )
+    if node_id:
+        node = nodes.filter(pk=node_id).first()
+    else:
+        # A model rarely knows enrollment ids, so the newest online node stands
+        # in when the turn did not name one.
+        node = nodes.filter(status=AgentNode.Status.ONLINE).order_by("-last_seen_at").first()
     if node is None:
-        raise ChatToolError("NODE_NOT_FOUND", "No EPH node with that id exists in this project.")
+        raise ChatToolError("NODE_NOT_FOUND", "No matching EPH node exists in this project.")
     if node.status != AgentNode.Status.ONLINE or (
         node.last_seen_at is None
         or (timezone.now() - node.last_seen_at).total_seconds() > 60
@@ -455,8 +460,23 @@ def _plan_deployment(thread: AgentChatThread, arguments: dict) -> dict:
     profile = InfrastructureNetworkProfile.objects.filter(
         tenant=thread.tenant, project=thread.project
     ).first()
+    raw_spec = arguments.get("cluster_spec")
+    if not isinstance(raw_spec, dict):
+        cluster_name = str(arguments.get("cluster_name") or "").strip()
+        kubernetes_version = str(arguments.get("kubernetes_version") or "").strip()
+        if not cluster_name or not kubernetes_version:
+            raise ChatToolError(
+                "INVALID_TOOL_ARGUMENTS",
+                "Pass cluster_name and kubernetes_version, or a full cluster_spec object.",
+            )
+        raw_spec = {
+            "cluster_name": cluster_name,
+            "kubernetes_version": kubernetes_version,
+            "control_plane_replicas": int(arguments.get("control_plane_replicas") or 1),
+            "worker_replicas": int(arguments.get("worker_replicas") or 1),
+        }
     spec, error = validated_spec(
-        arguments.get("cluster_spec"),
+        raw_spec,
         infra_profile=profile.profile if profile is not None else None,
         project=thread.project,
     )
@@ -605,13 +625,26 @@ PLATFORM_TOOLS: tuple[ChatTool, ...] = (
         ),
         schema=_schema(
             {
-                "eph_node_id": {"type": "string", "description": "Enrolled EPH node id"},
+                "cluster_name": {
+                    "type": "string",
+                    "description": "DNS-label cluster name, e.g. prod-eu-1",
+                },
+                "kubernetes_version": {
+                    "type": "string",
+                    "description": "Target version in v1.x.y form",
+                },
+                "eph_node_id": {
+                    "type": "string",
+                    "description": "Enrolled EPH node id; omit to use the newest online node",
+                },
+                "control_plane_replicas": {"type": "integer", "minimum": 1, "maximum": 31},
+                "worker_replicas": {"type": "integer", "minimum": 0, "maximum": 63},
                 "cluster_spec": {
                     "type": "object",
-                    "description": "Deployment spec: cluster_name, kubernetes_version and replicas",
+                    "description": "Full spec override when the caller already has one",
                 },
             },
-            ["eph_node_id", "cluster_spec"],
+            ["cluster_name", "kubernetes_version"],
         ),
         handler=_plan_deployment,
     ),

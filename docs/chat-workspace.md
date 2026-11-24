@@ -118,7 +118,9 @@ runs the tool loop the model drives:
   the control plane; `stack_get_deployment` returns one deployment with its
   preflight and plan phases; `stack_plan_deployment` files the same preflight the
   deployment form files (spec validation, network readiness gate and stored
-  `preflight_result`) for an online EPH node; `stack_create_command` writes a
+  `preflight_result`) for an online EPH node. It takes `cluster_name` and
+  `kubernetes_version` (plus optional replica counts) rather than a nested spec,
+  and omitting `eph_node_id` uses the newest online EPH node; `stack_create_command` writes a
   real `AgentCommand`, refusing a command the node's role never implements so a
   queued row cannot sit undeliverable;
   (version upgrades and rollbacks land in `waiting_approval`).

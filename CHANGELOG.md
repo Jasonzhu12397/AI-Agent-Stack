@@ -8,6 +8,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- `stack_plan_deployment` now takes `cluster_name`, `kubernetes_version` and
+  optional replica counts instead of a nested spec, and falls back to the
+  newest online EPH node when no node id is named.
 - `stack_get_deployment`: read one deployment's status, plan hash, preflight
   (network readiness, Ironic warnings) and plan phases from a chat turn.
 - `stack_create_command` now validates the command against the node's role
