@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T15:25:24Z",
+  "checked_at": "2026-11-24T15:26:43Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -13,23 +13,23 @@
   },
   "workflow": {
     "status": "succeeded",
-    "run_id": "3d1976ae",
+    "run_id": "3ae19a99",
     "error": null
   },
   "ok": true,
   "api_log": [
-    "127.0.0.1:54002 - - [24/Nov/2026:23:25:22] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:54008 - - [24/Nov/2026:23:25:22] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:54022 - - [24/Nov/2026:23:25:22] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:54024 - - [24/Nov/2026:23:25:22] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:54038 - - [24/Nov/2026:23:25:22] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:54052 - - [24/Nov/2026:23:25:22] \"POST /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/publish/\" 201 318",
-    "127.0.0.1:54068 - - [24/Nov/2026:23:25:22] \"POST /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/runs/\" 202 435",
-    "Bad Request: /api/v1/agent-runtime/heartbeat/",
-    "2026-11-24 23:25:23,684 WARNING  Bad Request: /api/v1/agent-runtime/heartbeat/",
-    "127.0.0.1:54074 - - [24/Nov/2026:23:25:23] \"POST /api/v1/agent-runtime/heartbeat/\" 400 87",
-    "127.0.0.1:54090 - - [24/Nov/2026:23:25:23] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
-    "127.0.0.1:54106 - - [24/Nov/2026:23:25:24] \"GET /api/v1/workflows/aa6d31c6-d1be-4db5-a157-adee5a9c48b4/runs/\" 200 1553"
+    "127.0.0.1:35888 - - [24/Nov/2026:23:26:40] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:35926 - - [24/Nov/2026:23:26:41] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:35928 - - [24/Nov/2026:23:26:41] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:35930 - - [24/Nov/2026:23:26:41] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:35940 - - [24/Nov/2026:23:26:41] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:35942 - - [24/Nov/2026:23:26:41] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:35954 - - [24/Nov/2026:23:26:41] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:35968 - - [24/Nov/2026:23:26:41] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:35978 - - [24/Nov/2026:23:26:41] \"POST /api/v1/workflows/4d565c16-102e-4aef-80fa-e9e3be19a522/publish/\" 201 318",
+    "127.0.0.1:35982 - - [24/Nov/2026:23:26:42] \"POST /api/v1/workflows/4d565c16-102e-4aef-80fa-e9e3be19a522/runs/\" 202 435",
+    "127.0.0.1:35998 - - [24/Nov/2026:23:26:42] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:36004 - - [24/Nov/2026:23:26:43] \"GET /api/v1/workflows/4d565c16-102e-4aef-80fa-e9e3be19a522/runs/\" 200 1553"
   ],
   "web_log": [
     "",
@@ -39,9 +39,6 @@
     "sh: 1: vite: not found"
   ],
   "worker_log": [
-    "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/utils.py\", line 100, in _execute",
-    "    with self.db.wrap_database_errors:",
-    "         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
     "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/utils.py\", line 91, in __exit__",
     "    raise dj_exc_value.with_traceback(traceback) from exc_value",
     "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/utils.py\", line 105, in _execute",
@@ -50,6 +47,9 @@
     "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/sqlite3/base.py\", line 360, in execute",
     "    return super().execute(query, params)",
     "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
-    "django.db.utils.OperationalError: database is locked"
+    "django.db.utils.OperationalError: database is locked",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-46113, poll_seconds=1.0)"
   ]
 }
