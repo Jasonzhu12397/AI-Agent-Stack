@@ -1,10 +1,10 @@
 """Write verbs tunnelled through POST must reach the view unchanged."""
 
 import pytest
-from django.contrib.auth import get_user_model
-from django.test import Client
 from core.chat_models import AgentChatThread
 from core.models import Project, Tenant, TenantMembership
+from django.contrib.auth import get_user_model
+from django.test import Client
 
 
 @pytest.mark.django_db
@@ -12,7 +12,9 @@ def test_post_with_override_header_is_treated_as_delete():
     user = get_user_model().objects.create_user(username="override-user", password="pw-12345678")
     tenant = Tenant.objects.create(name="Override tenant", slug="override-tenant")
     TenantMembership.objects.create(tenant=tenant, user=user, role="member")
-    project = Project.objects.create(tenant=tenant, name="Override project", slug="override-project")
+    project = Project.objects.create(
+        tenant=tenant, name="Override project", slug="override-project"
+    )
     thread = AgentChatThread.objects.create(
         tenant=tenant, project=project, created_by=user, title="Temporary"
     )
