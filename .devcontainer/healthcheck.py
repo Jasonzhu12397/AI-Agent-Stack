@@ -37,6 +37,7 @@ def fetch(
     accept: str = "application/json",
     opener: urllib.request.OpenerDirector | None = None,
     extra_headers: dict | None = None,
+    limit: int = 400,
 ) -> tuple[int, str]:
     data = None
     headers = {"Accept": accept, **(extra_headers or {})}
@@ -47,9 +48,9 @@ def fetch(
     try:
         client = opener or urllib.request.build_opener()
         with client.open(request, timeout=timeout) as response:
-            return response.status, response.read(400).decode("utf-8", "replace")
+            return response.status, response.read(limit).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(400).decode("utf-8", "replace")
+        return exc.code, exc.read(limit).decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001 - the report must never crash
         return 0, f"{type(exc).__name__}: {exc}"
 
@@ -86,19 +87,132 @@ def sign_in() -> tuple[int, str]:
     )
 
 
+def workflow_smoke() -> dict:
+    """Queue a real run and wait for it to finish.
+
+    A console whose runs stay "queued" looks healthy from every HTTP probe and
+    is still unusable, so the deployment check drives the whole path the user
+    does: create a draft, publish it, run it, and require a terminal status.
+    """
+
+    origin = "http://127.0.0.1:8000"
+    cookie = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+    )
+    _, csrf_body = fetch(CSRF_URL, opener=cookie)
+    login = fetch(
+        LOGIN_URL,
+        payload={"username": "demo", "password": "demo1234"},
+        opener=cookie,
+        extra_headers={"X-CSRFToken": json.loads(csrf_body).get("csrf_token", "")},
+    )
+    if login[0] not in (200, 201):
+        return {"status": "login-failed", "detail": login[1]}
+    _, csrf_body = fetch(CSRF_URL, opener=cookie)
+    token = json.loads(csrf_body).get("csrf_token", "")
+    headers = {"X-CSRFToken": token, "Referer": origin + "/", "Origin": origin}
+    tenants_status, tenants_body = fetch(
+        f"{origin}/api/v1/tenants/", opener=cookie, extra_headers=headers, limit=4000
+    )
+    if tenants_status != 200:
+        return {"status": "tenants-failed", "detail": tenants_body}
+    tenant_id = json.loads(tenants_body)["results"][0]["id"]
+    projects_status, projects_body = fetch(
+        f"{origin}/api/v1/tenants/{tenant_id}/projects/",
+        opener=cookie,
+        extra_headers=headers,
+        limit=4000,
+    )
+    if projects_status != 200:
+        return {"status": "projects-failed", "detail": projects_body}
+    project_id = json.loads(projects_body)["results"][0]["id"]
+    definition = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [{"source": "start", "target": "end"}],
+    }
+    created_status, created_body = fetch(
+        f"{origin}/api/v1/tenants/{tenant_id}/projects/{project_id}/workflows/",
+        payload={
+            "name": "Deployment smoke",
+            "slug": "deployment-smoke-" + time.strftime("%Y%m%d%H%M%S", time.gmtime()),
+            "description": "Deployment self-check",
+            "draft_definition": definition,
+        },
+        opener=cookie,
+        extra_headers=headers,
+        limit=4000,
+    )
+    if created_status != 201:
+        return {"status": "create-failed", "detail": created_body}
+    workflow_id = json.loads(created_body)["id"]
+    publish_status, publish_body = fetch(
+        f"{origin}/api/v1/workflows/{workflow_id}/publish/",
+        payload={},
+        opener=cookie,
+        extra_headers=headers,
+        limit=4000,
+    )
+    if publish_status != 201:
+        return {"status": "publish-failed", "detail": publish_body}
+    run_status, run_body = fetch(
+        f"{origin}/api/v1/workflows/{workflow_id}/runs/",
+        payload={"input": {"message": "deployment smoke"}},
+        opener=cookie,
+        extra_headers={**headers, "Idempotency-Key": "deployment-smoke-"
+                       + time.strftime("%Y%m%d%H%M%S", time.gmtime())},
+        limit=4000,
+    )
+    if run_status not in (200, 202):
+        return {"status": "run-rejected", "detail": run_body}
+    run_id = json.loads(run_body)["id"]
+    terminal = {"succeeded", "failed", "cancelled"}
+    last = "queued"
+    for _ in range(20):
+        time.sleep(1.0)
+        _, runs_body = fetch(
+            f"{origin}/api/v1/workflows/{workflow_id}/runs/",
+            opener=cookie,
+            extra_headers=headers,
+            limit=8000,
+        )
+        runs = json.loads(runs_body) if runs_body else []
+        runs = runs if isinstance(runs, list) else runs.get("results", [])
+        matching = [item for item in runs if item.get("id") == run_id]
+        if matching:
+            last = matching[0].get("task_status") or last
+            if last in terminal:
+                return {
+                    "status": last,
+                    "run_id": run_id[:8],
+                    "error": matching[0].get("task_error"),
+                }
+    return {"status": "never-ran", "run_id": run_id[:8], "last_status": last}
+
+
 def collect() -> dict:
     data_dir = REPO_ROOT / ".devdata"
     api_status, api_body = wait_for(API_HEALTH, attempts=5, delay=2.0)
     web_status, _ = wait_for(WEB_ROOT)
     login_status, login_body = sign_in()
+    workflow = workflow_smoke()
     return {
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "api": {"status": api_status, "body": api_body},
         "web": {"status": web_status},
         "login": {"status": login_status, "body": login_body},
-        "ok": api_status == 200 and web_status == 200 and login_status in (200, 201),
+        "workflow": workflow,
+        "ok": (
+            api_status == 200
+            and web_status == 200
+            and login_status in (200, 201)
+            and workflow.get("status") == "succeeded"
+        ),
         "api_log": tail(data_dir / "api.log"),
         "web_log": tail(data_dir / "web.log"),
+        "worker_log": tail(data_dir / "worker.log"),
     }
 
 
