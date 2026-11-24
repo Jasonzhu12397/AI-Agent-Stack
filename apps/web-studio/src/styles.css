@@ -136,6 +136,38 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
    never applied on a phone: call it out with matching specificity. */
 @media (max-width: 900px) {
   .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  /* Module pages: scope pickers become one compact row so the actual content
+     is not pushed a whole card down on a phone. */
+  .workspace-sidebar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .workspace-sidebar .workspace-section-heading,
+  .workspace-sidebar .el-divider,
+  .workspace-sidebar .el-empty,
+  .workspace-sidebar .inline-form {
+    display: none;
+  }
+  .workspace-sidebar .full-width {
+    width: 100%;
+  }
+}
+@media (max-width: 640px) {
+  .workspace-heading .eyebrow,
+  .workspace-heading .el-tag {
+    display: none;
+  }
+  .workspace-heading {
+    margin-bottom: 12px;
+  }
+  .workspace-heading h2 {
+    font-size: 20px;
+  }
+  .workspace {
+    padding: 16px 0 24px;
+  }
 }
 @media (max-width: 760px) { .workspace-grid { grid-template-columns: 1fr; } .task-create { flex-direction: column; } .workspace-heading { align-items: flex-start; flex-direction: column; } }
 

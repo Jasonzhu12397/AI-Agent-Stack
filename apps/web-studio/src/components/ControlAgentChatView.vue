@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { t, tf } from "../i18n";
 import { tServerError } from "../i18n/serverErrors";
+import { renderMarkdown } from "../services/markdown";
 import {
   apiErrorCode,
   createChatThread,
@@ -88,6 +89,12 @@ onUnmounted(() => {
 // the transcript can re-render the failure in the reader's language.
 function bubbleText(message: ChatMessage): string {
   return message.error_code ? tServerError(message.error_code, message.content) : message.content;
+}
+
+// Assistant replies come back as markdown; failures are plain prose. The renderer
+// escapes everything first, so v-html only carries markup it produced.
+function bubbleHtml(message: ChatMessage): string {
+  return renderMarkdown(bubbleText(message));
 }
 
 function reportError(cause: unknown): void {
@@ -381,7 +388,7 @@ watch(
               <span>{{ message.role === "user" ? t("You") : t("Control Agent") }}</span>
               <span class="bubble-time">{{ new Date(message.created_at).toLocaleTimeString() }}</span>
             </div>
-            <p class="bubble-body">{{ bubbleText(message) }}</p>
+            <div class="bubble-body" v-html="bubbleHtml(message)" />
             <div v-if="message.context.skills?.length || message.context.plugins?.length" class="bubble-context">
               <el-tag v-for="skill in message.context.skills ?? []" :key="skill" size="small" effect="plain">
                 {{ t("Skill") }} · {{ skill }}
@@ -396,6 +403,12 @@ watch(
                 {{ t("Plugin") }} · {{ pluginName(plugin) }}
               </el-tag>
             </div>
+          </article>
+          <article v-if="sending" class="bubble assistant typing">
+            <div class="bubble-head">
+              <span>{{ t("Control Agent") }}</span>
+            </div>
+            <span class="dots"><i /><i /><i /></span>
           </article>
         </div>
 
@@ -644,9 +657,10 @@ watch(
 }
 .bubble-body {
   margin: 6px 0 0;
+  font-family: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
   line-height: 1.72;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 .bubble-context {
   display: flex;
@@ -918,5 +932,73 @@ watch(
   .composer-actions > .el-button {
     margin-left: auto;
   }
+}
+
+/* Markdown inside a bubble: code blocks scroll instead of stretching the card. */
+.bubble-body :deep(p) {
+  margin: 0 0 8px;
+}
+.bubble-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.bubble-body :deep(pre.code-block) {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: #0f1b24;
+  border-radius: 8px;
+  color: #e6f1ec;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.bubble-body :deep(.code-lang) {
+  display: block;
+  margin-bottom: 6px;
+  color: #8fb3a6;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bubble-body :deep(ul),
+.bubble-body :deep(ol) {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.bubble-body :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #eef5fa;
+  font-size: 12.5px;
+}
+.bubble-body :deep(pre.code-block code) {
+  padding: 0;
+  background: transparent;
+  color: #e6f1ec;
+  white-space: pre;
+}
+.bubble-body :deep(a) {
+  color: #0a7f58;
+  text-decoration: underline;
+}
+.typing .dots {
+  display: inline-flex;
+  gap: 4px;
+}
+.typing .dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0e7c86;
+  animation: chat-dot 1.2s infinite ease-in-out;
+}
+.typing .dots i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.typing .dots i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes chat-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
 }
 </style>
