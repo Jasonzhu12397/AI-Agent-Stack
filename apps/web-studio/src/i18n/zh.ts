@@ -1214,5 +1214,8 @@ export const zhCN: Record<string, string> = {
   "registered": "已注册",
   "Plugin key": "插件标识",
   "never called": "尚未调用",
+  "Run": "运行",
+  "Run capability": "运行能力",
+  "returned in": "返回耗时",
 
 };

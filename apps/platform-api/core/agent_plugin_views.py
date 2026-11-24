@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import ipaddress
 import re
+import time
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
@@ -17,6 +18,7 @@ from core.agent_a2a_adapter import discover_card as discover_a2a
 from core.agent_capability_router import (
     CapabilityResolutionError,
     invalidate_installation,
+    invoke_capability,
 )
 from core.agent_mcp_adapter import discover as discover_mcp
 from core.agent_openai_compatible_adapter import discover as discover_openai
@@ -30,7 +32,7 @@ from core.plugin_credentials import (
     resolve,
     validate_reference,
 )
-from core.tool_router import ToolExecutionError
+from core.tool_router import ToolApprovalRequired, ToolExecutionError
 from core.models import (
     AgentCapabilityInvocation,
     AgentPluginDefinition,
@@ -564,6 +566,100 @@ class AgentPluginInstallationListCreateView(APIView):
             )
         status_code = 201 if created else 200
         return Response(_installation_data(installation), status=status_code)
+
+
+class AgentPluginCapabilityInvokeView(APIView):
+    """Run one declared capability of an installed connector from the console.
+
+    The Integration Hub used to be read-only: it listed capabilities and their
+    last invocation but offered no way to prove a connector works after
+    installing it. This endpoint resolves the same project-scoped capability the
+    chat turn resolves and dispatches through the same adapter, so a successful
+    run here is exactly the call a chat turn would make, including argument
+    validation, approval policy, schema checks and invocation recording.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id, project_id, plugin_id, capability):
+        tenant = _tenant_for_user(request, tenant_id)
+        project = _project_for_user(request, tenant, project_id)
+        if not _can_manage_project(request.user, tenant, project):
+            return legacy_error_response("Project editor permission required.", http_status=403)
+        plugin = get_object_or_404(
+            AgentPluginDefinition.objects.filter(tenant=tenant), pk=plugin_id
+        )
+        installation = (
+            AgentPluginInstallation.objects.filter(
+                tenant=tenant,
+                project=project,
+                plugin=plugin,
+                status=AgentPluginInstallation.Status.INSTALLED,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if installation is None:
+            return legacy_error_response(
+                "The connector is not installed in this project.",
+                http_status=409,
+                code="CAPABILITY_NOT_INSTALLED",
+            )
+        arguments = request.data.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return legacy_error_response(
+                "arguments must be an object.", http_status=400, code="INVALID_ARGUMENTS"
+            )
+        if not _CAPABILITY_PATTERN.match(capability or ""):
+            return legacy_error_response(
+                "Invalid capability name.", http_status=400, code="INVALID_CAPABILITY"
+            )
+        started = time.monotonic()
+        try:
+            result = invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                capability,
+                arguments,
+                approved=False,
+            )
+        except CapabilityResolutionError as exc:
+            resolution_conflict = exc.code in {
+                "CAPABILITY_NOT_DECLARED",
+                "CAPABILITY_AUTH_REQUIRED",
+            }
+            return legacy_error_response(
+                str(exc),
+                http_status=409 if resolution_conflict else 400,
+                code=exc.code,
+            )
+        except ToolApprovalRequired as exc:
+            return legacy_error_response(
+                str(exc), http_status=409, code="APPROVAL_REQUIRED"
+            )
+        latency_ms = int((time.monotonic() - started) * 1000)
+        record_audit_event(
+            request,
+            tenant,
+            "agent_plugin.capability_invoked",
+            "agent_plugin_installation",
+            installation.id,
+            project=project,
+            metadata={
+                "plugin_key": plugin.plugin_key,
+                "capability": capability,
+                "source": "integration_hub",
+            },
+        )
+        return Response(
+            {
+                "status": "success",
+                "capability": capability,
+                "plugin_key": plugin.plugin_key,
+                "latency_ms": latency_ms,
+                "result": result,
+            }
+        )
 
 
 class AgentCapabilityListView(APIView):

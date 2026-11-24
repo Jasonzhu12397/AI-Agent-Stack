@@ -11,6 +11,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The Integration Hub now reads agent-plugin definitions instead of the legacy
   plugin table, so it lists the connectors chat actually has and can install,
   disable and uninstall them.
+- The Integration Hub can run an installed capability with declared arguments
+  and show the result, through the same resolver and adapter a chat turn uses.
 - Connector definitions expose `capability_definitions`; `capabilities` is a
   name list for every client.
 - The chat console requires sign-in on every workspace route, reloads the

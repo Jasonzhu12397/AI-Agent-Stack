@@ -269,3 +269,115 @@ def test_definition_payload_flattens_catalog_capability_dicts():
     assert entry["capabilities"] == ["weather.current", "weather.forecast"]
     assert entry["capability_definitions"][0]["name"] == "weather.current"
     assert entry["manifest"]["capabilities"][0]["name"] == "weather.current"
+
+
+def _install_open_data_plugin(tenant, project, client, user, granted=("weather.current",)):
+    definition = AgentPluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="weather-agent",
+        name="Weather Agent",
+        description="Built-in weather",
+        version="1.0.0",
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=[
+            {
+                "name": "weather.current",
+                "description": "Current conditions",
+                "risk_level": "low",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"place": {"type": "string"}},
+                    "required": ["place"],
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "place": {"type": "string"},
+                        "temperature_c": {"type": "number"},
+                    },
+                },
+            }
+        ],
+        enabled=True,
+    )
+    installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-plugin-installations/",
+        {"plugin_id": str(definition.id), "granted_capabilities": list(granted)},
+        format="json",
+    )
+    assert installed.status_code == 201, installed.data
+    return str(definition.id)
+
+
+@pytest.mark.django_db
+def test_console_can_run_an_installed_capability(agent_plugin_workspace, monkeypatch):
+    from core import agent_capability_router as router
+    from core.models import AgentCapabilityInvocation
+
+    user, tenant, project, client = agent_plugin_workspace
+    plugin_id = _install_open_data_plugin(tenant, project, client, user)
+    monkeypatch.setitem(
+        router._PROTOCOL_ADAPTERS,
+        "open_data",
+        lambda installation, definition, arguments, approved: {
+            "place": arguments["place"],
+            "temperature_c": 5,
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-plugins/"
+        f"{plugin_id}/capabilities/weather.current/invoke/",
+        {"arguments": {"place": "西安"}},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "success"
+    assert response.data["result"]["temperature_c"] == 5
+    invocation = AgentCapabilityInvocation.objects.get(
+        installation__project=project, capability="weather.current"
+    )
+    assert invocation.status == AgentCapabilityInvocation.Status.SUCCESS
+
+
+@pytest.mark.django_db
+def test_console_capability_run_reports_installation_and_argument_errors(agent_plugin_workspace):
+    user, tenant, project, client = agent_plugin_workspace
+    plugin_id = _install_open_data_plugin(tenant, project, client, user)
+    url = (
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-plugins/"
+        f"{plugin_id}/capabilities/weather.current/invoke/"
+    )
+
+    invalid = client.post(url, {"arguments": {}}, format="json")
+    assert invalid.status_code == 400
+    assert invalid.data["error"]["code"] == "CAPABILITY_INVOCATION_FAILED"
+
+    ungranted = client.post(
+        url.replace("weather.current", "map.route.plan"),
+        {"arguments": {}},
+        format="json",
+    )
+    assert ungranted.status_code == 409
+    assert ungranted.data["error"]["code"] == "CAPABILITY_NOT_DECLARED"
+
+    other_project = Project.objects.create(
+        tenant=tenant, name="Other project", slug="agent-plugin-other"
+    )
+    ProjectMembership.objects.create(
+        project=other_project,
+        user=user,
+        role=ProjectMembership.Role.ADMIN,
+    )
+    not_installed = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{other_project.id}/agent-plugins/"
+        f"{plugin_id}/capabilities/weather.current/invoke/",
+        {"arguments": {"place": "西安"}},
+        format="json",
+    )
+    assert not_installed.status_code == 409
+    assert not_installed.data["error"]["code"] == "CAPABILITY_NOT_INSTALLED"

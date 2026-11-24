@@ -41,7 +41,10 @@ from core.agent_plugin_views import (
     AgentPluginInstallationStatusView,
     AgentPluginCredentialRotateView,
 )
-from core.agent_plugin_views import AgentPluginDiscoverView
+from core.agent_plugin_views import (
+    AgentPluginCapabilityInvokeView,
+    AgentPluginDiscoverView,
+)
 from core.infra_network_views import InfrastructureNetworkProfileView
 from core.agent_team_views import (
     AgentTeamDetailView,
@@ -649,6 +652,11 @@ urlpatterns = [
     ),
     path("", include("core.plugin_agent_urls")),
     path("", include("core.agent_marketplace_catalog_urls")),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-plugins/<uuid:plugin_id>/capabilities/<str:capability>/invoke/",
+        AgentPluginCapabilityInvokeView.as_view(),
+        name="agent-plugin-capability-invoke",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/agent-plugins/<uuid:plugin_id>/discover/",
         AgentPluginDiscoverView.as_view(),

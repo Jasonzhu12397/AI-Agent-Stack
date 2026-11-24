@@ -13,6 +13,7 @@ import {
   getAgentPluginInstallations,
   getProjectAgentCapabilities,
   installAgentPlugin,
+  invokeAgentPluginCapability,
   setAgentPluginEnabled,
   setAgentPluginInstallationStatus,
   type AgentPluginDefinition,
@@ -34,6 +35,11 @@ const submitting = ref(false);
 const error = ref("");
 const info = ref("");
 const registerOpen = ref(false);
+const runCapability = ref("");
+const runArgs = ref("{}");
+const runBusy = ref(false);
+const runOutput = ref("");
+const runError = ref("");
 const registerPlaceholders = {
   key: "example-agent",
   endpoint: "https://agent.example.com/v1",
@@ -216,6 +222,71 @@ async function changeStatus(status: "installed" | "disabled" | "uninstalled"): P
   }
 }
 
+function canRun(capability: AgentPluginManifestCapability): boolean {
+  const installation = selectedInstallation.value;
+  if (!installation || installation.status !== "installed") return false;
+  return (
+    installation.granted_capabilities.length === 0 ||
+    installation.granted_capabilities.includes(capability.name)
+  );
+}
+
+function argumentTemplate(capability: AgentPluginManifestCapability): string {
+  const schema = capability.input_schema ?? {};
+  const properties = (schema.properties ?? {}) as Record<string, { default?: unknown }>;
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+  const draft: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (required.includes(key)) {
+      draft[key] = value?.default ?? "";
+    } else if (value?.default !== undefined) {
+      draft[key] = value.default;
+    }
+  }
+  return JSON.stringify(draft, null, 2);
+}
+
+function openRun(capability: AgentPluginManifestCapability): void {
+  runCapability.value = capability.name;
+  runArgs.value = argumentTemplate(capability);
+  runOutput.value = "";
+  runError.value = "";
+}
+
+async function submitRun(): Promise<void> {
+  if (!selected.value || !props.projectId || !runCapability.value) return;
+  let args: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(runArgs.value || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Arguments must be a JSON object.");
+    }
+    args = parsed as Record<string, unknown>;
+  } catch (cause) {
+    runError.value = cause instanceof Error ? cause.message : "Invalid JSON arguments.";
+    return;
+  }
+  runBusy.value = true;
+  runError.value = "";
+  runOutput.value = "";
+  try {
+    const response = await invokeAgentPluginCapability(
+      props.tenantId,
+      props.projectId,
+      selected.value.id,
+      runCapability.value,
+      args,
+    );
+    runOutput.value = JSON.stringify(response.result, null, 2);
+    info.value = `${runCapability.value} ${t("returned in")} ${response.latency_ms} ms.`;
+    await refresh();
+  } catch (cause) {
+    runError.value = cause instanceof Error ? cause.message : "Capability invocation failed.";
+  } finally {
+    runBusy.value = false;
+  }
+}
+
 function lastInvocation(name: string): string {
   const entry = capabilities.value.find((item) => item.name === name);
   if (!entry?.last_invocation) return t("never called");
@@ -331,8 +402,35 @@ function lastInvocation(name: string): string {
               <div class="hub-cap-tags">
                 <el-tag size="small" effect="plain">{{ capabilityRisk(capability.name) }}</el-tag>
                 <small>{{ lastInvocation(capability.name) }}</small>
+                <el-button
+                  v-if="canRun(capability)"
+                  size="small"
+                  text
+                  type="primary"
+                  @click="openRun(capability)"
+                >
+                  {{ t("Run") }}
+                </el-button>
               </div>
             </div>
+          </div>
+
+          <div v-if="runCapability" class="hub-run">
+            <p class="hub-panel-label">{{ t("Run capability") }} · <code>{{ runCapability }}</code></p>
+            <el-input
+              v-model="runArgs"
+              type="textarea"
+              :rows="4"
+              spellcheck="false"
+            />
+            <div class="hub-actions">
+              <el-button type="primary" size="small" :loading="runBusy" @click="submitRun">
+                {{ t("Run capability") }}
+              </el-button>
+              <el-button size="small" text @click="runCapability = ''">{{ t("Close") }}</el-button>
+            </div>
+            <p v-if="runError" class="hub-run-error">{{ runError }}</p>
+            <pre v-if="runOutput" class="hub-run-output">{{ runOutput }}</pre>
           </div>
 
           <div v-if="selectedInstallation" class="hub-install">
@@ -634,6 +732,30 @@ function lastInvocation(name: string): string {
 .hub-cap-tags {
   align-items: flex-end;
   text-align: right;
+}
+.hub-run {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+}
+.hub-run-output {
+  max-height: 260px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.hub-run-error {
+  margin: 8px 0 0;
+  color: var(--el-color-danger);
+  font-size: 12px;
 }
 .hub-install {
   margin-top: 8px;

@@ -2087,6 +2087,33 @@ export function createAgentPlugin(
 }
 
 /** Turn a connector definition on or off for the whole tenant. */
+export type AgentCapabilityInvokeResult = {
+  status: "success";
+  capability: string;
+  plugin_key: string;
+  latency_ms: number;
+  result: Record<string, unknown>;
+};
+
+/** Run one declared capability of a connector installed in this project. */
+export function invokeAgentPluginCapability(
+  tenantId: string,
+  projectId: string,
+  pluginId: string,
+  capability: string,
+  args: Record<string, unknown>,
+): Promise<AgentCapabilityInvokeResult> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/agent-plugins/" +
+      pluginId + "/capabilities/" + encodeURIComponent(capability) + "/invoke/",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ arguments: args }),
+    },
+  );
+}
+
 export function setAgentPluginEnabled(
   pluginId: string,
   enabled: boolean,
