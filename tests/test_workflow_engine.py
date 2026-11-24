@@ -127,6 +127,78 @@ def test_workflow_validator_rejects_cycles_and_disconnected_nodes():
         validate_workflow_definition(disconnected)
 
 
+def test_workflow_validator_rejects_branch_that_never_reaches_end():
+    """A path that stops at a processing node used to fail only at run time."""
+
+    dead_end = {
+        "nodes": [
+            {"id": "start", "type": "start", "config": {}},
+            {
+                "id": "check",
+                "type": "condition",
+                "config": {"input_key": "input", "equals": "yes"},
+            },
+            {
+                "id": "answer",
+                "type": "llm",
+                "config": {
+                    "model_config_id": "00000000-0000-0000-0000-000000000001",
+                    "prompt_template": "x",
+                },
+            },
+            {"id": "end", "type": "end", "config": {}},
+        ],
+        "edges": [
+            {"source": "start", "target": "check"},
+            {"source": "check", "target": "end", "when": True},
+            {"source": "check", "target": "answer", "when": False},
+        ],
+    }
+    with pytest.raises(WorkflowValidationError, match="no outgoing edge"):
+        validate_workflow_definition(dead_end)
+
+
+@pytest.mark.django_db
+def test_workflow_run_payload_carries_the_failure_reason(workflow_workspace):
+    """A failed run used to report only 'failed' with no reason for the operator."""
+
+    from core.workflow_serializers import WorkflowRunSerializer
+
+    user, tenant, project, model = workflow_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    created = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/workflows/",
+        {
+            "name": "Failing workflow",
+            "slug": "failing-workflow",
+            "description": "Keeps the reason on the task",
+            "draft_definition": linear_workflow(model.id),
+        },
+        format="json",
+    )
+    assert created.status_code == 201
+    workflow_id = created.data["id"]
+    published = client.post(f"/api/v1/workflows/{workflow_id}/publish/", {}, format="json")
+    assert published.status_code == 201
+    run = client.post(
+        f"/api/v1/workflows/{workflow_id}/runs/",
+        {"input": {"question": "fail please"}},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="workflow-run-error-001",
+    )
+    assert run.status_code == 202
+    task = Task.objects.get(pk=WorkflowRun.objects.get(pk=run.data["id"]).task_id)
+    task.status = Task.Status.FAILED
+    task.error = {"code": "WORKFLOW_NODE_FAILED", "message": "Provider rejected the credential."}
+    task.save(update_fields=["status", "error", "updated_at"])
+    payload = WorkflowRunSerializer(WorkflowRun.objects.get(pk=run.data["id"])).data
+    assert payload["task_status"] == Task.Status.FAILED
+    assert payload["task_error"]["code"] == "WORKFLOW_NODE_FAILED"
+    assert "credential" in payload["task_error"]["message"]
+
+
+
 @pytest.mark.django_db
 def test_workflow_draft_publish_and_persistent_run(workflow_workspace):
     user, tenant, project, model = workflow_workspace

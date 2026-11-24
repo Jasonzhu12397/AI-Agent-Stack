@@ -373,7 +373,105 @@ type InsertableNodeType =
   | "approval"
   | "loop";
 
+function nodeConfigFor(type: InsertableNodeType): Record<string, unknown> {
+  if (type === "llm") return { model_config_id: "", prompt_template: "{{input}}" };
+  if (type === "knowledge_search") {
+    return { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 };
+  }
+  if (type === "approval") return { instructions: "Confirm this workflow step before it continues" };
+  if (type === "condition") return { input_key: "input", equals: "" };
+  if (type === "agent") return { agent_version_id: "", instructions: "" };
+  if (type === "loop") {
+    return {
+      max_iterations: 3,
+      body: {
+        type: "llm",
+        config: { model_config_id: "", prompt_template: "Refine: {{input}}" },
+      },
+    };
+  }
+  return { tool_id: "", arguments: {} };
+}
+
+/**
+ * Keep the draft insertable regardless of what the editor holds.
+ *
+ * The previous version refused to act unless the draft already had exactly one
+ * end node with exactly one incoming edge, so a fresh or hand-edited draft
+ * only ever produced an error. Repairing the skeleton here matches the server
+ * rules (one start, at least one end, no dead ends) instead of asking the user
+ * to fix JSON by hand.
+ */
+function repairSkeleton(
+  nodes: Record<string, unknown>[],
+  edges: Record<string, unknown>[],
+): string[] {
+  const repairs: string[] = [];
+  if (nodes.length === 0) {
+    nodes.push({ id: "start", type: "start", config: {} });
+    repairs.push("added the missing start node");
+  }
+  const starts = nodes.filter((node) => node.type === "start");
+  const ends = nodes.filter((node) => node.type === "end");
+  if (starts.length > 1) {
+    nodes.splice(nodes.indexOf(starts[1]), starts.length - 1);
+    repairs.push("removed " + String(starts.length - 1) + " duplicate start node(s)");
+  }
+  if (ends.length === 0) {
+    const used = new Set(nodes.map((node) => String(node.id ?? "")));
+    let endId = "end";
+    let suffix = 2;
+    while (used.has(endId)) {
+      endId = "end_" + String(suffix);
+      suffix += 1;
+    }
+    nodes.push({ id: endId, type: "end", config: {} });
+    const sinks = nodes.filter((node) => {
+      const id = String(node.id ?? "");
+      if (node.type === "end" || node.type === "start") return false;
+      return !edges.some((edge) => edge.source === id);
+    });
+    const attach = sinks.length > 0 ? sinks : nodes.filter((node) => node.type === "start");
+    for (const node of attach) {
+      edges.push({ source: String(node.id ?? ""), target: endId });
+    }
+    repairs.push("added the missing end node and connected it");
+  } else if (ends.length > 1) {
+    const keep = ends[0];
+    for (const duplicate of ends.slice(1)) {
+      const duplicateId = String(duplicate.id ?? "");
+      for (const edge of edges.filter((item) => item.target === duplicateId)) {
+        edge.target = String(keep.id ?? "");
+      }
+      for (let index = edges.length - 1; index >= 0; index -= 1) {
+        if (edges[index].source === duplicateId) edges.splice(index, 1);
+      }
+      nodes.splice(nodes.indexOf(duplicate), 1);
+    }
+    repairs.push("merged " + String(ends.length - 1) + " extra end node(s) into one");
+  }
+  const orphanEnds = nodes.filter(
+    (node) => node.type === "end" && !edges.some((edge) => edge.target === String(node.id ?? "")),
+  );
+  for (const orphan of orphanEnds) {
+    const candidates = nodes.filter(
+      (node) =>
+        node !== orphan && node.type !== "end" && !edges.some((edge) => edge.source === String(node.id ?? "")),
+    );
+    const source = candidates.length > 0 ? candidates[candidates.length - 1] : nodes.find((node) => node.type === "start");
+    if (source) {
+      edges.push({ source: String(source.id ?? ""), target: String(orphan.id ?? "") });
+      repairs.push("connected the unreachable end node");
+    }
+  }
+  return repairs;
+}
+
 function addWorkflowNode(type: InsertableNodeType): void {
+  if (!selectedWorkflowId.value) {
+    error.value = "Select or create a workflow draft before inserting nodes.";
+    return;
+  }
   const definition = parseDefinition();
   if (!definition) return;
   const nodes = Array.isArray(definition.nodes)
@@ -382,48 +480,40 @@ function addWorkflowNode(type: InsertableNodeType): void {
   const edges = Array.isArray(definition.edges)
     ? [...definition.edges as Record<string, unknown>[]]
     : [];
-  const endNodes = nodes.filter((node) => node.type === "end");
-  if (endNodes.length !== 1) {
-    error.value = "Add a processing node only when the draft has exactly one end node.";
+  const repairs = repairSkeleton(nodes, edges);
+  const endNode = nodes.filter((node) => node.type === "end")[0];
+  const endId = String(endNode.id ?? "");
+  const incoming = edges.filter((edge) => edge.target === endId);
+  if (incoming.length === 0) {
+    error.value = "The end node has no incoming path; add an edge from a node to " + endId + " first.";
     return;
   }
-  const endNode = endNodes[0];
-  const incoming = edges.filter((edge) => edge.target === endNode.id);
-  if (incoming.length !== 1) {
-    error.value = "The end node must have exactly one incoming edge before inserting a node.";
+  const conditional = incoming.filter((edge) => {
+    const sourceId = String(edge.source ?? "");
+    const source = nodes.find((node) => String(node.id ?? "") === sourceId);
+    return source?.type === "condition" || typeof edge.when === "boolean";
+  });
+  if (conditional.length > 0 && incoming.length > 1) {
+    error.value =
+      "The end node " + endId + " is reached from condition branches; insert the node on one branch instead of before the end.";
     return;
   }
-  const previousEdge = incoming[0];
   const nodeId = type + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-  const config: Record<string, unknown> = type === "llm"
-    ? { model_config_id: "", prompt_template: "{{input}}" }
-    : type === "knowledge_search"
-      ? { knowledge_base_ids: [], query_template: "{{input}}", limit: 5 }
-      : type === "approval"
-        ? { instructions: "Confirm this workflow step before it continues" }
-        : type === "condition"
-          ? { input_key: "input", equals: "" }
-          : type === "agent"
-            ? { agent_version_id: "", instructions: "" }
-            : type === "loop"
-              ? {
-                  max_iterations: 3,
-                  body: {
-                    type: "llm",
-                    config: { model_config_id: "", prompt_template: "Refine: {{input}}" },
-                  },
-                }
-              : { tool_id: "", arguments: {} };
-  const node = { id: nodeId, type, config };
-  const edgeIndex = edges.indexOf(previousEdge);
-  edges.splice(edgeIndex, 1, { ...previousEdge, target: nodeId });
-  edges.push({ source: nodeId, target: endNode.id });
+  const node = { id: nodeId, type, config: nodeConfigFor(type) };
+  for (const edge of incoming) edge.target = nodeId;
+  edges.push({ source: nodeId, target: endId });
   nodes.splice(nodes.indexOf(endNode), 0, node);
   definition.nodes = nodes;
   definition.edges = edges;
   definitionText.value = JSON.stringify(definition, null, 2);
   validationResult.value = null;
-  notice.value = type.toUpperCase() + " node inserted. Configure its IDs and settings in the definition before validation.";
+  const prefix = repairs.length > 0 ? "Draft repaired (" + repairs.join("; ") + "). " : "";
+  notice.value =
+    prefix +
+    type.toUpperCase() +
+    " node inserted before " +
+    endId +
+    ". Configure its IDs and settings in the definition before validation.";
   error.value = "";
 }
 
@@ -631,8 +721,12 @@ async function runWorkflow(): Promise<void> {
       input as Record<string, unknown>,
     );
     runs.value = [run, ...runs.value.filter((item) => item.id !== run.id)];
-    notice.value = "Workflow run queued: " + run.id.slice(0, 8) + ".";
+    notice.value =
+      "Workflow run " +
+      run.id.slice(0, 8) +
+      " queued. The worker starts it within a second; Execution history shows each node's result.";
     await loadRuns();
+    window.setTimeout(() => void loadRuns(), 1000);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to start workflow.";
   } finally {
@@ -700,14 +794,16 @@ onUnmounted(() => {
           <el-tag type="info" effect="plain">{{ previewGraph.nodes.length }} nodes · {{ previewGraph.edges.length }} edges</el-tag>
         </div>
         <div class="workflow-node-toolbar">
-          <span class="task-note">Insert node before the single end node:</span>
-          <el-button size="small" @click="addWorkflowNode('llm')">＋ LLM</el-button>
-          <el-button size="small" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
-          <el-button size="small" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
-          <el-button size="small" @click="addWorkflowNode('condition')">＋ Condition</el-button>
-          <el-button size="small" @click="addWorkflowNode('agent')">＋ Agent</el-button>
-          <el-button size="small" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
-          <el-button size="small" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
+          <span class="task-note">
+            {{ selectedWorkflowId ? "Insert node before the end node:" : "Select or create a draft to insert nodes:" }}
+          </span>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('llm')">＋ LLM</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('knowledge_search')">＋ Knowledge Search</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('tool')">＋ Connector Tool</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('condition')">＋ Condition</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('agent')">＋ Agent</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('approval')">＋ Approval Gate</el-button>
+          <el-button size="small" :disabled="!selectedWorkflowId" @click="addWorkflowNode('loop')">＋ Bounded Loop</el-button>
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-canvas-grid">
@@ -879,6 +975,13 @@ onUnmounted(() => {
                 </el-tag>
                 <span>{{ new Date(run.created_at).toLocaleString() }}</span>
               </div>
+              <el-alert
+                v-if="run.task_error"
+                :title="run.task_error.code ? run.task_error.code + ': ' + (run.task_error.message || '') : String(run.task_error)"
+                type="error"
+                :closable="false"
+                show-icon
+              />
               <pre class="workflow-run-output">{{ run.output_data === null ? "No output yet" : JSON.stringify(run.output_data, null, 2) }}</pre>
               <div class="workflow-step-list">
                 <span v-for="step in run.steps" :key="step.id" class="workflow-step-entry">

@@ -1,6 +1,7 @@
 # ruff: noqa: I001
 import hashlib
 import json
+import logging
 import re
 import uuid
 from collections import deque
@@ -40,6 +41,8 @@ from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRoute
 from core.token_budget import TenantTokenBudgetExceeded, resolve_provider_token_usage
 from core.token_guard import RunTokenGuard
 
+
+logger = logging.getLogger(__name__)
 
 FORBIDDEN_CREDENTIAL_KEYS = {
     "api_key",
@@ -406,6 +409,13 @@ def validate_workflow_definition(definition):
                 )
         if node_id != start_id and not incoming[node_id]:
             raise WorkflowValidationError(f"Node {node_id} is disconnected from the start.")
+        # A branch that stops at a non-end node executes fine but produces no
+        # output: the run died with "reached no end node" only after it had
+        # already burned tokens. Reject it up front, while it is editable.
+        if node["type"] != "end" and not outgoing[node_id]:
+            raise WorkflowValidationError(
+                f"Node {node_id} has no outgoing edge; every branch must finish at an end node."
+            )
     indegree = {node_id: len(incoming[node_id]) for node_id in node_map}
     queue = deque([start_id])
     ordered_ids = []
@@ -1189,7 +1199,15 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            raise WorkflowValidationError("WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY") from exc
+            # The bare code alone told the operator nothing and hid the cause
+            # from the logs as well; keep both the type and the traceback.
+            logger.exception("Workflow model request failed unexpectedly")
+            raise WorkflowValidationError(
+                "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY: "
+                + type(exc).__name__
+                + ": "
+                + str(exc)
+            ) from exc
         actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
             provider_type=model.provider.provider_type,
             reported_input_tokens=response.input_tokens,
@@ -1303,7 +1321,15 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:" + exc.code
             ) from exc
         except Exception as exc:
-            raise WorkflowValidationError("WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY") from exc
+            # The bare code alone told the operator nothing and hid the cause
+            # from the logs as well; keep both the type and the traceback.
+            logger.exception("Workflow model request failed unexpectedly")
+            raise WorkflowValidationError(
+                "WORKFLOW_MODEL_REQUEST_FAILED_UNEXPECTEDLY: "
+                + type(exc).__name__
+                + ": "
+                + str(exc)
+            ) from exc
         actual_input_tokens, actual_output_tokens = resolve_provider_token_usage(
             provider_type=model.provider.provider_type,
             reported_input_tokens=response.input_tokens,
@@ -1598,5 +1624,13 @@ def execute_workflow_run(task, worker_id, renew_lease):
         workflow_run.save(update_fields=["state"])
     end_results = [state[node_id] for node_id in graph["end_ids"] if node_id in state]
     if not end_results:
-        raise WorkflowValidationError("Workflow execution reached no end node.")
+        executed = sorted(active_nodes)
+        raise WorkflowValidationError(
+            "Workflow execution reached no end node. "
+            + "Executed nodes: "
+            + (", ".join(executed) if executed else "none")
+            + "; end nodes: "
+            + ", ".join(graph["end_ids"])
+            + "."
+        )
     return {"output": end_results[0], "state": state}

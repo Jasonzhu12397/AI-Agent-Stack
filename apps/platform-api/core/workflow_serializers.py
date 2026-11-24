@@ -64,6 +64,9 @@ class WorkflowStepRunSerializer(serializers.ModelSerializer):
 
 class WorkflowRunSerializer(serializers.ModelSerializer):
     task_status = serializers.CharField(source="task.status", read_only=True)
+    # The failure reason lives on the task; without it the UI could only show
+    # "failed" and leave the operator guessing.
+    task_error = serializers.JSONField(source="task.error", read_only=True)
     task_id = serializers.UUIDField(read_only=True)
     workflow_version_id = serializers.UUIDField(read_only=True)
     steps = WorkflowStepRunSerializer(many=True, read_only=True)
@@ -75,6 +78,7 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             "task_id",
             "workflow_version_id",
             "task_status",
+            "task_error",
             "input_data",
             "state",
             "output_data",

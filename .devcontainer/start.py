@@ -105,8 +105,22 @@ def main() -> None:
         log_name="api.log",
         env=env,
     )
+    # Queued workflow runs need an executor. Without the worker process a run
+    # stays "queued" forever and the console can only report a queue id, which
+    # looks like a broken console rather than an idle cluster.
+    worker_env = {
+        **env,
+        "PYTHONPATH": f"{PLATFORM_API}:{REPO_ROOT}:{REPO_ROOT / 'apps' / 'worker'}",
+        "WORKER_POLL_SECONDS": "1",
+    }
+    worker = spawn(
+        [sys.executable, "-m", "worker_app.main"],
+        cwd=REPO_ROOT / "apps" / "worker",
+        log_name="worker.log",
+        env=worker_env,
+    )
     # The API serves the built console bundle, so there is no second runtime.
-    PID_FILE.write_text(json.dumps([api]))
+    PID_FILE.write_text(json.dumps([api, worker]))
     print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
     subprocess.run(

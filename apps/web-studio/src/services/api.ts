@@ -506,6 +506,7 @@ export type WorkflowRun = {
   task_id: string;
   workflow_version_id: string;
   task_status: string;
+  task_error?: { code?: string; message?: string } | null;
   input_data: Record<string, unknown>;
   state: Record<string, unknown>;
   output_data: unknown;
