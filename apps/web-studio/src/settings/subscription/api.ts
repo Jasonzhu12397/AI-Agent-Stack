@@ -31,3 +31,53 @@ export async function refundOrder(
     body: JSON.stringify({ amount_cents: amountCents, reason }),
   });
 }
+
+export type ReconciliationDiscrepancy = {
+  order_id: string;
+  channel: string;
+  kind: "provider_not_found" | "status_mismatch" | "amount_mismatch";
+  local_status?: string;
+  provider_status: string;
+  local_amount_cents?: number;
+  provider_amount_cents?: number | null;
+};
+
+export type RefundDiscrepancy = {
+  order_id: string;
+  channel: string;
+  kind: "refund_status_mismatch" | "refund_amount_mismatch";
+  refund_reference: string;
+  local_refund_cents: number;
+  provider_refund_cents: number | null;
+  provider_status: string;
+};
+
+export type ReconciliationReport = {
+  start: string;
+  end: string;
+  order_count: number;
+  status_counts: Record<string, number>;
+  channel_amounts: Record<
+    string,
+    { order_count: number; amount_cents: number; refunded_cents: number }
+  >;
+  refund_slice_count: number;
+  unavailable_channels: string[];
+  discrepancies: ReconciliationDiscrepancy[];
+  refund_discrepancies: RefundDiscrepancy[];
+};
+
+/**
+ * Read-only reconciliation window. Dates are local ``YYYY-MM-DD`` boundaries;
+ * the server never changes order state while building this report.
+ */
+export async function fetchReconciliation(
+  tenantId: string,
+  start: string,
+  end: string,
+): Promise<ReconciliationReport> {
+  const query = new URLSearchParams({ start, end }).toString();
+  return request(
+    tenantPath(tenantId, `/billing/reconciliation/?${query}`),
+  );
+}

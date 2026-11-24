@@ -6,7 +6,13 @@ import SettingsPageShell from "../shared/SettingsPageShell.vue";
 import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { closeOrder, fetchSubscriptionBundle, refundOrder } from "./api";
+import {
+  closeOrder,
+  fetchReconciliation,
+  fetchSubscriptionBundle,
+  refundOrder,
+  type ReconciliationReport,
+} from "./api";
 import {
   describeError,
   formatAmount,
@@ -148,6 +154,45 @@ async function submitRefund(): Promise<void> {
   }
 }
 
+// Reconciliation: read-only window over the same date the server accepts
+// (local ``YYYY-MM-DD`` boundaries). The report never mutates orders.
+function todayIso(): string {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+const reconciliation = ref<ReconciliationReport | null>(null);
+const reconciliationStart = ref(todayIso());
+const reconciliationEnd = ref(todayIso());
+const reconciliationLoading = ref(false);
+const reconciliationError = ref("");
+
+const reconciliationDiscrepancyCount = computed(
+  () =>
+    (reconciliation.value?.discrepancies.length ?? 0) +
+    (reconciliation.value?.refund_discrepancies.length ?? 0),
+);
+
+async function loadReconciliation(): Promise<void> {
+  if (!activeTenantId.value) return;
+  reconciliationLoading.value = true;
+  reconciliationError.value = "";
+  try {
+    reconciliation.value = await fetchReconciliation(
+      activeTenantId.value,
+      reconciliationStart.value,
+      reconciliationEnd.value,
+    );
+  } catch (cause) {
+    reconciliationError.value =
+      cause instanceof ApiError ? describeError(cause.code) : t("The reconciliation report could not be loaded.");
+    reconciliation.value = null;
+  } finally {
+    reconciliationLoading.value = false;
+  }
+}
+
 onMounted(() => void resource.reload());
 void pageLabels;
 </script>
@@ -166,17 +211,6 @@ void pageLabels;
     <el-card class="settings-card" shadow="never">
       <template #header>{{ t("Subscription & Usage Management") }}</template>
 
-<style scoped>
-.refund-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.refund-dialog :deep(.el-form-item) {
-  margin-bottom: 12px;
-}
-</style>
       <div v-if="subscription">
         <p>
           <strong>{{ subscription.plan_name }}</strong>
@@ -372,6 +406,89 @@ void pageLabels;
       </template>
     </el-dialog>
 
+    <el-card class="settings-card" shadow="never" data-reconciliation>
+      <template #header>{{ t("Payment reconciliation") }}</template>
+      <p class="muted">
+        {{
+          t(
+            "Read-only comparison between local orders and the payment provider for a date window. Nothing is changed by this report.",
+          )
+        }}
+      </p>
+      <div class="settings-usage-row">
+        <el-input v-model="reconciliationStart" type="date" :aria-label="t('Start date')" />
+        <el-input v-model="reconciliationEnd" type="date" :aria-label="t('End date')" />
+        <el-button :loading="reconciliationLoading" @click="loadReconciliation">
+          {{ t("Load report") }}
+        </el-button>
+      </div>
+      <el-alert
+        v-if="reconciliationError"
+        class="settings-inline-error"
+        type="error"
+        show-icon
+        :closable="false"
+        :title="reconciliationError"
+      />
+      <template v-if="reconciliation">
+        <p class="muted">
+          {{ reconciliation.start }} → {{ reconciliation.end }} ·
+          {{ reconciliation.order_count }} {{ t("orders") }} ·
+          {{ reconciliation.refund_slice_count }} {{ t("refund slices") }}
+        </p>
+        <el-alert
+          v-if="reconciliation.unavailable_channels.length > 0"
+          type="warning"
+          show-icon
+          :closable="false"
+          :title="`${t('Channels that could not be queried')}: ${reconciliation.unavailable_channels.join(', ')}`"
+        />
+        <el-alert
+          v-if="reconciliationDiscrepancyCount === 0"
+          type="success"
+          show-icon
+          :closable="false"
+          :title="t('No discrepancies in this window')"
+        />
+        <el-table
+          v-if="reconciliation.discrepancies.length > 0"
+          :data="reconciliation.discrepancies"
+          size="small"
+          data-discrepancies
+        >
+          <el-table-column prop="order_id" label="Order" />
+          <el-table-column prop="channel" :label="t('Channel')" />
+          <el-table-column prop="kind" :label="t('Kind')" />
+          <el-table-column prop="local_status" :label="t('Local status')" />
+          <el-table-column prop="provider_status" :label="t('Provider status')" />
+        </el-table>
+        <el-table
+          v-if="reconciliation.refund_discrepancies.length > 0"
+          :data="reconciliation.refund_discrepancies"
+          size="small"
+          data-refund-discrepancies
+        >
+          <el-table-column prop="refund_reference" :label="t('Refund reference')" />
+          <el-table-column prop="kind" :label="t('Kind')" />
+          <el-table-column prop="local_refund_cents" :label="t('Local refund')" />
+          <el-table-column prop="provider_refund_cents" :label="t('Provider refund')" />
+          <el-table-column prop="provider_status" :label="t('Provider status')" />
+        </el-table>
+      </template>
+    </el-card>
+
     <p class="muted">{{ describeError("PAYMENT_PROVIDER_NOT_CONFIGURED") }}</p>
   </SettingsPageShell>
 </template>
+
+<style scoped>
+.refund-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.refund-dialog :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+</style>

@@ -47,3 +47,11 @@ test("refund failures surface the server error codes instead of a generic messag
   assert.match(logic, /REFUND_AMOUNT_INVALID/);
   assert.match(logic, /PAYMENT_PROVIDER_RESPONSE_UNTRUSTED/);
 });
+
+test("the subscription page exposes the read-only reconciliation report", () => {
+  assert.match(api, /export async function fetchReconciliation/);
+  assert.match(api, /billing\/reconciliation\/\?\$\{query\}/);
+  assert.match(page, /fetchReconciliation\(/);
+  assert.match(page, /reconciliationDiscrepancyCount/);
+  assert.match(page, /data-refund-discrepancies/);
+});
