@@ -234,7 +234,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     // Credentials are gone (expired cookie, restarted database, proxy gate).
     // Every view would otherwise show one unrelated error each, so the shell
     // listens for one event and sends the user back to the sign-in page.
-    window.dispatchEvent(new Event("agent-stack:session-expired"));
+    // A console that boots on the sign-in route probes the API before anyone
+    // has signed in; those probes are not an expired session, and treating
+    // them as one left a red "session expired" banner on a fresh sign-in.
+    if (storedSessionToken()) {
+      window.dispatchEvent(new Event("agent-stack:session-expired"));
+    }
   }
   if (response.status === 204) return undefined as T;
   // An access proxy in front of this origin answers with HTML, not the API

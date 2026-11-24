@@ -96,6 +96,25 @@ def _is_local_http_provider(provider):
     )
 
 
+def _intent_tool(offered: list[str], instruction: str) -> str | None:
+    """Pick the offered plugin tool whose capability the instruction names."""
+
+    text = instruction.lower()
+    groups = (
+        ("weather", ("天气", "气温", "下雨", "weather", "temperature")),
+        ("route", ("路线", "怎么走", "导航", "多久", "route", "directions")),
+        ("place", ("地点", "在哪", "地图", "附近", "place")),
+    )
+    for token, keywords in groups:
+        if not any(keyword in text for keyword in keywords):
+            continue
+        for name in offered:
+            lowered = str(name).lower()
+            if token in lowered and not (token == "map" and "route" in lowered):
+                return name
+    return None
+
+
 class ModelGateway:
     def __init__(self, guard=None, account=None):
         self._guard = guard
@@ -244,6 +263,19 @@ class ModelGateway:
         try:
             if provider.provider_type == ModelProvider.ProviderType.FAKE:
                 content = provider.config.get("response", "Fake model response")
+                # A tool result is already in the transcript, so answer from
+                # it instead of repeating the canned line: the demo turn then
+                # shows the real weather or route the connector returned.
+                last_tool = next(
+                    (
+                        message.get("content")
+                        for message in reversed(messages)
+                        if message.get("role") == "tool"
+                    ),
+                    None,
+                )
+                if isinstance(last_tool, str) and last_tool.strip():
+                    content = "Tool result: " + last_tool.strip()[:600]
                 if not isinstance(content, str):
                     raise ModelGatewayError(
                         "INVALID_FAKE_RESPONSE",
@@ -261,8 +293,21 @@ class ModelGateway:
                     functions = [item.get("function", {}) for item in tools]
                     offered = [item.get("name") for item in functions]
                     preferred = provider.config.get("tool_name")
+                    intent = next(
+                        (
+                            str(message.get("content") or "")
+                            for message in reversed(messages)
+                            if message.get("role") == "user"
+                        ),
+                        "",
+                    )
                     if preferred in offered:
                         chosen = preferred
+                    elif match := _intent_tool(offered, intent):
+                        # The offline demo should exercise the connector the
+                        # instruction is about, not whichever plugin is listed
+                        # first, so a weather question calls the weather tool.
+                        chosen = match
                     else:
                         # Prefer tools that run where the member aimed the turn:
                         # the local runner first, then an installed plugin, so

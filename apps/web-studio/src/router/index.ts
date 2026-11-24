@@ -56,26 +56,28 @@ const legacyRoutes: RouteRecordRaw[] = [
     path: "/chat",
     name: "chat-workspace",
     component: ChatWorkspaceView,
-    meta: { section: "chat" },
+    meta: { section: "chat", requiresAuth: true },
   },
   {
     path: "/scheduled",
     name: "scheduled-jobs",
     component: ScheduledJobsView,
-    meta: { section: "scheduled" },
+    meta: { section: "scheduled", requiresAuth: true },
   },
   ...WORKSPACE_SECTIONS.map(({ path, section }) => ({
     path,
     name: `workspace-${section}`,
     component: WorkspaceView,
     props: { activeSection: section },
-    meta: { section },
+    // Every workbench page reads project data, so an anonymous visitor
+    // belongs on the sign-in screen, not in an empty shell.
+    meta: { section, requiresAuth: true },
   })),
   {
     path: "/infrastructure",
     name: "infrastructure",
     component: Metal3FleetView,
-    meta: { section: "overview" },
+    meta: { section: "overview", requiresAuth: true },
   },
 ];
 

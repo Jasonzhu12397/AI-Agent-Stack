@@ -401,3 +401,12 @@ def test_embedding_gateway_rejects_aggregate_input_over_byte_budget():
         ModelGateway(guard=_StubGuard()).embed(model, inputs)
 
     assert error.value.code == "EMBEDDING_INPUT_LIMIT"
+
+
+def test_fake_model_reads_the_intent_of_the_instruction():
+    from core.model_gateway import _intent_tool
+
+    offered = ["weather.current", "map.route.plan", "github.issue.read"]
+    assert _intent_tool(offered, "查一下西安天气") == "weather.current"
+    assert _intent_tool(offered, "西安到咸阳怎么走") == "map.route.plan"
+    assert _intent_tool(offered, "read issue 42") is None

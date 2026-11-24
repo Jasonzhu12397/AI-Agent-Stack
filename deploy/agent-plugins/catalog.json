@@ -246,7 +246,9 @@
                 "type": "number"
               }
             },
-            "required": []
+            "required": [
+              "place"
+            ]
           },
           "query_params": {
             "place": "place",

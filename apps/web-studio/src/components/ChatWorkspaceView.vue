@@ -660,11 +660,11 @@ onMounted(async () => {
                 v-for="plugin in context?.plugins ?? []"
                 :key="plugin.id"
                 type="button"
-                :class="{ on: selectedPlugins.includes(plugin.id), warn: !plugin.credential_configured }"
+                :class="{ on: selectedPlugins.includes(plugin.id), warn: plugin.auth_required && !plugin.credential_configured }"
                 @click="selectedPlugins = toggleIn(selectedPlugins, plugin.id)"
               >
                 {{ plugin.name }}
-                <span v-if="!plugin.credential_configured"> · {{ t("authorize") }}</span>
+                <span v-if="plugin.auth_required && !plugin.credential_configured"> · {{ t("authorize") }}</span>
               </button>
               <p v-if="!(context?.plugins ?? []).length" class="chat-menu-empty">{{ t("No plugin installed in this project") }}</p>
               <template v-if="(context?.catalog ?? []).length">

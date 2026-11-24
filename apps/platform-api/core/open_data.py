@@ -146,39 +146,52 @@ def _place_candidates(query: str) -> list[str]:
     stripped = _strip_fillers(value)
     if stripped and stripped != value:
         candidates.append(stripped)
-    if not value:
-        return candidates
     if len(value) <= 3:
         return candidates
-    per_length = 2
-    for length in range(len(value) - 1, 1, -1):
-        taken = 0
-        for start in range(0, len(value) - length + 1):
-            candidate = value[start : start + length].strip()
-            if candidate and candidate not in candidates:
-                candidates.append(candidate)
-                taken += 1
-            if taken >= per_length or len(candidates) >= GEOCODE_CANDIDATE_LIMIT:
-                break
+    # A place usually sits at one end of the sentence ("西安到咸阳怎么走",
+    # "西安天气怎么样"), so growing prefixes and suffixes cover it sooner
+    # than a sweep of every window.
+    for end in range(2, len(value) + 1):
+        prefix = value[:end].strip()
+        if prefix and prefix not in candidates:
+            candidates.append(prefix)
+        if len(candidates) >= GEOCODE_CANDIDATE_LIMIT:
+            return candidates
+    for start in range(1, len(value) - 1):
+        suffix = value[start:].strip()
+        if suffix and suffix not in candidates:
+            candidates.append(suffix)
         if len(candidates) >= GEOCODE_CANDIDATE_LIMIT:
             return candidates
     return candidates
+
+
+def _geocode_rows(place: str, count: int) -> tuple[list, str]:
+    """Return geocoder rows for the first candidate that resolves.
+
+    The matched query is returned too, so callers can label the result with
+    what the geocoder actually understood.
+    """
+
+    rows: list = []
+    matched = place
+    for candidate in _place_candidates(place):
+        body = _fetch_json(
+            GEOCODE_URL,
+            {"name": candidate, "count": str(count), "language": "zh", "format": "json"},
+        )
+        rows = body.get("results") if isinstance(body, dict) else []
+        if rows:
+            matched = candidate
+            break
+    return rows, matched
 
 
 def _geocode(place: str) -> dict:
     cached = GEOCODE_CACHE.get(place)
     if cached is not None and time.monotonic() - cached[0] < GEOCODE_TTL_SECONDS:
         return cached[1]
-    rows = None
-    for candidate in _place_candidates(place):
-        body = _fetch_json(
-            GEOCODE_URL,
-            {"name": candidate, "count": "1", "language": "zh", "format": "json"},
-        )
-        rows = body.get("results") if isinstance(body, dict) else None
-        if rows:
-            place = candidate
-            break
+    rows, place = _geocode_rows(place, 1)
     if not rows:
         raise ConnectorError("PLACE_NOT_FOUND", f"No place matched {place!r}.", 404)
     row = rows[0]
@@ -200,10 +213,7 @@ def _geocode(place: str) -> dict:
 def _place_search(params: dict[str, list[str]]) -> dict:
     query = _text(params, "query")
     limit = min(int(_text(params, "limit", required=False) or 5), 10)
-    body = _fetch_json(
-        GEOCODE_URL, {"name": query, "count": str(limit), "language": "zh", "format": "json"}
-    )
-    rows = body.get("results") if isinstance(body, dict) else []
+    rows, query = _geocode_rows(query, limit)
     if not rows:
         raise ConnectorError("PLACE_NOT_FOUND", f"No place matched {query!r}.", 404)
     places = [
@@ -223,9 +233,28 @@ def _place_search(params: dict[str, list[str]]) -> dict:
     return {"ok": True, "query": query, "count": len(places), "places": places}
 
 
+_ROUTE_TAIL = re.compile(r"(?:怎么走|怎么去|如何走|路线|多远|多久|开车|步行|骑行)$")
+
+
+def _route_endpoint(value: str, role: str) -> str:
+    """Pull the origin or destination out of a whole instruction.
+
+    A model normally sends clean place names, but a chat turn can arrive as
+    "西安到咸阳怎么走" for both fields; splitting on 到 keeps each endpoint
+    a single place instead of geocoding the sentence twice.
+    """
+
+    text = _strip_fillers(value)
+    text = _ROUTE_TAIL.sub("", text)
+    if "到" in text:
+        head, tail = text.split("到", 1)
+        text = head if role == "origin" else tail
+    return text.strip() or value
+
+
 def _route(params: dict[str, list[str]]) -> dict:
-    origin = _geocode(_text(params, "origin"))
-    destination = _geocode(_text(params, "destination"))
+    origin = _geocode(_route_endpoint(_text(params, "origin"), "origin"))
+    destination = _geocode(_route_endpoint(_text(params, "destination"), "destination"))
     mode = _text(params, "mode", required=False) or "driving"
     if mode not in ("driving", "walking", "cycling"):
         raise ConnectorError("INVALID_ARGUMENTS", "mode must be driving, walking or cycling.")

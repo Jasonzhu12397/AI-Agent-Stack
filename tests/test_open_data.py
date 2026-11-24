@@ -119,3 +119,29 @@ def test_place_inside_a_sentence_still_resolves(monkeypatch):
     monkeypatch.setattr(connector, "_fetch_json", fake_fetch)
     payload = connector.CAPABILITIES["weather.current"]({"place": ["帮我查一下西安天气"]})
     assert payload["place"]["name"] == "西安"
+
+
+def test_route_sentence_splits_origin_and_destination(monkeypatch):
+    connector.GEOCODE_CACHE.clear()
+    names: list[str] = []
+
+    def fake_fetch(url, params=None):
+        if "search" in url:
+            names.append(params["name"])
+            return {
+                "results": [
+                    {
+                        "name": params["name"],
+                        "latitude": 34.2 if params["name"] == "西安" else 34.3,
+                        "longitude": 108.9 if params["name"] == "西安" else 108.7,
+                    }
+                ]
+            }
+        return {"routes": [{"distance": 30000, "duration": 2400}]}
+
+    monkeypatch.setattr(connector, "_fetch_json", fake_fetch)
+    payload = connector.CAPABILITIES["map.route.plan"](
+        {"origin": ["西安到咸阳怎么走"], "destination": ["西安到咸阳怎么走"]}
+    )
+    assert payload["origin"]["name"] == "西安"
+    assert payload["destination"]["name"] == "咸阳"

@@ -148,8 +148,13 @@ async function signOut(): Promise<void> {
 
 function onAuthenticated(user: CurrentUser): void {
   setAuthenticated(user);
+  authError.value = "";
   const next = typeof route.query.next === "string" && route.query.next ? route.query.next : "/";
-  void router.push(next);
+  // A console that mounted on the sign-in route already fetched tenants and
+  // projects and got 401 for each of them; those empty stores survived the
+  // sign-in and made the workbench look unconnected. Reload the same route so
+  // every store starts from authenticated data.
+  window.location.assign(next);
 }
 
 function onSessionExpired(): void {
