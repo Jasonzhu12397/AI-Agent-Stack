@@ -1,0 +1,43 @@
+{
+  "checked_at": "2026-11-24T04:33:58Z",
+  "api": {
+    "status": 200,
+    "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
+  },
+  "web": {
+    "status": 200
+  },
+  "login": {
+    "status": 200,
+    "body": "{\"id\":1,\"username\":\"demo\",\"email\":\"demo@acme.ai\"}"
+  },
+  "ok": true,
+  "api_log": [
+    "2026-11-24 12:33:32,501 INFO     Listening on TCP address 0.0.0.0:8000",
+    "127.0.0.1:49394 - - [24/Nov/2026:12:33:34] \"GET /health/ready\" 200 92",
+    "127.0.0.1:49404 - - [24/Nov/2026:12:33:34] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:49412 - - [24/Nov/2026:12:33:35] \"POST /api/v1/auth/login/\" 200 49",
+    "2026-11-24 12:33:51,904 INFO     Killed 0 pending application instances",
+    "2026-11-24 12:33:56,307 INFO     Starting server at tcp:port=8000:interface=0.0.0.0",
+    "2026-11-24 12:33:56,309 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)",
+    "2026-11-24 12:33:56,309 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0",
+    "2026-11-24 12:33:56,310 INFO     Listening on TCP address 0.0.0.0:8000",
+    "127.0.0.1:58620 - - [24/Nov/2026:12:33:58] \"GET /health/ready\" 200 92",
+    "127.0.0.1:58636 - - [24/Nov/2026:12:33:58] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:58644 - - [24/Nov/2026:12:33:58] \"POST /api/v1/auth/login/\" 200 49"
+  ],
+  "web_log": [
+    "  \u279c  Network: http://9.135.241.249:5174/",
+    "  \u279c  Network: http://169.254.112.26:5174/",
+    "",
+    "> ai-agent-studio@1.1.0 dev",
+    "> vite --host 0.0.0.0 --port 5173",
+    "",
+    "",
+    "  VITE v6.4.6  ready in 1665 ms",
+    "",
+    "  \u279c  Local:   http://localhost:5173/",
+    "  \u279c  Network: http://9.135.241.249:5173/",
+    "  \u279c  Network: http://169.254.112.26:5173/"
+  ]
+}
