@@ -33,7 +33,7 @@ test("the chat claims the measured remainder of the viewport", () => {
 
 test("the chat is a reading column, not a stretched canvas", () => {
   const chat = read("components/ControlAgentChatView.vue");
-  assert.match(chat, /\.chat-column \{[\s\S]*max-width: 1040px/, "messages need a readable measure");
+  assert.match(chat, /\.msg \{[\s\S]*max-width: min\(760px, 86%\)/, "messages need a readable measure");
   assert.match(chat, /\.bubble-body \{[\s\S]*font-size: 14px/, "bubble copy must match chat-client sizing");
 });
 
@@ -49,7 +49,7 @@ test("the chat surface drops the sidebar and hides the rail on a phone", () => {
   const workspace = read("components/WorkspaceView.vue");
   assert.match(workspace, /grid-chat/, "the chat route uses a single column grid");
   assert.match(css, /\.workspace-chat \{ padding: 10px 0 0;/);
-  assert.match(chat, /@media \(max-width: 1200px\) \{\n  \.rail-toggle/, "the thread rail collapses into a drawer");
+  assert.match(chat, /@media \(max-width: 1200px\) \{\n  \.bar-rail/, "the thread rail collapses into a drawer");
   assert.match(chat, /\.thread-rail\.open \{[\s\S]*position: absolute/, "the drawer overlays the transcript");
   assert.match(chat, /@media \(max-width: 900px\)/, "the composer must adapt below 900px");
   assert.match(css, /\.main-nav \{\n    flex-wrap: nowrap;/, "phone navigation scrolls instead of stacking");

@@ -146,7 +146,7 @@ test("every t()/tf() key used at runtime has a Chinese translation", () => {
 
 test("the chat composer localizes its interpolated labels through t()", () => {
   const chat = readFileSync(join(root, "components", "ControlAgentChatView.vue"), "utf8");
-  for (const label of ["Project", "Skill", "Skills", "Plugin", "Plugins", "Open"]) {
+  for (const label of ["Project", "Skill", "Skills", "Plugin", "Plugins", "Authorize", "Ready", "No messages yet"]) {
     assert.match(chat, new RegExp(`t\\("${label}"\\)`), `${label} must go through t() to keep the switch total`);
   }
 });
@@ -154,7 +154,11 @@ test("the chat composer localizes its interpolated labels through t()", () => {
 test("a plugin that still needs a credential offers authorization instead of selection", () => {
   const chat = readFileSync(join(root, "components", "ControlAgentChatView.vue"), "utf8");
   assert.match(chat, /function pluginNeedsAuth/, "pluginNeedsAuth helper is required");
-  assert.match(chat, /:disabled="pluginNeedsAuth\(plugin\)"/, "unauthorized plugins must not be selectable");
+  assert.match(
+    chat,
+    /pluginNeedsAuth\(plugin\) ?\? openPlugin\(plugin\.key\) : togglePlugin\(plugin\.id\)/,
+    "unauthorized plugins must open their authorization page instead of being selectable",
+  );
   assert.match(chat, /t\("Authorize"\)/, "unauthorized plugins must offer an authorize jump");
 });
 

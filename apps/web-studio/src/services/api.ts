@@ -2298,6 +2298,16 @@ export function createChatThread(
   );
 }
 
+export function updateChatThread(
+  threadId: string,
+  payload: { title?: string; archived?: boolean; model_config_id?: string | null },
+): Promise<ChatThread> {
+  return request<ChatThread>(`/api/v1/agent-chat/threads/${threadId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getChatThread(threadId: string): Promise<ChatThread & { messages: ChatMessage[] }> {
   return request<ChatThread & { messages: ChatMessage[] }>(`/api/v1/agent-chat/threads/${threadId}/`);
 }
