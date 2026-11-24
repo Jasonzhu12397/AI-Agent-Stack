@@ -13,6 +13,12 @@ sys.path.insert(0, "/workspaces/AI-Agent-Stack/apps/platform-api")
 sys.path.insert(0, "/workspaces/AI-Agent-Stack")
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "platform_api.settings")
+# The console runs on a sqlite file under .devdata; without this the probe
+# would try the default Postgres settings and report a connection error.
+os.environ.setdefault(
+    "DATABASE_URL", "sqlite:////workspaces/AI-Agent-Stack/.devdata/console.db"
+)
+os.environ.setdefault("SECRET_KEY", "codespace-demo-secret-key-not-for-production-use")
 
 import django  # noqa: E402
 
