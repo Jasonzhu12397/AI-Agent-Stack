@@ -8,6 +8,11 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- The chat console requires sign-in on every workspace route, reloads the
+  route after sign-in, and no longer shows "session expired" for the
+  unauthenticated probe a fresh browser makes.
+- The offline demo model selects the connector the instruction is about and
+  answers from its result.
 - `manage.py install_builtin_connectors` installs enabled built-in connectors
   into every project, run by bootstrap and `start.py` after the catalog sync.
 - Built-in map and weather connectors (`open_data` protocol): place search via
