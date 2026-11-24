@@ -1217,5 +1217,8 @@ export const zhCN: Record<string, string> = {
   "Run": "运行",
   "Run capability": "运行能力",
   "returned in": "返回耗时",
+  "credential reference": "凭证引用，例如 vault://tenant/agent",
+  "Save credential": "保存凭证",
+  "credential rotated for": "凭证已更换：",
 
 };

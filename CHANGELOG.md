@@ -13,6 +13,7 @@ All notable changes to AI Agent Stack are recorded here. The format follows
   disable and uninstall them.
 - The Integration Hub can run an installed capability with declared arguments
   and show the result, through the same resolver and adapter a chat turn uses.
+- The hub can rotate the credential reference of an installed connector.
 - Connector definitions expose `capability_definitions`; `capabilities` is a
   name list for every client.
 - The chat console requires sign-in on every workspace route, reloads the

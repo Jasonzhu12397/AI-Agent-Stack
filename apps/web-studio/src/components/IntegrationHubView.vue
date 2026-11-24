@@ -14,6 +14,7 @@ import {
   getProjectAgentCapabilities,
   installAgentPlugin,
   invokeAgentPluginCapability,
+  rotateAgentPluginCredential,
   setAgentPluginEnabled,
   setAgentPluginInstallationStatus,
   type AgentPluginDefinition,
@@ -40,6 +41,8 @@ const runArgs = ref("{}");
 const runBusy = ref(false);
 const runOutput = ref("");
 const runError = ref("");
+const rotateOpen = ref(false);
+const rotateRef = ref("");
 const registerPlaceholders = {
   key: "example-agent",
   endpoint: "https://agent.example.com/v1",
@@ -114,6 +117,8 @@ async function refresh(): Promise<void> {
 
 watch(selectedId, () => {
   credentialRef.value = "";
+  rotateOpen.value = false;
+  rotateRef.value = "";
   granted.value = [...(selected.value?.capabilities ?? [])];
 });
 
@@ -284,6 +289,28 @@ async function submitRun(): Promise<void> {
     runError.value = cause instanceof Error ? cause.message : "Capability invocation failed.";
   } finally {
     runBusy.value = false;
+  }
+}
+
+async function submitRotate(): Promise<void> {
+  if (!selectedInstallation.value) return;
+  const reference = rotateRef.value.trim();
+  if (!reference) {
+    error.value = "Enter a credential reference.";
+    return;
+  }
+  submitting.value = true;
+  error.value = "";
+  try {
+    await rotateAgentPluginCredential(selectedInstallation.value.id, reference);
+    info.value = t("credential rotated for") + " " + (selected.value?.name ?? "");
+    rotateOpen.value = false;
+    rotateRef.value = "";
+    await refresh();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to rotate the credential.";
+  } finally {
+    submitting.value = false;
   }
 }
 
@@ -466,9 +493,30 @@ function lastInvocation(name: string): string {
               >
                 {{ t("Enable") }}
               </el-button>
+              <el-button
+                v-if="selected.auth_required && selectedInstallation.status === 'installed'"
+                @click="rotateOpen = !rotateOpen"
+              >
+                {{ t("Rotate credential") }}
+              </el-button>
               <el-button :loading="submitting" @click="changeStatus('uninstalled')">{{
                 t("Uninstall")
               }}</el-button>
+            </div>
+            <div v-if="rotateOpen" class="hub-rotate">
+              <el-input
+                v-model="rotateRef"
+                :placeholder="t('credential reference')"
+                spellcheck="false"
+              />
+              <el-button
+                type="primary"
+                size="small"
+                :loading="submitting"
+                @click="submitRotate"
+              >
+                {{ t("Save credential") }}
+              </el-button>
             </div>
           </div>
 
@@ -732,6 +780,12 @@ function lastInvocation(name: string): string {
 .hub-cap-tags {
   align-items: flex-end;
   text-align: right;
+}
+.hub-rotate {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
 }
 .hub-run {
   margin-top: 10px;
