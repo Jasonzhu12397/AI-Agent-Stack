@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T09:30:37Z",
+  "checked_at": "2026-11-24T09:41:27Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -11,20 +11,25 @@
     "status": 200,
     "body": "{\"id\":1,\"username\":\"demo\",\"email\":\"demo@acme.ai\"}"
   },
+  "workflow": {
+    "status": "succeeded",
+    "run_id": "1d366401",
+    "error": null
+  },
   "ok": true,
   "api_log": [
-    "127.0.0.1:44650 - - [24/Nov/2026:17:29:58] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:44650 - - [24/Nov/2026:17:29:59] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:44650 - - [24/Nov/2026:17:29:59] \"GET /api/v1/workflows/b6f37857-f1b5-4c3b-a1a0-f87a7df32fbc/runs/\" 200 1358",
-    "2026-11-24 17:30:31,647 INFO     Killed 0 pending application instances",
-    "2026-11-24 17:30:35,819 INFO     Starting server at tcp:port=8000:interface=0.0.0.0",
-    "2026-11-24 17:30:35,820 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)",
-    "2026-11-24 17:30:35,820 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0",
-    "2026-11-24 17:30:35,820 INFO     Listening on TCP address 0.0.0.0:8000",
-    "127.0.0.1:51826 - - [24/Nov/2026:17:30:36] \"GET /health/ready\" 200 92",
-    "127.0.0.1:46876 - - [24/Nov/2026:17:30:36] \"GET /\" 200 452",
-    "127.0.0.1:46888 - - [24/Nov/2026:17:30:36] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:46900 - - [24/Nov/2026:17:30:37] \"POST /api/v1/auth/login/\" 200 49"
+    "127.0.0.1:42856 - - [24/Nov/2026:17:41:25] \"GET /\" 200 452",
+    "127.0.0.1:42862 - - [24/Nov/2026:17:41:25] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:42868 - - [24/Nov/2026:17:41:25] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:48058 - - [24/Nov/2026:17:41:25] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:48074 - - [24/Nov/2026:17:41:26] \"POST /api/v1/auth/login/\" 200 49",
+    "127.0.0.1:48080 - - [24/Nov/2026:17:41:26] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:48084 - - [24/Nov/2026:17:41:26] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:48088 - - [24/Nov/2026:17:41:26] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:48100 - - [24/Nov/2026:17:41:26] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:48116 - - [24/Nov/2026:17:41:26] \"POST /api/v1/workflows/a2d66ae2-006d-49ea-8643-b8ff0984f341/publish/\" 201 318",
+    "127.0.0.1:48118 - - [24/Nov/2026:17:41:26] \"POST /api/v1/workflows/a2d66ae2-006d-49ea-8643-b8ff0984f341/runs/\" 202 435",
+    "127.0.0.1:48124 - - [24/Nov/2026:17:41:27] \"GET /api/v1/workflows/a2d66ae2-006d-49ea-8643-b8ff0984f341/runs/\" 200 1553"
   ],
   "web_log": [
     "",
@@ -32,5 +37,11 @@
     "> vite --host 0.0.0.0 --port 5173",
     "",
     "sh: 1: vite: not found"
+  ],
+  "worker_log": [
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-v7rtvflj-l91vu0lp8z-dc2j6oo3fdkg00a0c07g-sandbox-16341, poll_seconds=1.0)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-v7rtvflj-l91vu0lp8z-dc2j6oo3fdkg00a0c07g-sandbox-16820, poll_seconds=1.0)"
   ]
 }
