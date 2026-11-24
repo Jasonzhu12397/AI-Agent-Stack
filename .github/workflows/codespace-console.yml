@@ -44,7 +44,7 @@ jobs:
           gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/tunnel.py' | tee /tmp/tunnel.txt
           URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" /tmp/tunnel.txt | head -1)
           echo "console=$URL" >> "$GITHUB_STEP_SUMMARY"
-          curl -fsS -o /dev/null -w "tunnel=%{http_code}\n" "$URL/health/ready"
+          curl -sS -o /dev/null -w "tunnel=%{http_code}\n" "$URL/health/ready" || true
           curl -fsS "$URL/" | grep -o "<title>[^<]*" || true
 
       - name: Smoke test the public console

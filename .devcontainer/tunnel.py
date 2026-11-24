@@ -78,13 +78,31 @@ def discover_url(attempts: int = 40, delay: float = 2.0) -> str:
     raise RuntimeError("cloudflared did not report a URL; see /tmp/cloudflared.log")
 
 
+def probe(url: str, attempts: int = 30, delay: float = 2.0) -> str:
+    """Verify the tunnel from inside the codespace network."""
+
+    last = "no response"
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(f"{url}/health/ready", timeout=10) as response:
+                return f"health={response.status}"
+        except Exception as exc:  # noqa: BLE001 - report, never crash
+            last = f"{type(exc).__name__}: {exc}"
+            time.sleep(delay)
+    return f"health=failed ({last})"
+
+
 def main() -> None:
     stop_stale()
+    urllib.request.urlopen(f"{TARGET}/health/ready", timeout=15).read()
+    print(f"origin reachable at {TARGET}", flush=True)
     binary = ensure_binary()
     pid = start_tunnel(binary)
     url = discover_url()
     print(url, flush=True)
     print(f"tunnel pid {pid} serving {TARGET}", flush=True)
+    print(probe(url), flush=True)
+    print((LOG.read_text(errors="replace").splitlines() or ["<no log>"])[-6:], flush=True)
 
 
 if __name__ == "__main__":
