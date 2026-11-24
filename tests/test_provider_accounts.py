@@ -9,6 +9,7 @@ import uuid
 
 import pytest
 from core import provider_accounts
+from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
     ModelConfig,
     ModelProvider,
@@ -17,7 +18,6 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
-from core.model_gateway import ModelGateway, ModelGatewayError
 from core.provider_accounts import AccountTokenGuard, ProviderAccountError
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -80,8 +80,12 @@ def test_creating_an_account_provider_publishes_its_preset_models(member):
     assert provider.base_url == provider_accounts.PROVIDER_PRESETS["deepseek"]["base_url"]
     assert provider.credential_ref == ""
     assert provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT
-    names = sorted(ModelConfig.objects.filter(provider=provider).values_list("model_name", flat=True))
-    assert names == sorted(item["model_name"] for item in provider_accounts.PROVIDER_PRESETS["deepseek"]["models"])
+    names = sorted(
+        ModelConfig.objects.filter(provider=provider).values_list("model_name", flat=True)
+    )
+    assert names == sorted(
+        item["model_name"] for item in provider_accounts.PROVIDER_PRESETS["deepseek"]["models"]
+    )
 
 
 @pytest.mark.django_db
@@ -126,9 +130,12 @@ def test_member_links_and_revokes_their_own_account(member):
     revoked = client.delete(base)
     assert revoked.status_code == 200
     assert revoked.data["linked"] is False
-    assert ProviderAccountLink.objects.filter(
-        provider=provider, status=ProviderAccountLink.Status.REVOKED
-    ).count() == 1
+    assert (
+        ProviderAccountLink.objects.filter(
+            provider=provider, status=ProviderAccountLink.Status.REVOKED
+        ).count()
+        == 1
+    )
 
 
 @pytest.mark.django_db
@@ -137,7 +144,9 @@ def test_relinking_replaces_the_credential_instead_of_adding_a_row(member):
     provider = _account_provider(tenant, user)
 
     provider_accounts.link_account(user=user, provider=provider, credential_ref="env:FIRST")
-    second = provider_accounts.link_account(user=user, provider=provider, credential_ref="env:SECOND")
+    second = provider_accounts.link_account(
+        user=user, provider=provider, credential_ref="env:SECOND"
+    )
 
     assert ProviderAccountLink.objects.filter(provider=provider).count() == 1
     assert second.credential_ref == "env:SECOND"
