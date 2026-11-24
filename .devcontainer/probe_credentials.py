@@ -19,7 +19,9 @@ sys.path.insert(0, str(REPO_ROOT))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "platform_api.settings")
 # The console runs on a sqlite file under .devdata; without this the probe
 # would try the default Postgres settings and report a connection error.
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{REPO_ROOT / '.devdata' / 'console.db'}")
+# The console writes to this file; a login shell may export a different value,
+# so the probe sets it outright instead of inheriting one.
+os.environ["DATABASE_URL"] = f"sqlite:///{REPO_ROOT / '.devdata' / 'console.db'}"
 os.environ.setdefault("SECRET_KEY", "codespace-demo-secret-key-not-for-production-use")
 
 import django  # noqa: E402
@@ -42,7 +44,9 @@ def describe(reference):
     return f"raw/<no-scheme> len={len(reference)}"
 
 
-print(f"== db == {os.environ['DATABASE_URL']} exists={Path(os.environ['DATABASE_URL'][len('sqlite:///'):]).exists()}")
+from django.conf import settings as django_settings  # noqa: E402
+
+print(f"== db == {django_settings.DATABASES['default'].get('NAME')}")
 print("== providers ==")
 for provider in ModelProvider.objects.select_related("tenant").order_by("name"):
     print(
