@@ -56,8 +56,8 @@ def chat_workspace(db):
     return user, tenant, project, model, installation
 
 
-def _thread(client, tenant, project, model=None):
-    payload = {"title": "Fleet check"}
+def _thread(client, tenant, project, model=None, title="Fleet check"):
+    payload = {"title": title} if title is not None else {}
     if model is not None:
         payload["model_config_id"] = str(model.id)
     response = client.post(
@@ -177,6 +177,23 @@ def test_thread_without_a_selection_uses_the_tenant_default_model(chat_workspace
     )
     assert response.status_code == 201, response.content
     assert AgentChatThread.objects.get(pk=thread["id"]).model_config_id == model.id
+
+
+@pytest.mark.django_db
+def test_first_question_names_an_untitled_thread(chat_workspace):
+    user, tenant, project, model, _installation = chat_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    thread = _thread(client, tenant, project, model, title=None)
+    response = client.post(
+        f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
+        {"content": "Which plugins are installed in Prod Cluster?"},
+        format="json",
+    )
+    assert response.status_code == 201, response.content
+    assert AgentChatThread.objects.get(pk=thread["id"]).title == (
+        "Which plugins are installed in Prod Cluster?"
+    )
 
 
 @pytest.mark.django_db

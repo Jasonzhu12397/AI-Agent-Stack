@@ -218,7 +218,11 @@ class AgentChatMessageListCreateView(APIView):
                 author=request.user,
                 context=context,
             )
-            thread.save(update_fields=["updated_at", "model_config"])
+            if thread.title in ("", "New conversation"):
+                # Name the thread after its first question so the rail is
+                # readable instead of a column of identical placeholders.
+                thread.title = content.strip().splitlines()[0][:60]
+            thread.save(update_fields=["updated_at", "model_config", "title"])
         reply, error = _generate_reply(request, thread, model_config, context)
         if error is not None:
             return error

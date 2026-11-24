@@ -98,6 +98,9 @@ let timer: number | undefined;
 
 const isLogin = computed(() => route.path === "/login");
 const isSettings = computed(() => route.path.startsWith("/settings"));
+// The Control Agent spends the whole viewport on the conversation, so the
+// marketing hero stays out of its way.
+const isChat = computed(() => route.path === "/chat");
 
 function isActive(to: string): boolean {
   if (to === "/") return route.path === "/";
@@ -189,7 +192,7 @@ onUnmounted(() => {
         </router-link>
         <router-link to="/settings/account" :class="{ active: isSettings }">Settings</router-link>
       </nav>
-      <section v-if="!isSettings" class="hero">
+      <section v-if="!isSettings && !isChat" class="hero">
         <p class="eyebrow">AGENT PLATFORM</p>
         <h1>Build, orchestrate<br /><span>and govern AI agents.</span></h1>
         <p class="intro">
@@ -209,7 +212,7 @@ onUnmounted(() => {
         </div>
       </section>
       <router-view />
-      <template v-if="!isSettings">
+      <template v-if="!isSettings && !isChat">
         <section class="overview">
           <div class="section-heading">
             <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>

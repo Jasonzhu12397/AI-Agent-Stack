@@ -355,8 +355,9 @@ watch(
   gap: 12px;
   /* A chat deserves the viewport: a fixed tall column rather than a card that
      grows with the number of messages. */
-  height: calc(100vh - 220px);
-  min-height: 640px;
+  /* Fill the viewport below the shell header, section heading and toolbar. */
+  height: calc(100vh - 350px);
+  min-height: 480px;
 }
 .chat-toolbar {
   display: flex;
@@ -506,6 +507,9 @@ watch(
   margin-top: 8px;
 }
 .composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   flex: 0 0 auto;
   background: #fff;
   border: 1px solid #e3e8ee;
@@ -519,11 +523,13 @@ watch(
   gap: 6px;
   margin-bottom: 8px;
 }
+.composer :deep(.el-textarea) {
+  width: 100%;
+}
 .composer-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 10px;
 }
 .composer-pickers {
   display: flex;
