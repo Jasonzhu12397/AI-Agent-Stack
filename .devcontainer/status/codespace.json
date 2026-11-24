@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T15:06:07Z",
+  "checked_at": "2026-11-24T15:09:23Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -12,24 +12,23 @@
     "body": "{\"id\":1,\"username\":\"demo\",\"email\":\"demo@acme.ai\"}"
   },
   "workflow": {
-    "status": "succeeded",
-    "run_id": "35309a21",
-    "error": null
+    "status": "run-rejected",
+    "detail": "OperationalError at /api/v1/workflows/17a83aaf-bc81-4b47-a018-65a1f00cfdcc/runs/\ndatabase is locked\n\nRequest Method: POST\nRequest URL: http://127.0.0.1:8000/api/v1/workflows/17a83aaf-bc81-4b47-a018-65a1f00cfdcc/runs/\nDjango Version: 5.2.19\nPython Executable: /home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/bin/python\nPython Version: 3.12.11\nPython Path: ['.', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack-parity/apps/platform-api', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack-parity/apps/platform-api', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack-parity', '/opt/python3.12/lib/python312.zip', '/opt/python3.12/lib/python3.12', '/opt/python3.12/lib/python3.12/lib-dynload', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack-parity/apps', '/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack-parity/packages']\nServer time: Tue, 24 Nov 2026 23:09:23 +0800\nInstalled Applications:\n['django.contrib.admin',\n 'django.contrib.auth',\n 'django.contrib.contenttypes',\n 'django.contrib.sessions',\n 'django.contrib.messages',\n 'django.contrib.staticfiles',\n 'rest_framework',\n 'channels',\n 'corsheaders',\n 'core']\nInstalled Middleware:\n['django.middleware.security.SecurityMiddleware',\n 'core.http_method_override.MethodOverrideMiddleware',\n 'corsheaders.middleware.CorsMiddleware',\n 'django.contrib.sessions.middleware.SessionMiddleware',\n 'django.middleware.common.CommonMiddleware',\n 'django.middleware.csrf.CsrfViewMiddleware',\n 'django.contrib.auth.middleware.AuthenticationMiddleware',\n 'core.session_activity.SessionActivityMiddleware',\n 'django.contrib.messages.middleware.MessageMiddleware',\n 'django.middleware.clickjacking.XFrameOptionsMiddleware']\n\n\nTraceback (most recent call last):\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/utils.py\", line 105, in _execute\n    return self.cursor.execute(sql, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/sqlite3/base.py\", line 360, in execute\n    return super().execute(query, params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nThe above exception (database is locked) was the direct cause of the following exception:\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/core/handlers/exception.py\", line 42, in inner\n    response = await get_response(request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/core/handlers/base.py\", line 253, in _get_response_async\n    response = await wrapped_callback(\n               \n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/asgiref/sync.py\", line 562, in func\n    return context.run(run_child)\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/asgiref/sync.py\", line 560, in run_child\n    return child()\n           ^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/views/decorators/csrf.py\", line 65, in _view_wrapper\n    return view_func(request, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/views/generic/base.py\", line 105, in view\n    return self.dispatch(request, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/rest_framework/views.py\", line 526, in dispatch\n    response = self.handle_exception(exc)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^"
   },
-  "ok": true,
+  "ok": false,
   "api_log": [
-    "127.0.0.1:50658 - - [24/Nov/2026:23:06:05] \"GET /\" 200 452",
-    "127.0.0.1:50664 - - [24/Nov/2026:23:06:05] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50674 - - [24/Nov/2026:23:06:05] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:50690 - - [24/Nov/2026:23:06:06] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50700 - - [24/Nov/2026:23:06:06] \"POST /api/v1/auth/login/\" 200 49",
-    "127.0.0.1:50712 - - [24/Nov/2026:23:06:06] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50718 - - [24/Nov/2026:23:06:06] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:50722 - - [24/Nov/2026:23:06:06] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:50730 - - [24/Nov/2026:23:06:06] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:50738 - - [24/Nov/2026:23:06:06] \"POST /api/v1/workflows/4ebb8bec-25a9-4ec4-a6ee-b670be5ea961/publish/\" 201 318",
-    "127.0.0.1:50740 - - [24/Nov/2026:23:06:06] \"POST /api/v1/workflows/4ebb8bec-25a9-4ec4-a6ee-b670be5ea961/runs/\" 202 435",
-    "127.0.0.1:42560 - - [24/Nov/2026:23:06:07] \"GET /api/v1/workflows/4ebb8bec-25a9-4ec4-a6ee-b670be5ea961/runs/\" 200 1553"
+    "    with self.db.wrap_database_errors:",
+    "         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+    "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/utils.py\", line 91, in __exit__",
+    "    raise dj_exc_value.with_traceback(traceback) from exc_value",
+    "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/utils.py\", line 105, in _execute",
+    "    return self.cursor.execute(sql, params)",
+    "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+    "  File \"/home/user/Doubao/chats/38454724073114370/AI-Agent-Stack/.venv/lib/python3.12/site-packages/django/db/backends/sqlite3/base.py\", line 360, in execute",
+    "    return super().execute(query, params)",
+    "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+    "django.db.utils.OperationalError: database is locked",
+    "127.0.0.1:40298 - - [24/Nov/2026:23:09:23] \"POST /api/v1/workflows/17a83aaf-bc81-4b47-a018-65a1f00cfdcc/runs/\" 500 21559"
   ],
   "web_log": [
     "",
@@ -39,9 +38,6 @@
     "sh: 1: vite: not found"
   ],
   "worker_log": [
-    "INFO:ai-agent-worker:Worker stopped",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-27208, poll_seconds=1.0)",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-29263, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-35509, poll_seconds=1.0)",
@@ -50,6 +46,9 @@
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-39161, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-41262, poll_seconds=1.0)"
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-41262, poll_seconds=1.0)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-42441, poll_seconds=1.0)"
   ]
 }
