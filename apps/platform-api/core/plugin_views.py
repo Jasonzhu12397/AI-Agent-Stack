@@ -14,6 +14,7 @@ from core.audit import record_audit_event
 from core.http_connector import execute_http_operation
 from core.tool_router import ToolContext, ToolExecutionError
 from core.agent_node_views import _tenant_and_project, _validate_payload
+from core.api_errors import legacy_error_response
 from core.models import (
     AuditEvent,
     PluginConnection,
@@ -27,15 +28,18 @@ from core.models import (
 
 
 def _can_manage_project(user, tenant, project):
-    return TenantMembership.objects.filter(
-        tenant=tenant,
-        user=user,
-        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-    ).exists() or ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-        role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
-    ).exists()
+    return (
+        TenantMembership.objects.filter(
+            tenant=tenant,
+            user=user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        or ProjectMembership.objects.filter(
+            project=project,
+            user=user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+    )
 
 
 def _contains_sensitive_key(value):
@@ -74,10 +78,7 @@ def _safe_schema(value):
         return False
     if value.get("additionalProperties", False) is not False:
         return False
-    return (
-        not _contains_sensitive_key(value)
-        and len(str(value).encode("utf-8")) <= 32768
-    )
+    return not _contains_sensitive_key(value) and len(str(value).encode("utf-8")) <= 32768
 
 
 def _plugin_tools(plugin):
@@ -153,7 +154,7 @@ class PluginCatalogListCreateView(APIView):
     def get(self, request):
         tenant_id = request.query_params.get("tenant_id")
         if not tenant_id:
-            return Response({"detail": "tenant_id query parameter is required."}, status=400)
+            return legacy_error_response("tenant_id query parameter is required.", http_status=400)
         tenant = get_object_or_404(
             Tenant.objects.filter(memberships__user=request.user).distinct(),
             pk=tenant_id,
@@ -168,7 +169,7 @@ class PluginCatalogListCreateView(APIView):
 
     def post(self, request):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant_id = request.data.get("tenant_id")
         tenant = get_object_or_404(
             Tenant.objects.filter(memberships__user=request.user).distinct(),
@@ -180,7 +181,7 @@ class PluginCatalogListCreateView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return Response({"detail": "Tenant owner or admin role required."}, status=403)
+            return legacy_error_response("Tenant owner or admin role required.", http_status=403)
         plugin_key = request.data.get("plugin_key")
         version = request.data.get("version")
         connector_type = request.data.get("connector_type")
@@ -191,48 +192,48 @@ class PluginCatalogListCreateView(APIView):
             or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", plugin_key)
             or len(plugin_key) > 100
         ):
-            return Response({"detail": "plugin_key must be a lowercase slug."}, status=400)
+            return legacy_error_response("plugin_key must be a lowercase slug.", http_status=400)
         if not isinstance(version, str) or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,39}",
             version,
         ):
-            return Response({"detail": "A valid plugin version is required."}, status=400)
+            return legacy_error_response("A valid plugin version is required.", http_status=400)
         if connector_type not in PluginDefinition.ConnectorType.values:
-            return Response({"detail": "Unsupported connector_type."}, status=400)
+            return legacy_error_response("Unsupported connector_type.", http_status=400)
         plugin_name = str(request.data.get("name", plugin_key)).strip()
         source_url = request.data.get("source_url", "")
         if source_url is None:
             source_url = ""
         if not plugin_name or len(plugin_name) > 120:
-            return Response({"detail": "Plugin name is required."}, status=400)
+            return legacy_error_response("Plugin name is required.", http_status=400)
         if source_url and (
             not isinstance(source_url, str)
             or not source_url.startswith("https://")
             or len(source_url) > 500
         ):
-            return Response({"detail": "source_url must be an HTTPS URL."}, status=400)
+            return legacy_error_response("source_url must be an HTTPS URL.", http_status=400)
         if (
             not isinstance(manifest, dict)
             or not isinstance(tools, list)
             or not 1 <= len(tools) <= 50
         ):
-            return Response(
-                {"detail": "manifest must be an object and tools must contain 1–50 items."},
-                status=400,
+            return legacy_error_response(
+                "manifest must be an object and tools must contain 1–50 items.", http_status=400
             )
         payload_error = _validate_payload({"plugin_manifest": manifest, "tool_definitions": tools})
         if payload_error:
-            return Response({"detail": payload_error}, status=400)
+            return legacy_error_response(payload_error, http_status=400)
         if _contains_sensitive_key(manifest) or _contains_sensitive_key(tools):
-            return Response(
-                {"detail": "Plugin metadata and schemas cannot contain credential fields."},
-                status=400,
+            return legacy_error_response(
+                "Plugin metadata and schemas cannot contain credential fields.", http_status=400
             )
         names = set()
         normalized_tools = []
         for item in tools:
             if not isinstance(item, dict):
-                return Response({"detail": "Each tool definition must be an object."}, status=400)
+                return legacy_error_response(
+                    "Each tool definition must be an object.", http_status=400
+                )
             name = item.get("name")
             input_schema = item.get("input_schema")
             output_schema = item.get("output_schema")
@@ -249,9 +250,8 @@ class PluginCatalogListCreateView(APIView):
                 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", name)
                 or name in names
             ):
-                return Response(
-                    {"detail": "Tool names must be unique lowercase slugs."},
-                    status=400,
+                return legacy_error_response(
+                    "Tool names must be unique lowercase slugs.", http_status=400
                 )
             names.add(name)
             if not _safe_schema(input_schema) or not _safe_schema(output_schema):
@@ -264,8 +264,7 @@ class PluginCatalogListCreateView(APIView):
                     status=400,
                 )
             if not isinstance(permissions, list) or not all(
-                isinstance(value, str)
-                and re.fullmatch(r"[a-z0-9][a-z0-9:._-]{0,127}", value)
+                isinstance(value, str) and re.fullmatch(r"[a-z0-9][a-z0-9:._-]{0,127}", value)
                 for value in permissions
             ):
                 return Response(
@@ -348,15 +347,11 @@ class PluginCatalogListCreateView(APIView):
                     enabled=False,
                 )
                 PluginTool.objects.bulk_create(
-                    [
-                        PluginTool(plugin=plugin, **tool)
-                        for tool in normalized_tools
-                    ]
+                    [PluginTool(plugin=plugin, **tool) for tool in normalized_tools]
                 )
         except IntegrityError:
-            return Response(
-                {"detail": "This plugin key/version already exists in the tenant."},
-                status=409,
+            return legacy_error_response(
+                "This plugin key/version already exists in the tenant.", http_status=409
             )
         return Response(_plugin_data(plugin), status=201)
 
@@ -388,9 +383,11 @@ class PluginApproveView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return Response({"detail": "Tenant owner or admin role required."}, status=403)
+            return legacy_error_response("Tenant owner or admin role required.", http_status=403)
         if plugin.review_status == PluginDefinition.ReviewStatus.REJECTED:
-            return Response({"detail": "Rejected plugin versions cannot be approved."}, status=409)
+            return legacy_error_response(
+                "Rejected plugin versions cannot be approved.", http_status=409
+            )
         plugin.review_status = PluginDefinition.ReviewStatus.APPROVED
         plugin.enabled = True
         plugin.save(update_fields=["review_status", "enabled", "updated_at"])
@@ -410,10 +407,14 @@ class PluginInstallationListCreateView(APIView):
 
     def get(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        installations = PluginInstallation.objects.filter(
-            tenant=tenant,
-            project=project,
-        ).select_related("plugin").prefetch_related("connections")
+        installations = (
+            PluginInstallation.objects.filter(
+                tenant=tenant,
+                project=project,
+            )
+            .select_related("plugin")
+            .prefetch_related("connections")
+        )
         return Response(
             {
                 "count": installations.count(),
@@ -423,14 +424,14 @@ class PluginInstallationListCreateView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
         if not _can_manage_project(request.user, tenant, project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         try:
             plugin_id = uuid.UUID(str(request.data.get("plugin_id")))
         except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid plugin_id is required."}, status=400)
+            return legacy_error_response("A valid plugin_id is required.", http_status=400)
         plugin = get_object_or_404(
             PluginDefinition.objects.filter(
                 tenant=tenant,
@@ -444,42 +445,41 @@ class PluginInstallationListCreateView(APIView):
         if not isinstance(granted_permissions, list) or not all(
             isinstance(value, str) for value in granted_permissions
         ):
-            return Response({"detail": "granted_permissions must be a string array."}, status=400)
+            return legacy_error_response(
+                "granted_permissions must be a string array.", http_status=400
+            )
         declared_permissions = {
-            permission
-            for tool in plugin.tools.all()
-            for permission in tool.required_permissions
+            permission for tool in plugin.tools.all() for permission in tool.required_permissions
         }
         if not set(granted_permissions).issubset(declared_permissions):
-            return Response(
-                {"detail": "Cannot grant permissions not declared by the plugin."},
-                status=400,
+            return legacy_error_response(
+                "Cannot grant permissions not declared by the plugin.", http_status=400
             )
         if not isinstance(config, dict):
-            return Response({"detail": "config must be a JSON object."}, status=400)
+            return legacy_error_response("config must be a JSON object.", http_status=400)
         payload_error = _validate_payload({"config": config})
         if payload_error:
-            return Response({"detail": payload_error}, status=400)
+            return legacy_error_response(payload_error, http_status=400)
         if _contains_sensitive_key(config):
-            return Response(
-                {"detail": "Plugin configuration cannot contain credential fields."},
-                status=400,
+            return legacy_error_response(
+                "Plugin configuration cannot contain credential fields.", http_status=400
             )
-        previous_version = PluginInstallation.objects.filter(
-            project=project,
-            plugin__plugin_key=plugin.plugin_key,
-        ).exclude(plugin=plugin).exclude(
-            status=PluginInstallation.Status.UNINSTALLED
-        ).first()
+        previous_version = (
+            PluginInstallation.objects.filter(
+                project=project,
+                plugin__plugin_key=plugin.plugin_key,
+            )
+            .exclude(plugin=plugin)
+            .exclude(status=PluginInstallation.Status.UNINSTALLED)
+            .first()
+        )
         if previous_version:
-            return Response(
-                {
-                    "detail": (
-                        "Another version of this connector is installed; "
-                        "uninstall it before installing the new version."
-                    )
-                },
-                status=409,
+            return legacy_error_response(
+                (
+                    "Another version of this connector is installed; "
+                    "uninstall it before installing the new version."
+                ),
+                http_status=409,
             )
         try:
             with transaction.atomic():
@@ -497,14 +497,9 @@ class PluginInstallationListCreateView(APIView):
                 )
                 if not created:
                     if installation.plugin_version != plugin.version:
-                        return Response(
-                            {
-                                "detail": (
-                                    "Installed plugin version is pinned; "
-                                    "uninstall before upgrading."
-                                )
-                            },
-                            status=409,
+                        return legacy_error_response(
+                            ("Installed plugin version is pinned; uninstall before upgrading."),
+                            http_status=409,
                         )
                     installation.granted_permissions = sorted(set(granted_permissions))
                     installation.config = config
@@ -518,9 +513,8 @@ class PluginInstallationListCreateView(APIView):
                         ]
                     )
         except IntegrityError:
-            return Response(
-                {"detail": "Plugin installation conflicts with an existing record."},
-                status=409,
+            return legacy_error_response(
+                "Plugin installation conflicts with an existing record.", http_status=409
             )
         if created:
             record_audit_event(
@@ -547,7 +541,7 @@ class PluginInstallationStatusView(APIView):
 
     def post(self, request, installation_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         installation = get_object_or_404(
             PluginInstallation.objects.filter(tenant__memberships__user=request.user),
             pk=installation_id,
@@ -557,14 +551,14 @@ class PluginInstallationStatusView(APIView):
             installation.tenant,
             installation.project,
         ):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         status_value = request.data.get("status")
         if not isinstance(status_value, str) or status_value not in {
             PluginInstallation.Status.DISABLED,
             PluginInstallation.Status.UNINSTALLED,
             PluginInstallation.Status.INSTALLED,
         }:
-            return Response({"detail": "Unsupported installation status."}, status=400)
+            return legacy_error_response("Unsupported installation status.", http_status=400)
         installation.status = status_value
         installation.save(update_fields=["status", "updated_at"])
         if status_value == PluginInstallation.Status.UNINSTALLED:
@@ -589,15 +583,18 @@ class PluginConnectionListCreateView(APIView):
             PluginInstallation.objects.filter(tenant__memberships__user=request.user),
             pk=installation_id,
         )
-        if not ProjectMembership.objects.filter(
-            project=installation.project,
-            user=request.user,
-        ).exists() and not TenantMembership.objects.filter(
-            tenant=installation.tenant,
-            user=request.user,
-            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists():
-            return Response({"detail": "Project membership required."}, status=403)
+        if (
+            not ProjectMembership.objects.filter(
+                project=installation.project,
+                user=request.user,
+            ).exists()
+            and not TenantMembership.objects.filter(
+                tenant=installation.tenant,
+                user=request.user,
+                role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+            ).exists()
+        ):
+            return legacy_error_response("Project membership required.", http_status=403)
         return Response(
             {
                 "count": installation.connections.count(),
@@ -607,7 +604,7 @@ class PluginConnectionListCreateView(APIView):
 
     def post(self, request, installation_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         installation = get_object_or_404(
             PluginInstallation.objects.filter(tenant__memberships__user=request.user),
             pk=installation_id,
@@ -617,17 +614,17 @@ class PluginConnectionListCreateView(APIView):
             installation.tenant,
             installation.project,
         ):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         if installation.status != PluginInstallation.Status.INSTALLED:
-            return Response({"detail": "Plugin installation is not active."}, status=409)
+            return legacy_error_response("Plugin installation is not active.", http_status=409)
         name = request.data.get("name")
         auth_type = request.data.get("auth_type", PluginConnection.AuthType.NONE)
         credential_ref = request.data.get("credential_ref", "")
         config = request.data.get("config", {})
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
-            return Response({"detail": "Connection name is required."}, status=400)
+            return legacy_error_response("Connection name is required.", http_status=400)
         if auth_type not in PluginConnection.AuthType.values:
-            return Response({"detail": "Unsupported auth_type."}, status=400)
+            return legacy_error_response("Unsupported auth_type.", http_status=400)
         transport = (
             installation.plugin.manifest.get("http")
             if isinstance(installation.plugin.manifest, dict)
@@ -635,14 +632,12 @@ class PluginConnectionListCreateView(APIView):
         )
         if isinstance(transport, dict) and transport.get("auth_required") is True:
             if auth_type == PluginConnection.AuthType.NONE:
-                return Response(
-                    {
-                        "detail": (
-                            "This connector requires authentication; configure a "
-                            "Secret Manager credential reference before creating a connection."
-                        )
-                    },
-                    status=400,
+                return legacy_error_response(
+                    (
+                        "This connector requires authentication; configure a "
+                        "Secret Manager credential reference before creating a connection."
+                    ),
+                    http_status=400,
                 )
         if auth_type != PluginConnection.AuthType.NONE and (
             not isinstance(credential_ref, str)
@@ -651,30 +646,26 @@ class PluginConnectionListCreateView(APIView):
                 credential_ref,
             )
         ):
-            return Response(
-                {
-                    "detail": (
-                        "credential_ref must use a supported secret-manager URI "
-                        "such as vault://path/to/credential; raw URLs and secret values "
-                        "are not accepted."
-                    )
-                },
-                status=400,
+            return legacy_error_response(
+                (
+                    "credential_ref must use a supported secret-manager URI "
+                    "such as vault://path/to/credential; raw URLs and secret values "
+                    "are not accepted."
+                ),
+                http_status=400,
             )
         if auth_type == PluginConnection.AuthType.NONE and credential_ref:
-            return Response(
-                {"detail": "credential_ref is not allowed for auth_type=none."},
-                status=400,
+            return legacy_error_response(
+                "credential_ref is not allowed for auth_type=none.", http_status=400
             )
         if not isinstance(config, dict):
-            return Response({"detail": "config must be a JSON object."}, status=400)
+            return legacy_error_response("config must be a JSON object.", http_status=400)
         payload_error = _validate_payload({"config": config})
         if payload_error:
-            return Response({"detail": payload_error}, status=400)
+            return legacy_error_response(payload_error, http_status=400)
         if _contains_sensitive_key(config):
-            return Response(
-                {"detail": "Connection configuration cannot contain credential fields."},
-                status=400,
+            return legacy_error_response(
+                "Connection configuration cannot contain credential fields.", http_status=400
             )
         try:
             connection = PluginConnection.objects.create(
@@ -686,7 +677,7 @@ class PluginConnectionListCreateView(APIView):
                 status=PluginConnection.Status.PENDING,
             )
         except IntegrityError:
-            return Response({"detail": "Connection name already exists."}, status=409)
+            return legacy_error_response("Connection name already exists.", http_status=409)
         return Response(
             {
                 "id": str(connection.id),
@@ -723,45 +714,44 @@ class PluginConnectionTestView(APIView):
             installation.tenant,
             installation.project,
         ):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         if installation.status != PluginInstallation.Status.INSTALLED:
-            return Response({"detail": "Plugin installation is not active."}, status=409)
+            return legacy_error_response("Plugin installation is not active.", http_status=409)
         if plugin.connector_type not in {
             PluginDefinition.ConnectorType.HTTP,
             PluginDefinition.ConnectorType.OPENAPI,
         }:
-            return Response(
-                {"detail": "Connection health checks require an HTTP or OpenAPI connector."},
-                status=409,
+            return legacy_error_response(
+                "Connection health checks require an HTTP or OpenAPI connector.", http_status=409
             )
         transport = plugin.manifest.get("http") if isinstance(plugin.manifest, dict) else None
         health_check = transport.get("health_check") if isinstance(transport, dict) else None
         if not isinstance(health_check, dict):
-            return Response(
-                {"detail": "Connector manifest does not define http.health_check."},
-                status=409,
+            return legacy_error_response(
+                "Connector manifest does not define http.health_check.", http_status=409
             )
-        healthy_connection_exists = PluginConnection.objects.filter(
-            installation=installation,
-            status=PluginConnection.Status.HEALTHY,
-        ).exclude(pk=connection.pk).exists()
+        healthy_connection_exists = (
+            PluginConnection.objects.filter(
+                installation=installation,
+                status=PluginConnection.Status.HEALTHY,
+            )
+            .exclude(pk=connection.pk)
+            .exists()
+        )
         if healthy_connection_exists:
-            return Response(
-                {
-                    "detail": (
-                        "Another healthy connection is already active for this installation. "
-                        "Disable it before activating a different connection."
-                    )
-                },
-                status=409,
+            return legacy_error_response(
+                (
+                    "Another healthy connection is already active for this installation. "
+                    "Disable it before activating a different connection."
+                ),
+                http_status=409,
             )
         manifest = dict(plugin.manifest)
         transport_config = dict(transport)
         configured_operations = transport_config.get("operations", {})
         if not isinstance(configured_operations, dict):
-            return Response(
-                {"detail": "Connector HTTP operation map is invalid."},
-                status=409,
+            return legacy_error_response(
+                "Connector HTTP operation map is invalid.", http_status=409
             )
         operations = dict(configured_operations)
         operations["__health_check__"] = health_check
@@ -786,9 +776,9 @@ class PluginConnectionTestView(APIView):
             or _contains_sensitive_key(health_arguments)
             or _validate_payload({"arguments": health_arguments})
         ):
-            return Response(
-                {"detail": "Connector health-check arguments must be a non-sensitive JSON object."},
-                status=409,
+            return legacy_error_response(
+                "Connector health-check arguments must be a non-sensitive JSON object.",
+                http_status=409,
             )
         try:
             execute_http_operation(
@@ -814,7 +804,7 @@ class PluginConnectionTestView(APIView):
                 outcome=AuditEvent.Outcome.FAILURE,
                 metadata={"plugin_key": plugin.plugin_key, "connection_name": connection.name},
             )
-            return Response({"detail": str(exc)}, status=502)
+            return legacy_error_response(str(exc), http_status=502)
 
         connection.status = PluginConnection.Status.HEALTHY
         connection.last_health_check_at = timezone.now()
@@ -854,23 +844,20 @@ class PluginConnectionStatusView(APIView):
             installation.tenant,
             installation.project,
         ):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         status_value = request.data.get("status")
         if status_value not in {
             PluginConnection.Status.PENDING,
             PluginConnection.Status.DISABLED,
         }:
-            return Response(
-                {"detail": "Connection status can only be set to pending or disabled."},
-                status=400,
+            return legacy_error_response(
+                "Connection status can only be set to pending or disabled.", http_status=400
             )
         previous_status = connection.status
         connection.status = status_value
         if status_value == PluginConnection.Status.PENDING:
             connection.last_health_check_at = None
-        connection.save(
-            update_fields=["status", "last_health_check_at", "updated_at"]
-        )
+        connection.save(update_fields=["status", "last_health_check_at", "updated_at"])
         record_audit_event(
             request,
             installation.tenant,

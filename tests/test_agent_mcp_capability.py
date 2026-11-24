@@ -510,7 +510,7 @@ def test_register_rejects_handwritten_mcp_capability_without_discovery(workspace
         format="json",
     )
     assert response.status_code == 400
-    assert "discover" in response.data["detail"].lower()
+    assert "discover" in response.data["error"]["message"].lower()
     assert not AgentPluginDefinition.objects.filter(tenant=tenant).exists()
 
 

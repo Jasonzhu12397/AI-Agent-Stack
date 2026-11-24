@@ -519,7 +519,7 @@ def test_agent_command_payload_enforces_utf8_byte_limit(node_workspace):
 
     assert len(str(payload)) < 65536
     assert response.status_code == 400
-    assert "64 KiB" in response.data["detail"]
+    assert "64 KiB" in response.data["error"]["message"]
     assert AgentCommand.objects.count() == 0
 
 
@@ -705,7 +705,7 @@ def test_agent_command_result_enforces_utf8_byte_limit(node_workspace):
     assert created.status_code == 202
     assert len(str(result)) < 65536
     assert response.status_code == 400
-    assert "64 KiB" in response.data["detail"]
+    assert "64 KiB" in response.data["error"]["message"]
     stored = AgentCommand.objects.get(pk=command["id"])
     assert stored.status == AgentCommand.Status.RUNNING
     assert stored.lease_token is not None
@@ -1706,7 +1706,7 @@ def test_fleet_machine_lifecycle_review_rejects_unverified_provisioning(node_wor
         format="json",
     )
     assert response.status_code == 409
-    assert response.data["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
+    assert response.data["error"]["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
     machine.refresh_from_db()
     assert machine.lifecycle_state == "discovered"
 
@@ -2742,7 +2742,7 @@ def test_kubernetes_rollback_is_rejected_before_queueing_when_the_request_is_uns
         HTTP_IDEMPOTENCY_KEY="rollback-traversal",
     )
     assert traversal.status_code == 400
-    assert traversal.data["code"] == "ROLLBACK_SNAPSHOT_PATH_INVALID"
+    assert traversal.data["error"]["code"] == "ROLLBACK_SNAPSHOT_PATH_INVALID"
 
     unconfirmed = client.post(
         f"/api/v1/agent-nodes/{node_id}/commands/",
@@ -2752,7 +2752,7 @@ def test_kubernetes_rollback_is_rejected_before_queueing_when_the_request_is_uns
         HTTP_IDEMPOTENCY_KEY="rollback-unconfirmed",
     )
     assert unconfirmed.status_code == 400
-    assert unconfirmed.data["code"] == "ROLLBACK_CONFIRMATION_MISMATCH"
+    assert unconfirmed.data["error"]["code"] == "ROLLBACK_CONFIRMATION_MISMATCH"
     queued = AgentCommand.objects.filter(command_type="cluster.kubernetes.version.rollback")
     assert not queued.exists()
 

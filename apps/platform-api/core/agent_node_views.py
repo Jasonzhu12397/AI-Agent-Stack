@@ -73,6 +73,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.api_errors import legacy_error_response
 
 
 def _network_observation(inventory: Any, result: Any) -> dict[str, Any] | None:
@@ -117,6 +118,8 @@ MUTATING_COMMANDS = {
     # backups have to run without a person watching.
     "cluster.kubernetes.backup.run",
 }
+
+
 def _deployment_for_node(node) -> ClusterDeployment | None:
     """The succeeded deployment this Target Agent node serves, if any.
 
@@ -192,6 +195,7 @@ def _cancel_agent_commands(queryset, now):
         )
     return unknown_outcomes
 
+
 FORBIDDEN_PAYLOAD_KEYS = {
     "shell",
     "command",
@@ -209,9 +213,13 @@ FORBIDDEN_PAYLOAD_KEYS = {
 def _command_is_fenced_by_cluster_ownership(command, node):
     if node.node_type != AgentNode.NodeType.EPH_NODE or command.deployment_id is None:
         return False
-    deployment = ClusterDeployment.objects.select_for_update().filter(
-        pk=command.deployment_id,
-    ).first()
+    deployment = (
+        ClusterDeployment.objects.select_for_update()
+        .filter(
+            pk=command.deployment_id,
+        )
+        .first()
+    )
     if deployment is None:
         return True
     plan_result = deployment.plan_result
@@ -299,9 +307,7 @@ def _command_data(command):
     return {
         "id": str(command.id),
         "node_id": str(command.node_id),
-        "deployment_id": (
-            str(command.deployment_id) if command.deployment_id else None
-        ),
+        "deployment_id": (str(command.deployment_id) if command.deployment_id else None),
         "command_type": command.command_type,
         "payload": command.payload,
         "status": command.status,
@@ -340,9 +346,7 @@ def _validate_executed_upgrade(command, result):
     if result.get("upgrade_performed") is not True:
         # Nothing was upgraded. That is only acceptable as an explicit
         # already-at-target retry, never as an upgrade that did nothing.
-        if result.get("upgrade_performed") is False and result.get(
-            "already_at_target"
-        ) is True:
+        if result.get("upgrade_performed") is False and result.get("already_at_target") is True:
             performed = result.get("performed_steps") or []
             if isinstance(performed, list) and any(
                 str(step).startswith(("control_plane", "worker")) for step in performed
@@ -591,13 +595,16 @@ def _authenticate_node(request, node_id):
             return None
         if not trusted_proxy:
             return None
-        verified_fingerprint = request.headers.get(
-            "X-Verified-Client-Cert-SHA256",
-            "",
-        ).strip().lower()
-        if (
-            not re.fullmatch(r"[0-9a-f]{64}", verified_fingerprint)
-            or not hmac.compare_digest(verified_fingerprint, expected_fingerprint)
+        verified_fingerprint = (
+            request.headers.get(
+                "X-Verified-Client-Cert-SHA256",
+                "",
+            )
+            .strip()
+            .lower()
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", verified_fingerprint) or not hmac.compare_digest(
+            verified_fingerprint, expected_fingerprint
         ):
             return None
     supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -623,31 +630,32 @@ class AgentNodeListCreateView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant, project, is_admin = _tenant_and_project(request, tenant_id, project_id)
         if not is_admin:
-            return Response(
-                {"detail": "Tenant owner or admin role is required to enroll node agents."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant owner or admin role is required to enroll node agents.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         name = str(request.data.get("name", "")).strip()
         node_type = request.data.get("node_type")
         cluster_name = str(request.data.get("cluster_name", "")).strip()
         if not name or len(name) > 120:
-            return Response(
-                {"detail": "name is required and must be at most 120 characters."},
-                status=400,
+            return legacy_error_response(
+                "name is required and must be at most 120 characters.", http_status=400
             )
         if node_type not in AgentNode.NodeType.values:
-            return Response({"detail": "node_type must be eph_node or target_cluster."}, status=400)
+            return legacy_error_response(
+                "node_type must be eph_node or target_cluster.", http_status=400
+            )
         capabilities = request.data.get("capabilities", [])
         labels = request.data.get("labels", {})
         if not isinstance(capabilities, list) or not all(
             isinstance(item, str) for item in capabilities
         ):
-            return Response({"detail": "capabilities must be a list of strings."}, status=400)
+            return legacy_error_response("capabilities must be a list of strings.", http_status=400)
         if not isinstance(labels, dict):
-            return Response({"detail": "labels must be a JSON object."}, status=400)
+            return legacy_error_response("labels must be a JSON object.", http_status=400)
         raw_token = secrets.token_urlsafe(36)
         try:
             node = AgentNode.objects.create(
@@ -662,9 +670,8 @@ class AgentNodeListCreateView(APIView):
                 credential_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
             )
         except IntegrityError:
-            return Response(
-                {"detail": "A node with this name already exists in the project."},
-                status=409,
+            return legacy_error_response(
+                "A node with this name already exists in the project.", http_status=409
             )
         record_audit_event(
             request,
@@ -678,8 +685,7 @@ class AgentNodeListCreateView(APIView):
         data = _node_data(node)
         data["enrollment_token"] = raw_token
         data["token_warning"] = (
-            "Store this token securely; it is shown only once. "
-            "Use TLS for agent communication."
+            "Store this token securely; it is shown only once. Use TLS for agent communication."
         )
         return Response(data, status=status.HTTP_201_CREATED)
 
@@ -701,18 +707,17 @@ class FleetMachineInventoryView(APIView):
             limit = int(request.query_params.get("limit", "50"))
             offset = int(request.query_params.get("offset", "0"))
         except (TypeError, ValueError):
-            return Response({"detail": "limit and offset must be integers."}, status=400)
+            return legacy_error_response("limit and offset must be integers.", http_status=400)
         if not 1 <= limit <= 200 or offset < 0:
-            return Response(
-                {"detail": "limit must be 1–200 and offset must be non-negative."},
-                status=400,
+            return legacy_error_response(
+                "limit must be 1–200 and offset must be non-negative.", http_status=400
             )
 
         nodes = AgentNode.objects.filter(tenant=tenant, project=project)
         node_type = request.query_params.get("node_type")
         if node_type:
             if node_type not in AgentNode.NodeType.values:
-                return Response({"detail": "Unknown node_type."}, status=400)
+                return legacy_error_response("Unknown node_type.", http_status=400)
             nodes = nodes.filter(node_type=node_type)
 
         requested_status = request.query_params.get("status")
@@ -723,7 +728,7 @@ class FleetMachineInventoryView(APIView):
                 AgentNode.Status.REVOKED,
                 "stale",
             }:
-                return Response({"detail": "Unknown machine status."}, status=400)
+                return legacy_error_response("Unknown machine status.", http_status=400)
             if requested_status == "stale":
                 stale_before = timezone.now() - datetime.timedelta(seconds=60)
                 nodes = nodes.filter(status=AgentNode.Status.ONLINE).filter(
@@ -762,9 +767,7 @@ class FleetMachineInventoryView(APIView):
             data["hardware_inventory"] = (
                 machine.hardware_inventory if machine else node.labels.get("hardware_inventory", {})
             )
-            data["inventory_source"] = (
-                machine.inventory_source if machine else "legacy_agent_label"
-            )
+            data["inventory_source"] = machine.inventory_source if machine else "legacy_agent_label"
             data["identity"]["system_uuid"] = machine.system_uuid if machine else ""
             data["identity"]["identity_status"] = (
                 machine.identity_status if machine else "unverified"
@@ -772,9 +775,7 @@ class FleetMachineInventoryView(APIView):
             data["identity"]["identity_fingerprint"] = (
                 machine.identity_fingerprint or None if machine else None
             )
-            data["identity"]["identity_conflicts"] = (
-                machine.identity_conflicts if machine else []
-            )
+            data["identity"]["identity_conflicts"] = machine.identity_conflicts if machine else []
             data["observed_at"] = machine.observed_at if machine else node.last_seen_at
             # Machine-level actions (BMC registration, lifecycle review) address
             # the AgentMachine, so the list has to expose its id and the two
@@ -826,12 +827,17 @@ def _identity_value(value):
         return ""
     normalized = value.strip().lower()
     if normalized in {
-        "", "none", "unknown", "default string", "to be filled by o.e.m.",
-        "not specified", "not applicable", "00000000-0000-0000-0000-000000000000",
+        "",
+        "none",
+        "unknown",
+        "default string",
+        "to be filled by o.e.m.",
+        "not specified",
+        "not applicable",
+        "00000000-0000-0000-0000-000000000000",
     }:
         return ""
     return normalized[:256]
-
 
 
 def _validate_bmc_endpoint(value):
@@ -898,24 +904,26 @@ def _machine_conflicts(node, material, machine):
     if not material:
         return []
     conflicts = []
-    candidates = AgentMachine.objects.filter(
-        tenant=node.tenant,
-        project=node.project,
-    ).exclude(agent_node=node).only("id", "agent_node_id", "identity_material")
+    candidates = (
+        AgentMachine.objects.filter(
+            tenant=node.tenant,
+            project=node.project,
+        )
+        .exclude(agent_node=node)
+        .only("id", "agent_node_id", "identity_material")
+    )
     for candidate in candidates.iterator():
         other = candidate.identity_material or {}
-        shared = sorted(
-            key for key, value in material.items()
-            if value and other.get(key) == value
-        )
+        shared = sorted(key for key, value in material.items() if value and other.get(key) == value)
         if shared:
-            conflicts.append({
-                "machine_id": str(candidate.id),
-                "agent_node_id": str(candidate.agent_node_id),
-                "matching_fields": shared,
-            })
+            conflicts.append(
+                {
+                    "machine_id": str(candidate.id),
+                    "agent_node_id": str(candidate.agent_node_id),
+                    "matching_fields": shared,
+                }
+            )
     return conflicts
-
 
 
 def _record_bmc_verification_failure(request, tenant, project, machine_id, reason):
@@ -932,9 +940,7 @@ def _record_bmc_verification_failure(request, tenant, project, machine_id, reaso
             "observed_at": observed,
             "reason": reason,
         }
-        machine.save(
-            update_fields=["bmc_identity_evidence", "updated_at"]
-        )
+        machine.save(update_fields=["bmc_identity_evidence", "updated_at"])
         record_audit_event(
             request,
             tenant,
@@ -954,12 +960,11 @@ class FleetMachineBMCConfigView(APIView):
 
     def put(self, request, tenant_id, project_id, machine_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         allowed = {"endpoint", "credential_ref", "trust_bundle_ref"}
         if set(request.data) - allowed:
-            return Response(
-                {"detail": "Only endpoint and credential references are accepted."},
-                status=400,
+            return legacy_error_response(
+                "Only endpoint and credential references are accepted.", http_status=400
             )
         tenant, project, is_tenant_admin = _tenant_and_project(
             request,
@@ -972,41 +977,42 @@ class FleetMachineBMCConfigView(APIView):
             role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
         ).exists()
         if not is_tenant_admin and not project_editor:
-            return Response(
-                {"detail": "Project editor or administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor or administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         endpoint = _validate_bmc_endpoint(request.data.get("endpoint"))
         credential_ref = request.data.get("credential_ref")
         trust_bundle_ref = request.data.get("trust_bundle_ref", "")
         reference_pattern = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}"
         if endpoint is None:
-            return Response(
-                {"detail": "endpoint must be an HTTPS origin with a valid host."},
-                status=400,
+            return legacy_error_response(
+                "endpoint must be an HTTPS origin with a valid host.", http_status=400
             )
-        if (
-            not isinstance(credential_ref, str)
-            or not re.fullmatch(reference_pattern, credential_ref)
+        if not isinstance(credential_ref, str) or not re.fullmatch(
+            reference_pattern, credential_ref
         ):
-            return Response(
-                {"detail": "credential_ref must be a vault reference, not a secret."},
-                status=400,
+            return legacy_error_response(
+                "credential_ref must be a vault reference, not a secret.", http_status=400
             )
         if trust_bundle_ref and (
             not isinstance(trust_bundle_ref, str)
             or not re.fullmatch(reference_pattern, trust_bundle_ref)
         ):
-            return Response({"detail": "Invalid trust_bundle_ref."}, status=400)
+            return legacy_error_response("Invalid trust_bundle_ref.", http_status=400)
         parsed, hostname = endpoint
         with transaction.atomic():
-            machine = AgentMachine.objects.select_for_update().filter(
-                pk=machine_id,
-                tenant=tenant,
-                project=project,
-            ).first()
+            machine = (
+                AgentMachine.objects.select_for_update()
+                .filter(
+                    pk=machine_id,
+                    tenant=tenant,
+                    project=project,
+                )
+                .first()
+            )
             if machine is None:
-                return Response({"detail": "Machine not found."}, status=404)
+                return legacy_error_response("Machine not found.", http_status=404)
             machine.bmc_endpoint = f"https://{parsed.netloc}"
             machine.bmc_credential_ref = credential_ref
             machine.bmc_trust_bundle_ref = trust_bundle_ref
@@ -1056,12 +1062,10 @@ class FleetMachineBMCConfigView(APIView):
             status=200,
         )
 
-
     def post(self, request, tenant_id, project_id, machine_id):
         if request.data not in ({}, None):
-            return Response(
-                {"detail": "This endpoint does not accept a request body."},
-                status=400,
+            return legacy_error_response(
+                "This endpoint does not accept a request body.", http_status=400
             )
         tenant, project, is_tenant_admin = _tenant_and_project(
             request,
@@ -1074,9 +1078,9 @@ class FleetMachineBMCConfigView(APIView):
             role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
         ).exists()
         if not is_tenant_admin and not project_editor:
-            return Response(
-                {"detail": "Project editor or administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor or administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         machine = AgentMachine.objects.filter(
             pk=machine_id,
@@ -1084,11 +1088,10 @@ class FleetMachineBMCConfigView(APIView):
             project=project,
         ).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         if not machine.bmc_endpoint or not machine.bmc_credential_ref:
-            return Response(
-                {"detail": "BMC endpoint and credential reference must be configured."},
-                status=409,
+            return legacy_error_response(
+                "BMC endpoint and credential reference must be configured.", http_status=409
             )
         resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
         if (
@@ -1115,9 +1118,7 @@ class FleetMachineBMCConfigView(APIView):
                     "observed_at": observed,
                     "reason": "credential_resolver_not_configured",
                 }
-                machine.save(
-                    update_fields=["bmc_identity_evidence", "updated_at"]
-                )
+                machine.save(update_fields=["bmc_identity_evidence", "updated_at"])
                 record_audit_event(
                     request,
                     tenant,
@@ -1130,13 +1131,13 @@ class FleetMachineBMCConfigView(APIView):
                         "reason": "credential_resolver_not_configured",
                     },
                 )
-            return Response(
-                {
-                    "detail": "BMC credential resolver is not configured.",
+            return legacy_error_response(
+                "BMC credential resolver is not configured.",
+                http_status=503,
+                extra={
                     "verification_status": "not_checked",
                     "reason": "credential_resolver_not_configured",
                 },
-                status=503,
             )
         try:
             resolver = import_string(resolver_path)
@@ -1160,27 +1161,31 @@ class FleetMachineBMCConfigView(APIView):
             _record_bmc_verification_failure(
                 request, tenant, project, machine_id, "authentication_failed"
             )
-            return Response({"detail": "BMC authentication failed."}, status=502)
+            return legacy_error_response("BMC authentication failed.", http_status=502)
         except (ValueError, ImportError, AttributeError):
             _record_bmc_verification_failure(
                 request, tenant, project, machine_id, "invalid_response_or_configuration"
             )
-            return Response({"detail": "BMC verification configuration is invalid."}, status=400)
+            return legacy_error_response(
+                "BMC verification configuration is invalid.", http_status=400
+            )
         except httpx.TimeoutException:
             _record_bmc_verification_failure(
                 request, tenant, project, machine_id, "request_timeout"
             )
-            return Response({"detail": "BMC verification timed out."}, status=504)
+            return legacy_error_response("BMC verification timed out.", http_status=504)
         except httpx.HTTPError:
             _record_bmc_verification_failure(
                 request, tenant, project, machine_id, "connection_or_tls_failure"
             )
-            return Response({"detail": "BMC connection or TLS verification failed."}, status=502)
+            return legacy_error_response(
+                "BMC connection or TLS verification failed.", http_status=502
+            )
         except RuntimeError:
             _record_bmc_verification_failure(
                 request, tenant, project, machine_id, "redfish_request_failed"
             )
-            return Response({"detail": "Redfish request failed."}, status=502)
+            return legacy_error_response("Redfish request failed.", http_status=502)
         verification_status, conflicts, reason = _redfish_identity_review(machine, systems)
         observed = timezone.now().isoformat()
         system = systems[0] if len(systems) == 1 else {}
@@ -1252,12 +1257,7 @@ def _redfish_read_json(client, url, auth):
             raise PermissionError("BMC authentication failed.")
         if response.status_code != 200:
             raise RuntimeError("Redfish endpoint returned an unsuccessful status.")
-        content_type = (
-            response.headers.get("content-type", "")
-            .split(";", 1)[0]
-            .strip()
-            .lower()
-        )
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             raise ValueError("Redfish endpoint did not return JSON.")
         chunks = []
@@ -1363,18 +1363,21 @@ def _redfish_identity_review(machine, systems):
         return "candidate", [], "insufficient_identity_material"
     if dmi_uuid.lower() != system["uuid"].lower() or dmi_serial.lower() != system["serial"].lower():
         return "conflict", ["system_uuid", "product_serial"], "dmi_redfish_mismatch"
-    duplicates = AgentMachine.objects.filter(
-        tenant=machine.tenant,
-        project=machine.project,
-    ).exclude(pk=machine.pk).filter(
-        Q(system_uuid__iexact=system["uuid"])
-        | Q(identity_material__product_serial__iexact=system["serial"])
-        | Q(identity_material__product_uuid__iexact=system["uuid"])
+    duplicates = (
+        AgentMachine.objects.filter(
+            tenant=machine.tenant,
+            project=machine.project,
+        )
+        .exclude(pk=machine.pk)
+        .filter(
+            Q(system_uuid__iexact=system["uuid"])
+            | Q(identity_material__product_serial__iexact=system["serial"])
+            | Q(identity_material__product_uuid__iexact=system["uuid"])
+        )
     )
     if duplicates.exists():
         return "conflict", ["system_uuid", "product_serial"], "duplicate_machine_identity"
     return "verified", [], "dmi_redfish_match"
-
 
 
 def _bmc_credential_for(machine, tenant, project):
@@ -1448,12 +1451,10 @@ def _firmware_vendor_scope(machine):
 
 def _firmware_vendor_gate(machine):
     if _firmware_vendor_scope(machine) is None:
-        return Response(
-            {
-                "detail": FIRMWARE_VENDOR_UNSUPPORTED_DETAIL,
-                "supported_vendors": list(FIRMWARE_SUPPORTED_VENDORS),
-            },
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        return legacy_error_response(
+            FIRMWARE_VENDOR_UNSUPPORTED_DETAIL,
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            extra={"supported_vendors": list(FIRMWARE_SUPPORTED_VENDORS)},
         )
     return None
 
@@ -1464,9 +1465,7 @@ def _firmware_client(machine, credential, trust_bundle_pem):
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError as exc:
-        raise ValueError(
-            "Firmware management requires a literal BMC IP address."
-        ) from exc
+        raise ValueError("Firmware management requires a literal BMC IP address.") from exc
     if (
         not address.is_private
         or address.is_loopback
@@ -1515,16 +1514,12 @@ def _redfish_member_limit(paths):
 def _firmware_inventory(machine, credential, trust_bundle_pem):
     client, base_url, auth = _firmware_client(machine, credential, trust_bundle_pem)
     with client:
-        service = _redfish_get_document(
-            client, base_url, "/redfish/v1/UpdateService", auth
-        )
+        service = _redfish_get_document(client, base_url, "/redfish/v1/UpdateService", auth)
         inventory_link = service.get("FirmwareInventory")
         firmware = []
         if isinstance(inventory_link, dict):
             collection_path = inventory_link.get("@odata.id")
-            collection = _redfish_get_document(
-                client, base_url, collection_path, auth
-            )
+            collection = _redfish_get_document(client, base_url, collection_path, auth)
             for member_path in _redfish_member_limit(collection.get("Members")):
                 member = _redfish_get_document(client, base_url, member_path, auth)
                 status = member.get("Status") if isinstance(member.get("Status"), dict) else {}
@@ -1574,14 +1569,10 @@ def _sanitize_image_url(value):
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
 
-def _firmware_simple_update(
-    machine, credential, trust_bundle_pem, image_url, targets, apply_time
-):
+def _firmware_simple_update(machine, credential, trust_bundle_pem, image_url, targets, apply_time):
     client, base_url, auth = _firmware_client(machine, credential, trust_bundle_pem)
     with client:
-        service = _redfish_get_document(
-            client, base_url, "/redfish/v1/UpdateService", auth
-        )
+        service = _redfish_get_document(client, base_url, "/redfish/v1/UpdateService", auth)
         if not bool(service.get("ServiceEnabled", False)):
             raise RuntimeError("Redfish UpdateService is disabled.")
         target = _firmware_action_target(service, base_url)
@@ -1595,9 +1586,7 @@ def _firmware_simple_update(
         if response.status_code in (401, 403):
             raise PermissionError("BMC authentication failed.")
         if response.status_code not in (200, 202):
-            raise RuntimeError(
-                f"Redfish SimpleUpdate returned HTTP {response.status_code}."
-            )
+            raise RuntimeError(f"Redfish SimpleUpdate returned HTTP {response.status_code}.")
         monitor = response.headers.get("location", "")
         if not monitor:
             try:
@@ -1622,9 +1611,7 @@ def _refresh_firmware_job(job):
         return job
     if not job.task_monitor:
         return job
-    credential, trust_bundle_pem = _bmc_credential_for(
-        job.machine, job.tenant, job.project
-    )
+    credential, trust_bundle_pem = _bmc_credential_for(job.machine, job.tenant, job.project)
     client, base_url, auth = _firmware_client(job.machine, credential, trust_bundle_pem)
     if not job.task_monitor.startswith(f"{base_url}/redfish/v1/"):
         raise ValueError("Firmware task monitor does not match the machine BMC.")
@@ -1652,9 +1639,7 @@ def _refresh_firmware_job(job):
         job.message = f"{task_status}: {message}".strip()
     elif message:
         job.message = message
-    job.save(
-        update_fields=["status", "task_state", "message", "finished_at", "updated_at"]
-    )
+    job.save(update_fields=["status", "task_state", "message", "finished_at", "updated_at"])
     return job
 
 
@@ -1679,18 +1664,16 @@ def _firmware_job_data(job):
 
 def _firmware_error_response(exc):
     if isinstance(exc, PermissionError):
-        return Response({"detail": "BMC authentication failed."}, status=502)
+        return legacy_error_response("BMC authentication failed.", http_status=502)
     if isinstance(exc, httpx.TimeoutException):
-        return Response({"detail": "BMC firmware request timed out."}, status=504)
+        return legacy_error_response("BMC firmware request timed out.", http_status=504)
     if isinstance(exc, httpx.HTTPError):
-        return Response(
-            {"detail": "BMC connection or TLS verification failed."}, status=502
-        )
+        return legacy_error_response("BMC connection or TLS verification failed.", http_status=502)
     if isinstance(exc, (ValueError, ImportError, AttributeError)):
-        return Response({"detail": str(exc)}, status=400)
+        return legacy_error_response(str(exc), http_status=400)
     if isinstance(exc, RuntimeError):
-        return Response({"detail": str(exc)}, status=502)
-    return Response({"detail": "Firmware management request failed."}, status=500)
+        return legacy_error_response(str(exc), http_status=502)
+    return legacy_error_response("Firmware management request failed.", http_status=500)
 
 
 class FleetMachineNetworkVerifyView(APIView):
@@ -1698,33 +1681,33 @@ class FleetMachineNetworkVerifyView(APIView):
 
     def get(self, request, tenant_id, project_id, machine_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        allowed = TenantMembership.objects.filter(
-            tenant=tenant,
-            user=request.user,
-            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists() or ProjectMembership.objects.filter(
-            project=project,
-            user=request.user,
-            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
-        ).exists()
+        allowed = (
+            TenantMembership.objects.filter(
+                tenant=tenant,
+                user=request.user,
+                role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+            ).exists()
+            or ProjectMembership.objects.filter(
+                project=project,
+                user=request.user,
+                role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+            ).exists()
+        )
         if not allowed:
-            return Response({"detail": "Project editor or admin role required."}, status=403)
-        machine = AgentMachine.objects.filter(
-            pk=machine_id, tenant=tenant, project=project
-        ).first()
+            return legacy_error_response("Project editor or admin role required.", http_status=403)
+        machine = AgentMachine.objects.filter(pk=machine_id, tenant=tenant, project=project).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         profile_record = InfrastructureNetworkProfile.objects.filter(
             tenant=tenant, project=project
         ).first()
         if profile_record is None:
-            return Response(
-                {"detail": "Infrastructure network profile is not configured."},
-                status=409,
+            return legacy_error_response(
+                "Infrastructure network profile is not configured.", http_status=409
             )
         host_role = request.query_params.get("host_role", "worker")
         if host_role not in {"control_plane", "worker", "storage"}:
-            return Response({"detail": "Unknown host_role."}, status=400)
+            return legacy_error_response("Unknown host_role.", http_status=400)
         try:
             report = verify_host_networks(
                 profile_record.profile,
@@ -1732,21 +1715,20 @@ class FleetMachineNetworkVerifyView(APIView):
                 machine.hardware_inventory or {},
             )
         except InfraNetworkError as exc:
-            return Response(
-                {"detail": f"Infrastructure network profile is invalid: {exc.code}"},
-                status=409,
+            return legacy_error_response(
+                f"Infrastructure network profile is invalid: {exc.code}",
+                http_status=409,
+                code="INFRA_NETWORK_PROFILE_INVALID",
             )
         except ValueError as exc:
-            return Response({"detail": str(exc)}, status=400)
+            return legacy_error_response(str(exc), http_status=400)
         return Response(
             {
                 "machine_id": str(machine.id),
                 "machine_name": machine.agent_node.name,
                 "inventory_source": machine.inventory_source,
                 "inventory_revision": machine.inventory_revision,
-                "observed_at": machine.observed_at.isoformat()
-                if machine.observed_at
-                else None,
+                "observed_at": machine.observed_at.isoformat() if machine.observed_at else None,
                 **report,
             },
             status=200,
@@ -1758,11 +1740,9 @@ class FleetMachineFirmwareView(APIView):
 
     def get(self, request, tenant_id, project_id, machine_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        machine = AgentMachine.objects.filter(
-            pk=machine_id, tenant=tenant, project=project
-        ).first()
+        machine = AgentMachine.objects.filter(pk=machine_id, tenant=tenant, project=project).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         vendor_gate = _firmware_vendor_gate(machine)
         if vendor_gate is not None:
             return vendor_gate
@@ -1797,75 +1777,68 @@ class FleetMachineFirmwareUpgradeView(APIView):
 
     def post(self, request, tenant_id, project_id, machine_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        tenant, project, is_tenant_admin = _tenant_and_project(
-            request, tenant_id, project_id
-        )
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(request, tenant_id, project_id)
         project_admin = ProjectMembership.objects.filter(
             project=project,
             user=request.user,
             role=ProjectMembership.Role.ADMIN,
         ).exists()
         if not is_tenant_admin and not project_admin:
-            return Response(
-                {"detail": "Tenant or project administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant or project administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
-        machine = AgentMachine.objects.filter(
-            pk=machine_id, tenant=tenant, project=project
-        ).first()
+        machine = AgentMachine.objects.filter(pk=machine_id, tenant=tenant, project=project).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         vendor_gate = _firmware_vendor_gate(machine)
         if vendor_gate is not None:
             return vendor_gate
         allowed = {"image_url", "component", "apply_time", "targets", "confirm", "idempotency_key"}
         if set(request.data) - allowed:
-            return Response(
-                {"detail": "Unsupported firmware upgrade fields were supplied."},
-                status=400,
+            return legacy_error_response(
+                "Unsupported firmware upgrade fields were supplied.", http_status=400
             )
         if request.data.get("confirm") is not True:
-            return Response(
-                {"detail": "Explicit confirm=true is required for firmware upgrades."},
-                status=400,
+            return legacy_error_response(
+                "Explicit confirm=true is required for firmware upgrades.", http_status=400
             )
         try:
             image_url = _validate_firmware_image_url(request.data.get("image_url"))
         except ValueError as exc:
-            return Response({"detail": str(exc)}, status=400)
+            return legacy_error_response(str(exc), http_status=400)
         component = request.data.get("component", "")
         if component and (not isinstance(component, str) or len(component) > 160):
-            return Response({"detail": "component must be at most 160 characters."}, status=400)
+            return legacy_error_response(
+                "component must be at most 160 characters.", http_status=400
+            )
         apply_time = request.data.get("apply_time", "Immediate")
         if apply_time not in ("Immediate", "OnReset", "AtMaintenanceWindowStart"):
-            return Response({"detail": "apply_time is invalid."}, status=400)
+            return legacy_error_response("apply_time is invalid.", http_status=400)
         targets = request.data.get("targets", [])
         if not isinstance(targets, list) or len(targets) > 8:
-            return Response(
-                {"detail": "targets must be a list of at most 8 Redfish paths."},
-                status=400,
+            return legacy_error_response(
+                "targets must be a list of at most 8 Redfish paths.", http_status=400
             )
         for target in targets:
             if not isinstance(target, str) or not re.fullmatch(
                 r"/redfish/v1/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,240}", target
             ):
-                return Response({"detail": "targets contains an invalid Redfish path."}, status=400)
+                return legacy_error_response(
+                    "targets contains an invalid Redfish path.", http_status=400
+                )
         idempotency_key = request.headers.get("Idempotency-Key", "")
         if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
-            return Response(
-                {"detail": "Idempotency-Key header is required (8-128 safe characters)."},
-                status=400,
+            return legacy_error_response(
+                "Idempotency-Key header is required (8-128 safe characters).", http_status=400
             )
-        machine = AgentMachine.objects.filter(
-            pk=machine_id, tenant=tenant, project=project
-        ).first()
+        machine = AgentMachine.objects.filter(pk=machine_id, tenant=tenant, project=project).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         if not machine.bmc_endpoint or not machine.bmc_credential_ref:
-            return Response(
-                {"detail": "BMC endpoint and credential reference must be configured."},
-                status=409,
+            return legacy_error_response(
+                "BMC endpoint and credential reference must be configured.", http_status=409
             )
         existing = FirmwareUpdateJob.objects.filter(
             tenant=tenant, machine=machine, idempotency_key=idempotency_key
@@ -1932,16 +1905,14 @@ class FleetMachineFirmwareUpgradeDetailView(APIView):
 
     def get(self, request, tenant_id, project_id, machine_id, job_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
-        machine = AgentMachine.objects.filter(
-            pk=machine_id, tenant=tenant, project=project
-        ).first()
+        machine = AgentMachine.objects.filter(pk=machine_id, tenant=tenant, project=project).first()
         if machine is None:
-            return Response({"detail": "Machine not found."}, status=404)
+            return legacy_error_response("Machine not found.", http_status=404)
         job = FirmwareUpdateJob.objects.filter(
             pk=job_id, machine=machine, tenant=tenant, project=project
         ).first()
         if job is None:
-            return Response({"detail": "Firmware update job not found."}, status=404)
+            return legacy_error_response("Firmware update job not found.", http_status=404)
         try:
             job = _refresh_firmware_job(job)
         except (
@@ -1961,7 +1932,7 @@ class FleetMachineLifecycleReviewView(APIView):
 
     def post(self, request, tenant_id, project_id, machine_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant, project, is_tenant_admin = _tenant_and_project(
             request,
             tenant_id,
@@ -1973,50 +1944,46 @@ class FleetMachineLifecycleReviewView(APIView):
             role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
         ).exists()
         if not is_tenant_admin and not project_editor:
-            return Response(
-                {"detail": "Project editor or administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor or administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         expected_state = request.data.get("expected_state")
         target_state = request.data.get("target_state")
         reason = request.data.get("reason")
         if not isinstance(expected_state, str) or not isinstance(target_state, str):
-            return Response(
-                {"detail": "expected_state and target_state are required strings."},
-                status=400,
+            return legacy_error_response(
+                "expected_state and target_state are required strings.", http_status=400
             )
         reason_text = normalize_reason(reason)
         if not reason_text:
-            return Response(
-                {
-                    "detail": "reason must contain "
-                    f"{REASON_MIN_LENGTH} to {REASON_MAX_LENGTH} characters."
-                },
-                status=400,
+            return legacy_error_response(
+                f"reason must contain {REASON_MIN_LENGTH} to {REASON_MAX_LENGTH} characters.",
+                http_status=400,
             )
         if not transition_allowed(expected_state, target_state):
-            return Response(
-                {
-                    "detail": "This lifecycle transition is not enabled.",
-                    "code": "LIFECYCLE_TRANSITION_NOT_ENABLED",
-                },
-                status=409,
+            return legacy_error_response(
+                "This lifecycle transition is not enabled.",
+                http_status=409,
+                code="LIFECYCLE_TRANSITION_NOT_ENABLED",
             )
         with transaction.atomic():
-            machine = AgentMachine.objects.select_for_update().filter(
-                pk=machine_id,
-                tenant=tenant,
-                project=project,
-            ).first()
+            machine = (
+                AgentMachine.objects.select_for_update()
+                .filter(
+                    pk=machine_id,
+                    tenant=tenant,
+                    project=project,
+                )
+                .first()
+            )
             if machine is None:
-                return Response({"detail": "Machine not found."}, status=404)
+                return legacy_error_response("Machine not found.", http_status=404)
             if machine.lifecycle_state != expected_state:
-                return Response(
-                    {
-                        "detail": "Machine lifecycle state changed.",
-                        "current_state": machine.lifecycle_state,
-                    },
-                    status=409,
+                return legacy_error_response(
+                    "Machine lifecycle state changed.",
+                    http_status=409,
+                    extra={"current_state": machine.lifecycle_state},
                 )
             machine.lifecycle_state = target_state
             machine.save(update_fields=["lifecycle_state", "updated_at"])
@@ -2048,23 +2015,26 @@ class AgentRuntimeInventoryReportView(APIView):
 
     def post(self, request):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node = _authenticate_node(request, request.data.get("node_id"))
         if node is None:
-            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            return legacy_error_response("Invalid or revoked node credential.", http_status=401)
         inventory = request.data.get("hardware_inventory")
         if not isinstance(inventory, dict):
-            return Response({"detail": "hardware_inventory must be a JSON object."}, status=400)
+            return legacy_error_response(
+                "hardware_inventory must be a JSON object.", http_status=400
+            )
         if _json_size_bytes(inventory) > 262144:
-            return Response({"detail": "hardware_inventory must not exceed 256 KiB."}, status=413)
+            return legacy_error_response(
+                "hardware_inventory must not exceed 256 KiB.", http_status=413
+            )
         if inventory.get("status") != "observed":
-            return Response(
-                {"detail": "Only observed hardware inventory can be ingested."},
-                status=400,
+            return legacy_error_response(
+                "Only observed hardware inventory can be ingested.", http_status=400
             )
         system_identity = inventory.get("system_identity", {})
         if not isinstance(system_identity, dict):
-            return Response({"detail": "system_identity must be a JSON object."}, status=400)
+            return legacy_error_response("system_identity must be a JSON object.", http_status=400)
         identity_fields = (
             "sys_vendor",
             "product_name",
@@ -2076,20 +2046,20 @@ class AgentRuntimeInventoryReportView(APIView):
         for key in identity_fields:
             value = system_identity.get(key)
             if value is not None and (not isinstance(value, str) or len(value) > 256):
-                return Response({"detail": "Invalid system identity field."}, status=400)
+                return legacy_error_response("Invalid system identity field.", http_status=400)
         material = _machine_identity_material(system_identity)
         fingerprint_payload = json.dumps(material, sort_keys=True, separators=(",", ":"))
         fingerprint = ""
         if material:
-            fingerprint = hashlib.sha256(
-                fingerprint_payload.encode("utf-8")
-            ).hexdigest()
+            fingerprint = hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest()
         observed_at = timezone.now()
         try:
             with transaction.atomic():
                 locked_node = AgentNode.objects.select_for_update().get(pk=node.pk)
                 if locked_node.status == AgentNode.Status.REVOKED:
-                    return Response({"detail": "Invalid or revoked node credential."}, status=401)
+                    return legacy_error_response(
+                        "Invalid or revoked node credential.", http_status=401
+                    )
                 machine, _ = AgentMachine.objects.select_for_update().get_or_create(
                     agent_node=locked_node,
                     defaults={
@@ -2123,14 +2093,12 @@ class AgentRuntimeInventoryReportView(APIView):
                     )
                 if machine.identity_status == AgentMachine.IdentityStatus.VERIFIED:
                     if not material:
-                        return Response(
-                            {
-                                "detail": (
-                                    "Verified machine identity cannot be replaced by "
-                                    "an inventory report without identity material."
-                                )
-                            },
-                            status=409,
+                        return legacy_error_response(
+                            (
+                                "Verified machine identity cannot be replaced by "
+                                "an inventory report without identity material."
+                            ),
+                            http_status=409,
                         )
                     if fingerprint != machine.identity_fingerprint:
                         conflicts.append(
@@ -2165,19 +2133,20 @@ class AgentRuntimeInventoryReportView(APIView):
                     )
                     machine.save()
         except IntegrityError:
-            return Response(
-                {"detail": "Machine inventory update conflicted; retry the report."},
-                status=409,
+            return legacy_error_response(
+                "Machine inventory update conflicted; retry the report.", http_status=409
             )
-        return Response({
-            "machine_id": str(machine.id),
-            "agent_node_id": str(locked_node.id),
-            "identity_status": machine.identity_status,
-            "identity_fingerprint": machine.identity_fingerprint or None,
-            "identity_conflicts": machine.identity_conflicts,
-            "observed_at": machine.observed_at,
-            "attestation": "unverified_agent_report",
-        })
+        return Response(
+            {
+                "machine_id": str(machine.id),
+                "agent_node_id": str(locked_node.id),
+                "identity_status": machine.identity_status,
+                "identity_fingerprint": machine.identity_fingerprint or None,
+                "identity_conflicts": machine.identity_conflicts,
+                "observed_at": machine.observed_at,
+                "attestation": "unverified_agent_report",
+            }
+        )
 
 
 class AgentNodeRevokeView(APIView):
@@ -2185,7 +2154,7 @@ class AgentNodeRevokeView(APIView):
 
     def post(self, request, node_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node = get_object_or_404(
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
@@ -2196,11 +2165,11 @@ class AgentNodeRevokeView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return Response({"detail": "Tenant owner or admin role is required."}, status=403)
+            return legacy_error_response("Tenant owner or admin role is required.", http_status=403)
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response({"detail": "Agent node has been revoked."}, status=409)
+                return legacy_error_response("Agent node has been revoked.", http_status=409)
             node.status = AgentNode.Status.REVOKED
             node.revoked_at = timezone.now()
             node.save(update_fields=["status", "revoked_at", "updated_at"])
@@ -2232,7 +2201,7 @@ class AgentNodeCredentialRotateView(APIView):
 
     def post(self, request, node_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node = get_object_or_404(
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
@@ -2243,30 +2212,27 @@ class AgentNodeCredentialRotateView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return Response(
-                {"detail": "Tenant owner or admin role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant owner or admin role is required.", http_status=status.HTTP_403_FORBIDDEN
             )
 
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response(
-                    {"detail": "A revoked agent node cannot rotate credentials."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "A revoked agent node cannot rotate credentials.",
+                    http_status=status.HTTP_409_CONFLICT,
                 )
             if AgentCommand.objects.filter(
                 node=node,
                 status=AgentCommand.Status.RUNNING,
             ).exists():
-                return Response(
-                    {
-                        "detail": (
-                            "Credential rotation is blocked while commands are running. "
-                            "Wait for them to finish or reconcile their execution state."
-                        )
-                    },
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    (
+                        "Credential rotation is blocked while commands are running. "
+                        "Wait for them to finish or reconcile their execution state."
+                    ),
+                    http_status=status.HTTP_409_CONFLICT,
                 )
 
             raw_token = secrets.token_urlsafe(36)
@@ -2316,28 +2282,24 @@ class AgentNodeClientCertificateView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not is_admin:
-            return None, Response(
-                {"detail": "Tenant owner or admin role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return None, legacy_error_response(
+                "Tenant owner or admin role is required.", http_status=status.HTTP_403_FORBIDDEN
             )
         return node, None
 
     def put(self, request, node_id):
         if not isinstance(request.data, dict) or set(request.data) != {"fingerprint_sha256"}:
-            return Response(
-                {
-                    "detail": (
-                        "Only fingerprint_sha256 is accepted; certificate and key "
-                        "material are forbidden."
-                    )
-                },
-                status=400,
+            return legacy_error_response(
+                (
+                    "Only fingerprint_sha256 is accepted; certificate and key "
+                    "material are forbidden."
+                ),
+                http_status=400,
             )
         fingerprint = request.data.get("fingerprint_sha256")
         if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint):
-            return Response(
-                {"detail": "fingerprint_sha256 must be exactly 64 hexadecimal characters."},
-                status=400,
+            return legacy_error_response(
+                "fingerprint_sha256 must be exactly 64 hexadecimal characters.", http_status=400
             )
         node, error = self._get_admin_node(request, node_id)
         if error:
@@ -2346,25 +2308,26 @@ class AgentNodeClientCertificateView(APIView):
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response(
-                    {"detail": "A revoked node cannot bind a client certificate."},
-                    status=409,
+                return legacy_error_response(
+                    "A revoked node cannot bind a client certificate.", http_status=409
                 )
             previous = node.client_certificate_fingerprint
             node.client_certificate_fingerprint = fingerprint
             node.client_certificate_bound_at = timezone.now()
             node.client_certificate_revoked_at = None
             try:
-                node.save(update_fields=[
-                    "client_certificate_fingerprint",
-                    "client_certificate_bound_at",
-                    "client_certificate_revoked_at",
-                    "updated_at",
-                ])
+                node.save(
+                    update_fields=[
+                        "client_certificate_fingerprint",
+                        "client_certificate_bound_at",
+                        "client_certificate_revoked_at",
+                        "updated_at",
+                    ]
+                )
             except IntegrityError:
-                return Response(
-                    {"detail": "This client certificate is already bound to another agent node."},
-                    status=409,
+                return legacy_error_response(
+                    "This client certificate is already bound to another agent node.",
+                    http_status=409,
                 )
         record_audit_event(
             request,
@@ -2382,28 +2345,30 @@ class AgentNodeClientCertificateView(APIView):
 
     def delete(self, request, node_id):
         if request.data not in ({}, None):
-            return Response({"detail": "A request body is not accepted."}, status=400)
+            return legacy_error_response("A request body is not accepted.", http_status=400)
         node, error = self._get_admin_node(request, node_id)
         if error:
             return error
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if not node.client_certificate_fingerprint:
-                return Response({"detail": "No client certificate is bound."}, status=409)
+                return legacy_error_response("No client certificate is bound.", http_status=409)
             previous = node.client_certificate_fingerprint
             node.client_certificate_fingerprint = ""
             node.client_certificate_revoked_at = timezone.now()
             node.status = AgentNode.Status.OFFLINE
             node.last_seen_at = None
             node.last_seen_ip = None
-            node.save(update_fields=[
-                "client_certificate_fingerprint",
-                "client_certificate_revoked_at",
-                "status",
-                "last_seen_at",
-                "last_seen_ip",
-                "updated_at",
-            ])
+            node.save(
+                update_fields=[
+                    "client_certificate_fingerprint",
+                    "client_certificate_revoked_at",
+                    "status",
+                    "last_seen_at",
+                    "last_seen_ip",
+                    "updated_at",
+                ]
+            )
         record_audit_event(
             request,
             node.tenant,
@@ -2421,7 +2386,7 @@ class FleetNetworkCollectView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant, project, is_admin = _tenant_and_project(request, tenant_id, project_id)
         project_editor = ProjectMembership.objects.filter(
             project=project,
@@ -2429,7 +2394,7 @@ class FleetNetworkCollectView(APIView):
             role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
         ).exists()
         if not is_admin and not project_editor:
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         requested_ids = request.data.get("node_ids")
         nodes = AgentNode.objects.filter(
             tenant=tenant,
@@ -2442,18 +2407,19 @@ class FleetNetworkCollectView(APIView):
         ).order_by("name", "id")
         if requested_ids is not None:
             if not isinstance(requested_ids, list) or len(requested_ids) > 500:
-                return Response(
-                    {"detail": "node_ids must be a list of at most 500 ids."},
-                    status=400,
+                return legacy_error_response(
+                    "node_ids must be a list of at most 500 ids.", http_status=400
                 )
             try:
                 parsed = [uuid.UUID(str(item)) for item in requested_ids]
             except (TypeError, ValueError, AttributeError):
-                return Response({"detail": "node_ids contains an invalid id."}, status=400)
+                return legacy_error_response("node_ids contains an invalid id.", http_status=400)
             nodes = nodes.filter(id__in=parsed)
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 96:
-            return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
+            return legacy_error_response(
+                "A valid Idempotency-Key header is required.", http_status=400
+            )
         plan_hash = _payload_hash("host.network.observe", {})
         queued = []
         skipped = []
@@ -2516,7 +2482,7 @@ class AgentNodeCommandListCreateView(APIView):
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
         if not project_member and not tenant_admin:
-            return Response({"detail": "Project membership required."}, status=403)
+            return legacy_error_response("Project membership required.", http_status=403)
         commands = AgentCommand.objects.filter(node=node)[:100]
         return Response(
             {
@@ -2527,13 +2493,13 @@ class AgentNodeCommandListCreateView(APIView):
 
     def post(self, request, node_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node = get_object_or_404(
             AgentNode.objects.filter(tenant__memberships__user=request.user),
             pk=node_id,
         )
         if node.status == AgentNode.Status.REVOKED:
-            return Response({"detail": "Agent node has been revoked."}, status=409)
+            return legacy_error_response("Agent node has been revoked.", http_status=409)
         is_admin = TenantMembership.objects.filter(
             tenant=node.tenant,
             user=request.user,
@@ -2545,20 +2511,21 @@ class AgentNodeCommandListCreateView(APIView):
             role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
         ).exists()
         if not (is_admin or project_editor):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         command_type = request.data.get("command_type")
         allowed = EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
         if not isinstance(command_type, str) or command_type not in allowed:
-            return Response({"detail": "Command is not allowed for this agent type."}, status=400)
+            return legacy_error_response(
+                "Command is not allowed for this agent type.", http_status=400
+            )
         payload = request.data.get("payload", {})
         payload_error = _validate_payload(payload)
         if payload_error:
-            return Response({"detail": payload_error}, status=400)
+            return legacy_error_response(payload_error, http_status=400)
         if command_type == "cluster.kubernetes.version.upgrade":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
-                return Response(
-                    {"detail": "Kubernetes version changes require a Target Cluster Agent."},
-                    status=400,
+                return legacy_error_response(
+                    "Kubernetes version changes require a Target Cluster Agent.", http_status=400
                 )
             if isinstance(payload, dict) and not payload.get("snapshot_directory"):
                 # The pre-upgrade snapshot has to land where the recurring
@@ -2570,26 +2537,21 @@ class AgentNodeCommandListCreateView(APIView):
             try:
                 validate_kubernetes_upgrade(payload, cluster_name=node.cluster_name)
             except KubernetesUpgradeError as exc:
-                return Response(
-                    {"detail": exc.detail, "code": exc.code},
-                    status=400,
-                )
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         if command_type == "cluster.kubernetes.version.rollback":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
-                return Response(
-                    {"detail": "Kubernetes rollbacks require a Target Cluster Agent."},
-                    status=400,
+                return legacy_error_response(
+                    "Kubernetes rollbacks require a Target Cluster Agent.", http_status=400
                 )
             try:
                 validate_kubernetes_rollback(payload, cluster_name=node.cluster_name)
             except KubernetesRollbackError as exc:
-                return Response(
-                    {"detail": exc.detail, "code": exc.code},
-                    status=400,
-                )
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
-            return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
+            return legacy_error_response(
+                "A valid Idempotency-Key header is required.", http_status=400
+            )
         plan_hash = _payload_hash(command_type, payload)
         initial_status = (
             AgentCommand.Status.WAITING_APPROVAL
@@ -2624,9 +2586,8 @@ class AgentNodeCommandListCreateView(APIView):
             or command.command_type != command_type
             or command.payload != payload
         ):
-            return Response(
-                {"detail": "Idempotency-Key was used for a different command."},
-                status=409,
+            return legacy_error_response(
+                "Idempotency-Key was used for a different command.", http_status=409
             )
         if created:
             event_type = (
@@ -2658,7 +2619,7 @@ class AgentCommandApproveView(APIView):
 
     def post(self, request, command_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         with transaction.atomic():
             command = get_object_or_404(
                 AgentCommand.objects.select_for_update().filter(
@@ -2672,17 +2633,18 @@ class AgentCommandApproveView(APIView):
                 role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
             ).exists()
             if not is_admin:
-                return Response(
-                    {"detail": "Tenant owner or admin role is required to approve provisioning."},
-                    status=403,
+                return legacy_error_response(
+                    "Tenant owner or admin role is required to approve provisioning.",
+                    http_status=403,
                 )
             if command.requested_by_id == request.user.id:
-                return Response(
-                    {"detail": "A different administrator must approve this command."},
-                    status=403,
+                return legacy_error_response(
+                    "A different administrator must approve this command.", http_status=403
                 )
             if command.status != AgentCommand.Status.WAITING_APPROVAL:
-                return Response({"detail": "Command is not waiting for approval."}, status=409)
+                return legacy_error_response(
+                    "Command is not waiting for approval.", http_status=409
+                )
             supplied_hash = str(request.data.get("plan_hash", ""))
             current_hash = _payload_hash(command.command_type, command.payload)
             if (
@@ -2690,9 +2652,9 @@ class AgentCommandApproveView(APIView):
                 or not hmac.compare_digest(supplied_hash, command.plan_hash)
                 or not hmac.compare_digest(current_hash, command.plan_hash)
             ):
-                return Response(
-                    {"detail": "Approval plan hash does not match the immutable command payload."},
-                    status=409,
+                return legacy_error_response(
+                    "Approval plan hash does not match the immutable command payload.",
+                    http_status=409,
                 )
             command.status = AgentCommand.Status.QUEUED
             command.approved_plan_hash = current_hash
@@ -2728,15 +2690,14 @@ class AgentRuntimeHeartbeatView(APIView):
 
     def post(self, request):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
-            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            return legacy_error_response("Invalid or revoked node credential.", http_status=401)
         if _json_size_bytes(request.data) > 16384:
-            return Response(
-                {"detail": "heartbeat payload must not exceed 16 KiB."},
-                status=413,
+            return legacy_error_response(
+                "heartbeat payload must not exceed 16 KiB.", http_status=413
             )
         capabilities = request.data.get("capabilities", node.capabilities)
         if (
@@ -2750,14 +2711,12 @@ class AgentRuntimeHeartbeatView(APIView):
             )
             or len(set(capabilities)) != len(capabilities)
         ):
-            return Response(
-                {
-                    "detail": (
-                        "capabilities must contain at most 64 unique "
-                        "identifier strings of 1–96 characters."
-                    )
-                },
-                status=400,
+            return legacy_error_response(
+                (
+                    "capabilities must contain at most 64 unique "
+                    "identifier strings of 1–96 characters."
+                ),
+                http_status=400,
             )
         agent_version = request.data.get("agent_version", node.agent_version)
         if (
@@ -2765,14 +2724,14 @@ class AgentRuntimeHeartbeatView(APIView):
             or len(agent_version) > 40
             or (agent_version and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_-]*", agent_version))
         ):
-            return Response({"detail": "agent_version is invalid."}, status=400)
+            return legacy_error_response("agent_version is invalid.", http_status=400)
         cluster_name = request.data.get("cluster_name", node.cluster_name)
         if not isinstance(cluster_name, str) or len(cluster_name) > 120:
-            return Response({"detail": "cluster_name is invalid."}, status=400)
+            return legacy_error_response("cluster_name is invalid.", http_status=400)
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response({"detail": "Invalid or revoked node credential."}, status=401)
+                return legacy_error_response("Invalid or revoked node credential.", http_status=401)
             node.agent_version = agent_version
             node.capabilities = capabilities
             node.cluster_name = cluster_name
@@ -2805,20 +2764,18 @@ class AgentRuntimePollView(APIView):
 
     def post(self, request):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
-            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            return legacy_error_response("Invalid or revoked node credential.", http_status=401)
         now = timezone.now()
         with transaction.atomic():
             node = AgentNode.objects.select_for_update().get(pk=node.pk)
             if node.status == AgentNode.Status.REVOKED:
-                return Response({"detail": "Invalid or revoked node credential."}, status=401)
+                return legacy_error_response("Invalid or revoked node credential.", http_status=401)
             allowed_commands = (
-                EPH_COMMANDS
-                if node.node_type == AgentNode.NodeType.EPH_NODE
-                else TARGET_COMMANDS
+                EPH_COMMANDS if node.node_type == AgentNode.NodeType.EPH_NODE else TARGET_COMMANDS
             )
             pending_commands = (
                 AgentCommand.objects.select_for_update(skip_locked=True)
@@ -2873,15 +2830,9 @@ class AgentRuntimePollView(APIView):
                     _fail_fenced_command(candidate, now)
                     continue
 
-                lease_expired_while_running = (
-                    candidate.status == AgentCommand.Status.RUNNING
-                )
-                if (
-                    candidate.attempts >= candidate.max_attempts
-                    or (
-                        lease_expired_while_running
-                        and candidate.command_type in MUTATING_COMMANDS
-                    )
+                lease_expired_while_running = candidate.status == AgentCommand.Status.RUNNING
+                if candidate.attempts >= candidate.max_attempts or (
+                    lease_expired_while_running and candidate.command_type in MUTATING_COMMANDS
                 ):
                     candidate.status = AgentCommand.Status.FAILED
                     candidate.error = {
@@ -2913,15 +2864,11 @@ class AgentRuntimePollView(APIView):
 
                 approval_expired = (
                     candidate.approved_at is None
-                    or candidate.approved_at
-                    < now - datetime.timedelta(minutes=15)
+                    or candidate.approved_at < now - datetime.timedelta(minutes=15)
                 )
-                approval_hash_invalid = (
-                    not candidate.approved_plan_hash
-                    or not hmac.compare_digest(
-                        candidate.approved_plan_hash,
-                        _payload_hash(candidate.command_type, candidate.payload),
-                    )
+                approval_hash_invalid = not candidate.approved_plan_hash or not hmac.compare_digest(
+                    candidate.approved_plan_hash,
+                    _payload_hash(candidate.command_type, candidate.payload),
                 )
                 if candidate.command_type in APPROVAL_REQUIRED_COMMANDS and (
                     approval_expired or approval_hash_invalid
@@ -2929,9 +2876,7 @@ class AgentRuntimePollView(APIView):
                     candidate.status = AgentCommand.Status.FAILED
                     candidate.error = {
                         "code": (
-                            "APPROVAL_EXPIRED"
-                            if approval_expired
-                            else "APPROVAL_HASH_MISMATCH"
+                            "APPROVAL_EXPIRED" if approval_expired else "APPROVAL_HASH_MISMATCH"
                         ),
                         "retryable": False,
                     }
@@ -3001,15 +2946,17 @@ class AgentRuntimeLeaseRenewView(APIView):
 
     def post(self, request, command_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node = _authenticate_node(request, request.data.get("node_id"))
         if node is None:
-            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            return legacy_error_response("Invalid or revoked node credential.", http_status=401)
         lease_token = request.headers.get("X-Agent-Lease", "")
         try:
             lease_token = uuid.UUID(lease_token)
         except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid X-Agent-Lease header is required."}, status=400)
+            return legacy_error_response(
+                "A valid X-Agent-Lease header is required.", http_status=400
+            )
         now = timezone.now()
         with transaction.atomic():
             command = get_object_or_404(
@@ -3022,10 +2969,10 @@ class AgentRuntimeLeaseRenewView(APIView):
             )
             if _command_is_fenced_by_cluster_ownership(command, node):
                 _fail_fenced_command(command, now)
-                return Response(
-                    {"detail": "EPH Agent no longer owns this cluster command.",
-                     "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
-                    status=409,
+                return legacy_error_response(
+                    "EPH Agent no longer owns this cluster command.",
+                    http_status=409,
+                    code="AGENT_CONTROL_OWNERSHIP_FENCED",
                 )
             command.lease_expires_at = now + datetime.timedelta(seconds=90)
             command.save(update_fields=["lease_expires_at", "updated_at"])
@@ -3043,35 +2990,40 @@ class AgentRuntimeResultView(APIView):
 
     def post(self, request, command_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         node_id = request.data.get("node_id")
         node = _authenticate_node(request, node_id)
         if node is None:
-            return Response({"detail": "Invalid or revoked node credential."}, status=401)
+            return legacy_error_response("Invalid or revoked node credential.", http_status=401)
         lease_token = request.headers.get("X-Agent-Lease", "")
         try:
             lease_token = uuid.UUID(lease_token)
         except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid X-Agent-Lease header is required."}, status=400)
+            return legacy_error_response(
+                "A valid X-Agent-Lease header is required.", http_status=400
+            )
         result = request.data.get("result", {})
         error = request.data.get("error")
         outcome = request.data.get("outcome")
         if outcome not in {"succeeded", "failed"}:
-            return Response({"detail": "outcome must be succeeded or failed."}, status=400)
+            return legacy_error_response("outcome must be succeeded or failed.", http_status=400)
         if not isinstance(result, dict) or _json_size_bytes(result) > 65536:
-            return Response(
-                {"detail": "result must be a JSON object no larger than 64 KiB."},
-                status=400,
+            return legacy_error_response(
+                "result must be a JSON object no larger than 64 KiB.", http_status=400
             )
         if error is not None and not isinstance(error, dict):
-            return Response({"detail": "error must be a JSON object."}, status=400)
+            return legacy_error_response("error must be a JSON object.", http_status=400)
         with transaction.atomic():
-            command = AgentCommand.objects.select_for_update().filter(
-                pk=command_id,
-                node=node,
-            ).first()
+            command = (
+                AgentCommand.objects.select_for_update()
+                .filter(
+                    pk=command_id,
+                    node=node,
+                )
+                .first()
+            )
             if command is None:
-                return Response({"detail": "Command not found."}, status=404)
+                return legacy_error_response("Command not found.", http_status=404)
             if command.status in {
                 AgentCommand.Status.SUCCEEDED,
                 AgentCommand.Status.FAILED,
@@ -3097,9 +3049,8 @@ class AgentRuntimeResultView(APIView):
                             ),
                         }
                     )
-                return Response(
-                    {"detail": "Command already has a different terminal result."},
-                    status=409,
+                return legacy_error_response(
+                    "Command already has a different terminal result.", http_status=409
                 )
             if (
                 command.status != AgentCommand.Status.RUNNING
@@ -3107,19 +3058,21 @@ class AgentRuntimeResultView(APIView):
                 or command.lease_expires_at is None
                 or command.lease_expires_at < timezone.now()
             ):
-                return Response({"detail": "Command lease is invalid or expired."}, status=404)
+                return legacy_error_response(
+                    "Command lease is invalid or expired.", http_status=404
+                )
             if _command_is_fenced_by_cluster_ownership(command, node):
                 _fail_fenced_command(command, timezone.now())
-                return Response(
-                    {"detail": "EPH Agent no longer owns this cluster command.",
-                     "code": "AGENT_CONTROL_OWNERSHIP_FENCED"},
-                    status=409,
+                return legacy_error_response(
+                    "EPH Agent no longer owns this cluster command.",
+                    http_status=409,
+                    code="AGENT_CONTROL_OWNERSHIP_FENCED",
                 )
             result_error = _validate_kubernetes_upgrade_result(command, result) or (
                 _validate_kubernetes_rollback_result(command, result)
             )
             if outcome == "succeeded" and result_error:
-                return Response({"detail": result_error}, status=409)
+                return legacy_error_response(result_error, http_status=409)
             command.status = (
                 AgentCommand.Status.SUCCEEDED
                 if outcome == "succeeded"
@@ -3141,13 +3094,14 @@ class AgentRuntimeResultView(APIView):
                     "updated_at",
                 ]
             )
-            if (
-                command.command_type == "host.network.observe"
-                and outcome == "succeeded"
-            ):
-                machine = AgentMachine.objects.select_for_update().filter(
-                    agent_node=node,
-                ).first()
+            if command.command_type == "host.network.observe" and outcome == "succeeded":
+                machine = (
+                    AgentMachine.objects.select_for_update()
+                    .filter(
+                        agent_node=node,
+                    )
+                    .first()
+                )
                 if machine is not None:
                     merged = _network_observation(machine.hardware_inventory, result)
                     if merged is not None:
@@ -3170,9 +3124,7 @@ class AgentRuntimeResultView(APIView):
             {
                 "id": str(command.id),
                 "status": command.status,
-                "deployment_id": (
-                    str(command.deployment_id) if command.deployment_id else None
-                ),
+                "deployment_id": (str(command.deployment_id) if command.deployment_id else None),
             }
         )
 
@@ -3200,9 +3152,7 @@ def _queue_change_backup(command) -> None:
                 change_source=command,
             )
     except Exception:  # noqa: BLE001 - a bookkeeping hook must not fail the report
-        logger.exception(
-            "could not queue the backup after command %s", command.id
-        )
+        logger.exception("could not queue the backup after command %s", command.id)
         try:  # pragma: no cover - best effort audit
             record_audit_event(
                 None,
@@ -3247,14 +3197,13 @@ class AgentProjectCommandListView(APIView):
             limit = int(request.query_params.get("limit", "100"))
             offset = int(request.query_params.get("offset", "0"))
         except ValueError:
-            return Response(
-                {"detail": "limit and offset must be integers."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "limit and offset must be integers.", http_status=status.HTTP_400_BAD_REQUEST
             )
         if not 1 <= limit <= 200 or offset < 0:
-            return Response(
-                {"detail": "limit must be 1–200 and offset must be non-negative."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "limit must be 1–200 and offset must be non-negative.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         commands = AgentCommand.objects.filter(
             node__tenant=tenant,
@@ -3263,9 +3212,8 @@ class AgentProjectCommandListView(APIView):
         status_filter = request.query_params.get("status")
         if status_filter:
             if status_filter not in AgentCommand.Status.values:
-                return Response(
-                    {"detail": "Unknown command status."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                return legacy_error_response(
+                    "Unknown command status.", http_status=status.HTTP_400_BAD_REQUEST
                 )
             commands = commands.filter(status=status_filter)
         node_id = request.query_params.get("node_id")
@@ -3273,9 +3221,8 @@ class AgentProjectCommandListView(APIView):
             try:
                 uuid.UUID(node_id)
             except (TypeError, ValueError, AttributeError):
-                return Response(
-                    {"detail": "node_id must be a UUID."},
-                    status=status.HTTP_400_BAD_REQUEST,
+                return legacy_error_response(
+                    "node_id must be a UUID.", http_status=status.HTTP_400_BAD_REQUEST
                 )
             commands = commands.filter(node_id=node_id)
         command_type = request.query_params.get("command_type")
@@ -3307,30 +3254,27 @@ class FleetPxeBootView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        tenant, project, is_tenant_admin = _tenant_and_project(
-            request, tenant_id, project_id
-        )
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(request, tenant_id, project_id)
         project_admin = ProjectMembership.objects.filter(
             project=project,
             user=request.user,
             role=ProjectMembership.Role.ADMIN,
         ).exists()
         if not is_tenant_admin and not project_admin:
-            return Response(
-                {"detail": "Tenant or project administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant or project administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         execute = request.data.get("execution", False)
         if not isinstance(execute, bool):
-            return Response({"detail": "execution must be a boolean."}, status=400)
+            return legacy_error_response("execution must be a boolean.", http_status=400)
         if execute and request.data.get("confirm") != self.CONFIRMATION:
-            return Response(
-                {
-                    "detail": f"execution requires confirm={self.CONFIRMATION}.",
-                    "confirmation": self.CONFIRMATION,
-                },
-                status=400,
+            return legacy_error_response(
+                f"execution requires confirm={self.CONFIRMATION}.",
+                http_status=400,
+                code="EXECUTION_CONFIRMATION_REQUIRED",
+                extra={"confirmation": self.CONFIRMATION},
             )
         machine_ids = request.data.get("machine_ids")
         queryset = AgentMachine.objects.filter(tenant=tenant, project=project)
@@ -3340,24 +3284,29 @@ class FleetPxeBootView(APIView):
                 or not machine_ids
                 or len(machine_ids) > self.MAX_MACHINES
             ):
-                return Response(
-                    {"detail": "machine_ids must be a non-empty list of up to 100 UUIDs."},
-                    status=400,
+                return legacy_error_response(
+                    "machine_ids must be a non-empty list of up to 100 UUIDs.", http_status=400
                 )
             parsed = []
             for item in machine_ids:
                 try:
                     parsed.append(uuid.UUID(str(item)))
                 except (TypeError, ValueError):
-                    return Response({"detail": "machine_ids contains an invalid UUID."}, status=400)
+                    return legacy_error_response(
+                        "machine_ids contains an invalid UUID.", http_status=400
+                    )
             queryset = queryset.filter(pk__in=parsed)
         else:
-            queryset = queryset.filter(lifecycle_state__in=BOOTABLE_STATES).exclude(
-                bmc_endpoint=""
-            ).exclude(bmc_credential_ref="")
+            queryset = (
+                queryset.filter(lifecycle_state__in=BOOTABLE_STATES)
+                .exclude(bmc_endpoint="")
+                .exclude(bmc_credential_ref="")
+            )
         machines = list(queryset.order_by("agent_node__name")[: self.MAX_MACHINES])
         if not machines:
-            return Response({"detail": "No machines with BMC configuration found."}, status=404)
+            return legacy_error_response(
+                "No machines with BMC configuration found.", http_status=404
+            )
         refusal = _refuse_non_bootable(machines, "pxe_boot")
         if refusal is not None:
             return refusal
@@ -3384,10 +3333,11 @@ def _refuse_non_bootable(machines, action):
     blocked = [machine for machine in machines if action_blocked(machine.lifecycle_state, action)]
     if not blocked:
         return None
-    return Response(
-        {
-            "detail": "Machines must be in a bootable lifecycle state for this action.",
-            "code": "MACHINE_NOT_BOOTABLE",
+    return legacy_error_response(
+        "Machines must be in a bootable lifecycle state for this action.",
+        http_status=409,
+        code="MACHINE_NOT_BOOTABLE",
+        extra={
             "action": action,
             "machines": [
                 {
@@ -3398,7 +3348,6 @@ def _refuse_non_bootable(machines, action):
                 for machine in blocked
             ],
         },
-        status=409,
     )
 
 
@@ -3483,30 +3432,27 @@ class FleetDiscoveryView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        tenant, project, is_tenant_admin = _tenant_and_project(
-            request, tenant_id, project_id
-        )
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(request, tenant_id, project_id)
         project_admin = ProjectMembership.objects.filter(
             project=project,
             user=request.user,
             role=ProjectMembership.Role.ADMIN,
         ).exists()
         if not is_tenant_admin and not project_admin:
-            return Response(
-                {"detail": "Tenant or project administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant or project administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         execute = request.data.get("execution", False)
         if not isinstance(execute, bool):
-            return Response({"detail": "execution must be a boolean."}, status=400)
+            return legacy_error_response("execution must be a boolean.", http_status=400)
         if execute and request.data.get("confirm") != self.CONFIRMATION:
-            return Response(
-                {
-                    "detail": f"execution requires confirm={self.CONFIRMATION}.",
-                    "confirmation": self.CONFIRMATION,
-                },
-                status=400,
+            return legacy_error_response(
+                f"execution requires confirm={self.CONFIRMATION}.",
+                http_status=400,
+                code="EXECUTION_CONFIRMATION_REQUIRED",
+                extra={"confirmation": self.CONFIRMATION},
             )
         machine_ids = request.data.get("machine_ids")
         queryset = AgentMachine.objects.filter(tenant=tenant, project=project)
@@ -3516,21 +3462,16 @@ class FleetDiscoveryView(APIView):
                 or not machine_ids
                 or len(machine_ids) > self.MAX_MACHINES
             ):
-                return Response(
-                    {
-                        "detail": (
-                            "machine_ids must be a non-empty list of up to "
-                            f"{self.MAX_MACHINES} UUIDs."
-                        )
-                    },
-                    status=400,
+                return legacy_error_response(
+                    "machine_ids must be a non-empty list of up to "
+                    f"{self.MAX_MACHINES} UUIDs.",
+                    http_status=400,
                 )
             try:
                 parsed = [uuid.UUID(str(item)) for item in machine_ids]
             except (TypeError, ValueError):
-                return Response(
-                    {"detail": "machine_ids contains an invalid UUID."},
-                    status=400,
+                return legacy_error_response(
+                    "machine_ids contains an invalid UUID.", http_status=400
                 )
             queryset = queryset.filter(pk__in=parsed)
         else:
@@ -3541,9 +3482,8 @@ class FleetDiscoveryView(APIView):
             .order_by("agent_node__name")[: self.MAX_MACHINES]
         )
         if not machines:
-            return Response(
-                {"detail": "No machines with BMC configuration found."},
-                status=404,
+            return legacy_error_response(
+                "No machines with BMC configuration found.", http_status=404
             )
         refusal = _refuse_non_bootable(machines, "discovery")
         if refusal is not None:
@@ -3566,9 +3506,8 @@ class FleetDiscoveryView(APIView):
         else:
             idempotency_key = request.headers.get("Idempotency-Key", "").strip()
             if not idempotency_key or len(idempotency_key) > 96:
-                return Response(
-                    {"detail": "A valid Idempotency-Key header is required."},
-                    status=400,
+                return legacy_error_response(
+                    "A valid Idempotency-Key header is required.", http_status=400
                 )
             eph_nodes = list(
                 AgentNode.objects.filter(
@@ -3600,9 +3539,7 @@ class FleetDiscoveryView(APIView):
                         },
                     )
                     if created:
-                        queued.append(
-                            {"node_id": str(node.id), "command_id": str(command.id)}
-                        )
+                        queued.append({"node_id": str(node.id), "command_id": str(command.id)})
                     else:
                         skipped.append({"node_id": str(node.id), "reason": "already_queued"})
             inspect["queued"] = queued
@@ -3644,19 +3581,17 @@ class FleetBmhInventoryView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
-        tenant, project, is_tenant_admin = _tenant_and_project(
-            request, tenant_id, project_id
-        )
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
+        tenant, project, is_tenant_admin = _tenant_and_project(request, tenant_id, project_id)
         project_admin = ProjectMembership.objects.filter(
             project=project,
             user=request.user,
             role=ProjectMembership.Role.ADMIN,
         ).exists()
         if not is_tenant_admin and not project_admin:
-            return Response(
-                {"detail": "Tenant or project administrator role is required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Tenant or project administrator role is required.",
+                http_status=status.HTTP_403_FORBIDDEN,
             )
         document = request.data.get("document")
         if document is None and isinstance(request.data.get("items"), list):
@@ -3664,20 +3599,19 @@ class FleetBmhInventoryView(APIView):
         try:
             parsed = inspect_bmh_document(document)
         except BmhInventoryError as exc:
-            return Response(
-                {"detail": f"bmh: {exc.code}", "error_code": exc.code},
-                status=400,
+            return legacy_error_response(
+                f"bmh: {exc.code}",
+                http_status=400,
+                code=str(exc.code).upper(),
+                extra={"error_code": exc.code},
             )
         hosts = parsed["hosts"]
         if len(hosts) > self.MAX_HOSTS:
-            return Response(
-                {"detail": "BMH inspection exceeds the supported host count."},
-                status=400,
+            return legacy_error_response(
+                "BMH inspection exceeds the supported host count.", http_status=400
             )
         machines = list(
-            AgentMachine.objects.filter(tenant=tenant, project=project).select_related(
-                "agent_node"
-            )
+            AgentMachine.objects.filter(tenant=tenant, project=project).select_related("agent_node")
         )
         pairs, unmatched = match_machines(machines, hosts)
         now = timezone.now()

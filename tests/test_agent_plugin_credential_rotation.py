@@ -167,7 +167,7 @@ def test_rotation_rejects_a_plaintext_value(rotation_workspace, monkeypatch, ref
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_REFERENCE_INVALID"
+    assert response.data["error"]["code"] == "CREDENTIAL_REFERENCE_INVALID"
     assert reference not in str(response.data)
     installation = AgentPluginInstallation.objects.get(pk=installed["id"])
     assert installation.credential_ref == "env://PLUGIN_SECRET_ROTATE_AGENT"
@@ -184,7 +184,7 @@ def test_rotation_rejects_an_unregistered_scheme(rotation_workspace):
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_PROVIDER_UNSUPPORTED"
+    assert response.data["error"]["code"] == "CREDENTIAL_PROVIDER_UNSUPPORTED"
 
 
 @pytest.mark.django_db
@@ -202,7 +202,7 @@ def test_rotation_rejects_a_reference_that_does_not_resolve(rotation_workspace, 
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_NOT_FOUND"
+    assert response.data["error"]["code"] == "CREDENTIAL_NOT_FOUND"
     installation = AgentPluginInstallation.objects.get(pk=installed["id"])
     assert installation.credential_ref == "env://PLUGIN_SECRET_ROTATE_AGENT"
 
@@ -243,8 +243,8 @@ def test_rotation_is_refused_for_a_plugin_without_authentication(rotation_worksp
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_NOT_ACCEPTED"
-    assert "credential" in response.data["detail"].lower()
+    assert response.data["error"]["code"] == "CREDENTIAL_NOT_ACCEPTED"
+    assert "credential" in response.data["error"]["message"].lower()
 
 
 @pytest.mark.django_db
@@ -266,7 +266,7 @@ def test_rotation_is_refused_for_an_uninstalled_installation(rotation_workspace,
     )
 
     assert response.status_code == 409
-    assert response.data["code"] == "INSTALLATION_NOT_ACTIVE"
+    assert response.data["error"]["code"] == "INSTALLATION_NOT_ACTIVE"
 
 
 @pytest.mark.django_db
@@ -309,5 +309,5 @@ def test_vault_resolution_failure_is_reported_without_leaking_the_path(rotation_
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_RESOLVER_NOT_CONFIGURED"
+    assert response.data["error"]["code"] == "CREDENTIAL_RESOLVER_NOT_CONFIGURED"
     assert "merchant/rotate-agent" not in str(response.data)

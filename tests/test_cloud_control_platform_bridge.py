@@ -236,7 +236,7 @@ def test_create_without_fleet_creates_no_deployment(bridge_workspace):
     user, tenant, project, node, client = bridge_workspace
     response = _post(client, tenant, project, node)
     assert response.status_code == 409
-    assert response.data["code"] == "FLEET_INVENTORY_EMPTY"
+    assert response.data["error"]["code"] == "FLEET_INVENTORY_EMPTY"
     assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
 
 
@@ -247,7 +247,7 @@ def test_create_reports_unconfigured_cloud_control(bridge_workspace):
         _machine(tenant, project, node, index)
     response = _post(client, tenant, project, node)
     assert response.status_code == 503
-    assert response.data["code"] == "CLOUD_CONTROL_NOT_CONFIGURED"
+    assert response.data["error"]["code"] == "CLOUD_CONTROL_NOT_CONFIGURED"
 
 
 @pytest.mark.django_db
@@ -257,7 +257,7 @@ def test_create_rejects_insufficient_fleet(bridge_workspace):
         _machine(tenant, project, node, index)
     response = _post(client, tenant, project, node)
     assert response.status_code == 409
-    assert response.data["code"] == "FLEET_INVENTORY_INSUFFICIENT"
+    assert response.data["error"]["code"] == "FLEET_INVENTORY_INSUFFICIENT"
     assert ClusterDeployment.objects.filter(tenant=tenant).count() == 0
 
 
@@ -318,7 +318,7 @@ def test_create_rejects_control_plane_size_the_planner_cannot_build(bridge_works
         HTTP_IDEMPOTENCY_KEY="cp-nine",
     )
     assert response.status_code == 400
-    assert "1, 3, 5, 7" in response.data["detail"]
+    assert "1, 3, 5, 7" in response.data["error"]["message"]
 
 
 def _network_profile():
@@ -643,7 +643,7 @@ def test_deployment_gate_detects_inventory_drift(bridge_workspace, monkeypatch):
     changed.save()
     second = _post(client, tenant, project, node, key="evidence-drift")
     assert second.status_code == 409
-    assert second.data["code"] == "NETWORK_EVIDENCE_DRIFT"
+    assert second.data["error"]["code"] == "NETWORK_EVIDENCE_DRIFT"
     assert any(
         item["code"] == "NETWORK_EVIDENCE_STALE" for item in second.data["drift"]
     )
@@ -972,7 +972,7 @@ def test_eph_preflight_sync_degrades_without_cloud_control(bridge_workspace, mon
         format="json",
     )
     assert response.status_code == 503
-    assert response.data["code"] == "eph_preflight_unavailable"
+    assert response.data["error"]["code"] == "EPH_PREFLIGHT_UNAVAILABLE"
 
 
 def _pxe_sriov_profile():

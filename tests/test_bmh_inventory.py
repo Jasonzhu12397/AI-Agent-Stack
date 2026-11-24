@@ -379,7 +379,7 @@ def test_bmh_inventory_sync_rejects_unsucceeded_and_missing_runs(monkeypatch):
         format="json",
     )
     assert response.status_code == 409
-    assert response.data["code"] == "bmh_inspect_not_succeeded"
+    assert response.data["error"]["code"] == "bmh_inspect_not_succeeded"
     machine.refresh_from_db()
     assert "bmh" not in machine.hardware_inventory
 

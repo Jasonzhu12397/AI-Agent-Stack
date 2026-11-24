@@ -67,6 +67,49 @@ def _extract_details(exc: APIException) -> dict[str, object]:
     return {}
 
 
+#: Stable codes for the legacy views that only said "this failed". The HTTP
+#: status carries the class of failure, ``message`` keeps the specific reason,
+#: so a client can branch on ``error.code`` without a per-message catalogue.
+STATUS_ERROR_CODES = {
+    400: "INVALID_REQUEST",
+    401: "AUTHENTICATION_REQUIRED",
+    403: "PERMISSION_DENIED",
+    404: "NOT_FOUND",
+    405: "METHOD_NOT_ALLOWED",
+    409: "STATE_CONFLICT",
+    422: "UNPROCESSABLE",
+    429: "RATE_LIMITED",
+    500: "SERVER_ERROR",
+    502: "UPSTREAM_ERROR",
+    503: "SERVICE_UNAVAILABLE",
+}
+
+
+def legacy_error_response(
+    message: str,
+    http_status: int = 400,
+    code: str | None = None,
+    extra: dict | None = None,
+) -> Response:
+    """Answer an older view with the shared envelope.
+
+    These views used to return ``{"detail": message}``. The status still
+    classifies the failure, so the code is derived from it unless the view
+    knows a sharper one; ``message`` is preserved verbatim because callers and
+    tests rely on its wording.
+
+    ``extra`` keeps the structured fields the browser already reads (network
+    readiness, drift, inventory) at the top level next to the envelope, so the
+    change is additive for clients instead of reshaping their payload.
+    """
+
+    resolved = code or STATUS_ERROR_CODES.get(http_status, "ERROR")
+    if extra:
+        payload = {**extra, "error": {"code": resolved, "message": message, "details": {}}}
+        return Response(payload, status=http_status)
+    return error_envelope_response(resolved, message, http_status=http_status)
+
+
 class ErrorEnvelopeMixin:
     """Map DRF/Django exceptions onto the frozen contract error envelope.
 
@@ -139,3 +182,31 @@ class ErrorEnvelopeMixin:
         # Unexpected exception: defer to DRF, which re-raises it. The 500
         # response must not echo internal details or tracebacks.
         return super().handle_exception(exc)
+
+
+def contract_exception_handler(exc, context):
+    """Map framework-level exceptions onto the shared envelope.
+
+    Views that raise ``MethodNotAllowed``, ``ParseError`` or ``NotAcceptable``
+    never reach their own error handling, so the response used to carry DRF's
+    translated ``{"detail": ...}``. Installed as ``EXCEPTION_HANDLER`` so every
+    endpoint answers in one shape regardless of how the failure escaped.
+    """
+
+    from rest_framework.views import exception_handler
+
+    response = exception_handler(exc, context)
+    if response is None:
+        return None
+    if isinstance(response.data, dict) and "error" in response.data:
+        return response
+    if isinstance(exc, APIException):
+        code = (getattr(exc, "default_code", None) or "error").upper()
+        details = _extract_details(exc)
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, (dict, list)):
+            message = "Request could not be processed."
+        else:
+            message = str(detail) if detail is not None else "Request could not be processed."
+        return error_envelope_response(code, message, details, response.status_code)
+    return response

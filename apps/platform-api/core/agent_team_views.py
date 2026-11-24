@@ -19,6 +19,7 @@ from core.agent_views import (
     get_project,
     get_tenant,
 )
+from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
 from core.models import (
     AgentTeam,
@@ -64,9 +65,8 @@ class AgentTeamListCreateView(APIView):
         tenant = get_tenant(request, tenant_id)
         project = get_project(request, tenant, project_id)
         if not can_edit_project(request, tenant, project):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         serializer = AgentTeamDraftSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -99,14 +99,12 @@ class AgentTeamDetailView(APIView):
     def patch(self, request, team_id):
         team = get_team(request, team_id)
         if not can_edit_team(request, team):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if team.is_archived:
-            return Response(
-                {"detail": "Archived teams are read-only."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Archived teams are read-only.", http_status=status.HTTP_409_CONFLICT
             )
         serializer = AgentTeamDraftSerializer(team, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -128,14 +126,12 @@ class AgentTeamPublishView(APIView):
     def post(self, request, team_id):
         team = get_team(request, team_id)
         if not can_edit_team(request, team):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if team.is_archived:
-            return Response(
-                {"detail": "Archived teams cannot be published."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Archived teams cannot be published.", http_status=status.HTTP_409_CONFLICT
             )
         try:
             version = publish_team(team, request.user)
@@ -179,21 +175,21 @@ class AgentTeamRunListCreateView(APIView):
     def post(self, request, team_id):
         team = get_team(request, team_id)
         if team.is_archived or team.current_version <= 0:
-            return Response(
-                {"detail": "Team must have a published version before it can run."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Team must have a published version before it can run.",
+                http_status=status.HTTP_409_CONFLICT,
             )
         input_text = request.data.get("input")
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not isinstance(input_text, str) or not input_text.strip() or len(input_text) > 20000:
-            return Response(
-                {"detail": "input must be a non-empty string no longer than 20,000 characters."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "input must be a non-empty string no longer than 20,000 characters.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         if not idempotency_key or len(idempotency_key) > 128:
-            return Response(
-                {"detail": "A valid Idempotency-Key header is required."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "A valid Idempotency-Key header is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         team_version = get_object_or_404(
             AgentTeamVersion,
@@ -221,9 +217,9 @@ class AgentTeamRunListCreateView(APIView):
                 or task.task_type != "team.run"
                 or task.payload != payload
             ):
-                return Response(
-                    {"detail": "Idempotency-Key was already used with a different request."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "Idempotency-Key was already used with a different request.",
+                    http_status=status.HTTP_409_CONFLICT,
                 )
             workflow_run, _ = WorkflowRun.objects.get_or_create(
                 task=task,
@@ -277,9 +273,12 @@ class AgentTeamRunDetailView(APIView):
             user=request.user,
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
-        if not tenant_admin and not ProjectMembership.objects.filter(
-            project=team.project,
-            user=request.user,
-        ).exists():
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if (
+            not tenant_admin
+            and not ProjectMembership.objects.filter(
+                project=team.project,
+                user=request.user,
+            ).exists()
+        ):
+            return legacy_error_response("Not found.", http_status=status.HTTP_404_NOT_FOUND)
         return Response(AgentTeamRunSerializer(run).data)

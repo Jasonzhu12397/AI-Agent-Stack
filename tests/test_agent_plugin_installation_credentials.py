@@ -120,8 +120,8 @@ def test_install_auth_required_plugin_without_reference_is_rejected(credential_w
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_REQUIRED"
-    assert "credential_ref" in response.data["detail"]
+    assert response.data["error"]["code"] == "CREDENTIAL_REQUIRED"
+    assert "credential_ref" in response.data["error"]["message"]
     assert not AgentPluginInstallation.objects.filter(
         tenant=tenant, project=project, plugin_id=registered["id"]
     ).exists()
@@ -144,8 +144,8 @@ def test_install_rejects_plaintext_or_malformed_reference(credential_workspace, 
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_REFERENCE_INVALID"
-    assert reference not in response.data["detail"]
+    assert response.data["error"]["code"] == "CREDENTIAL_REFERENCE_INVALID"
+    assert reference not in response.data["error"]["message"]
     assert not AgentPluginInstallation.objects.filter(
         tenant=tenant, project=project, plugin_id=registered["id"]
     ).exists()
@@ -167,7 +167,7 @@ def test_install_rejects_reference_with_unregistered_scheme(credential_workspace
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_PROVIDER_UNSUPPORTED"
+    assert response.data["error"]["code"] == "CREDENTIAL_PROVIDER_UNSUPPORTED"
     assert not AgentPluginInstallation.objects.filter(
         tenant=tenant, project=project, plugin_id=registered["id"]
     ).exists()

@@ -165,7 +165,7 @@ def test_install_rejects_a_reference_one_character_past_the_column(contract_work
     response = _install(client, tenant, project, plugin_id, reference)
 
     assert response.status_code == 400
-    assert response.data["code"] == "CREDENTIAL_REFERENCE_INVALID"
+    assert response.data["error"]["code"] == "CREDENTIAL_REFERENCE_INVALID"
 
 
 @pytest.mark.django_db
@@ -183,7 +183,7 @@ def test_rotation_applies_the_same_bound_and_syntax(contract_workspace):
         format="json",
     )
     assert too_long.status_code == 400
-    assert too_long.data["code"] == "CREDENTIAL_REFERENCE_INVALID"
+    assert too_long.data["error"]["code"] == "CREDENTIAL_REFERENCE_INVALID"
 
     with_field = client.post(
         url,
@@ -193,4 +193,4 @@ def test_rotation_applies_the_same_bound_and_syntax(contract_workspace):
     # The scheme is known, so the reference is resolved: without a configured
     # vault the rotation is refused, but not for a syntax reason.
     assert with_field.status_code == 400
-    assert with_field.data["code"] != "CREDENTIAL_REFERENCE_INVALID"
+    assert with_field.data["error"]["code"] != "CREDENTIAL_REFERENCE_INVALID"

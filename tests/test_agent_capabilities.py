@@ -541,7 +541,7 @@ def test_auth_required_plugin_reports_readable_credential_error(capability_works
         format="json",
     )
     assert response.status_code == 400
-    assert "credential_ref" in response.data["detail"]
+    assert "credential_ref" in response.data["error"]["message"]
 
 
 @pytest.mark.django_db
@@ -621,7 +621,7 @@ def test_credential_ref_rejects_non_uri(capability_workspace, credential_ref):
         format="json",
     )
     assert response.status_code == 400
-    assert credential_ref not in response.data["detail"]
+    assert credential_ref not in response.data["error"]["message"]
 
 
 @pytest.mark.django_db

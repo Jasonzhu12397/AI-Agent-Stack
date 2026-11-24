@@ -152,7 +152,7 @@ def test_firmware_upgrade_rejects_invalid_image_url(firmware_workspace):
         HTTP_IDEMPOTENCY_KEY="fw-key-0002",
     )
     assert response.status_code == 400
-    assert "HTTPS" in response.data["detail"]
+    assert "HTTPS" in response.data["error"]["message"]
 
 
 @pytest.mark.django_db

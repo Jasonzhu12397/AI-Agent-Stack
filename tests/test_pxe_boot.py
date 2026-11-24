@@ -277,7 +277,7 @@ def test_pxe_boot_refuses_a_retired_machine(monkeypatch):
     )
 
     assert response.status_code == 409
-    assert response.data["code"] == "MACHINE_NOT_BOOTABLE"
+    assert response.data["error"]["code"] == "MACHINE_NOT_BOOTABLE"
     assert response.data["machines"] == [
         {
             "machine_id": str(machine.id),

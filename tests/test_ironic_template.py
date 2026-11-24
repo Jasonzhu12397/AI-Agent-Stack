@@ -199,7 +199,7 @@ def test_preview_endpoint_rejects_an_invalid_profile(template_workspace):
     )
 
     assert response.status_code == 400
-    assert response.data["code"] == "ironic_template_profile_invalid"
+    assert response.data["error"]["code"] == "IRONIC_TEMPLATE_PROFILE_INVALID"
 
 
 def test_the_gateway_is_never_used_as_the_provisioning_address():

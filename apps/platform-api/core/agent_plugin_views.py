@@ -40,6 +40,7 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.api_errors import legacy_error_response
 
 
 _CAPABILITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
@@ -77,15 +78,18 @@ def _project_for_user(request, tenant, project_id):
 
 
 def _can_manage_project(user, tenant, project):
-    return TenantMembership.objects.filter(
-        tenant=tenant,
-        user=user,
-        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-    ).exists() or ProjectMembership.objects.filter(
-        project=project,
-        user=user,
-        role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
-    ).exists()
+    return (
+        TenantMembership.objects.filter(
+            tenant=tenant,
+            user=user,
+            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+        ).exists()
+        or ProjectMembership.objects.filter(
+            project=project,
+            user=user,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.EDITOR],
+        ).exists()
+    )
 
 
 def _is_tenant_admin(user, tenant):
@@ -129,9 +133,8 @@ def _validate_endpoint_url(value):
     ):
         return "Agent endpoints must use HTTPS on the default port without URL credentials."
     normalized_host = host.rstrip(".").lower()
-    if (
-        normalized_host in {"localhost", "metadata.google.internal"}
-        or normalized_host.endswith((".localhost", ".local", ".internal", ".test"))
+    if normalized_host in {"localhost", "metadata.google.internal"} or normalized_host.endswith(
+        (".localhost", ".local", ".internal", ".test")
     ):
         return "Agent endpoint host is not permitted."
     try:
@@ -153,8 +156,7 @@ def _validate_capabilities(value):
         not isinstance(value, list)
         or len(value) > 32
         or any(
-            not isinstance(item, str) or not _CAPABILITY_PATTERN.fullmatch(item)
-            for item in value
+            not isinstance(item, str) or not _CAPABILITY_PATTERN.fullmatch(item) for item in value
         )
         or len(set(value)) != len(value)
     ):
@@ -249,7 +251,9 @@ class AgentPluginCatalogView(APIView):
     def post(self, request, tenant_id):
         tenant = _tenant_for_user(request, tenant_id)
         if not _is_tenant_admin(request.user, tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
 
         data = request.data
         required_strings = ("plugin_key", "name", "version", "protocol", "endpoint_url")
@@ -257,56 +261,47 @@ class AgentPluginCatalogView(APIView):
             not isinstance(data.get(field), str) or not data[field].strip()
             for field in required_strings
         ):
-            return Response(
-                {
-                    "detail": (
-                        "plugin_key, name, version, protocol and endpoint_url are required strings."
-                    )
-                },
-                status=400,
+            return legacy_error_response(
+                ("plugin_key, name, version, protocol and endpoint_url are required strings."),
+                http_status=400,
             )
         if len(data["name"]) > 120 or len(data["version"]) > 40 or len(data["plugin_key"]) > 100:
-            return Response(
-                {"detail": "Agent plugin identity fields exceed their maximum lengths."},
-                status=400,
+            return legacy_error_response(
+                "Agent plugin identity fields exceed their maximum lengths.", http_status=400
             )
         if not _PLUGIN_KEY_PATTERN.fullmatch(data["plugin_key"]):
-            return Response(
-                {"detail": "plugin_key must be a lowercase hyphenated identifier."},
-                status=400,
+            return legacy_error_response(
+                "plugin_key must be a lowercase hyphenated identifier.", http_status=400
             )
         description = data.get("description", "")
         if not isinstance(description, str) or len(description) > 4000:
-            return Response(
-                {"detail": "description must be a string no longer than 4,000 characters."},
-                status=400,
+            return legacy_error_response(
+                "description must be a string no longer than 4,000 characters.", http_status=400
             )
         if data["protocol"] not in AgentPluginDefinition.Protocol.values:
-            return Response({"detail": "Unsupported agent plugin protocol."}, status=400)
+            return legacy_error_response("Unsupported agent plugin protocol.", http_status=400)
 
         endpoint_error = _validate_endpoint_url(data["endpoint_url"])
         if endpoint_error:
-            return Response({"detail": endpoint_error}, status=400)
+            return legacy_error_response(endpoint_error, http_status=400)
         manifest = data.get("manifest", {})
         if manifest is None:
             manifest = {}
         if not isinstance(manifest, dict) or len(str(manifest).encode("utf-8")) > (
             agent_plugin_manifest.MAX_MANIFEST_BYTES
         ):
-            return Response(
-                {"detail": "manifest must be a JSON object no larger than 32 KiB."},
-                status=400,
+            return legacy_error_response(
+                "manifest must be a JSON object no larger than 32 KiB.", http_status=400
             )
         if _contains_sensitive_key(manifest):
-            return Response(
-                {"detail": "manifest must not contain credential-like field names."},
-                status=400,
+            return legacy_error_response(
+                "manifest must not contain credential-like field names.", http_status=400
             )
         manifest_error = agent_plugin_manifest.validate_manifest(
             manifest, data["protocol"], endpoint_url=data["endpoint_url"]
         )
         if manifest_error:
-            return Response({"detail": manifest_error}, status=400)
+            return legacy_error_response(manifest_error, http_status=400)
         manifest_names = agent_plugin_manifest.capability_names_from_manifest(manifest)
         if manifest_names:
             capabilities = manifest_names
@@ -314,37 +309,35 @@ class AgentPluginCatalogView(APIView):
             capabilities = data.get("capabilities", [])
             capability_error = _validate_capabilities(capabilities)
             if capability_error:
-                return Response({"detail": capability_error}, status=400)
+                return legacy_error_response(capability_error, http_status=400)
         input_schema = data.get("input_schema", {})
         output_schema = data.get("output_schema", {})
         schemas = ((input_schema, "input_schema"), (output_schema, "output_schema"))
         for schema, field_name in schemas:
             schema_error = _validate_schema(schema, field_name)
             if schema_error:
-                return Response({"detail": schema_error}, status=400)
+                return legacy_error_response(schema_error, http_status=400)
 
         auth_required = data.get("auth_required", True)
         timeout_seconds = data.get("timeout_seconds", 60)
         max_concurrency = data.get("max_concurrency", 4)
         if not isinstance(auth_required, bool):
-            return Response({"detail": "auth_required must be a boolean."}, status=400)
+            return legacy_error_response("auth_required must be a boolean.", http_status=400)
         if (
             not isinstance(timeout_seconds, int)
             or isinstance(timeout_seconds, bool)
             or not 1 <= timeout_seconds <= 300
         ):
-            return Response(
-                {"detail": "timeout_seconds must be an integer between 1 and 300."},
-                status=400,
+            return legacy_error_response(
+                "timeout_seconds must be an integer between 1 and 300.", http_status=400
             )
         if (
             not isinstance(max_concurrency, int)
             or isinstance(max_concurrency, bool)
             or not 1 <= max_concurrency <= 64
         ):
-            return Response(
-                {"detail": "max_concurrency must be an integer between 1 and 64."},
-                status=400,
+            return legacy_error_response(
+                "max_concurrency must be an integer between 1 and 64.", http_status=400
             )
 
         try:
@@ -367,9 +360,8 @@ class AgentPluginCatalogView(APIView):
                     max_concurrency=max_concurrency,
                 )
         except IntegrityError:
-            return Response(
-                {"detail": "An agent plugin with this key and version already exists."},
-                status=409,
+            return legacy_error_response(
+                "An agent plugin with this key and version already exists.", http_status=409
             )
         record_audit_event(
             request,
@@ -402,10 +394,12 @@ class AgentPluginDetailView(APIView):
             pk=plugin_id,
         )
         if not _is_tenant_admin(request.user, plugin.tenant):
-            return Response({"detail": "Tenant administrator permission required."}, status=403)
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
         enabled = request.data.get("enabled")
         if not isinstance(enabled, bool):
-            return Response({"detail": "enabled must be a boolean."}, status=400)
+            return legacy_error_response("enabled must be a boolean.", http_status=400)
         plugin.enabled = enabled
         plugin.save(update_fields=["enabled", "updated_at"])
         record_audit_event(
@@ -436,7 +430,7 @@ class AgentPluginInstallationListCreateView(APIView):
         tenant = _tenant_for_user(request, tenant_id)
         project = _project_for_user(request, tenant, project_id)
         if not _can_manage_project(request.user, tenant, project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
 
         plugin_id = request.data.get("plugin_id")
         plugin_key = request.data.get("plugin_key")
@@ -445,7 +439,7 @@ class AgentPluginInstallationListCreateView(APIView):
         if not isinstance(plugin_key, str):
             plugin_key = None
         if not plugin_id and not plugin_key:
-            return Response({"detail": "plugin_id or plugin_key is required."}, status=400)
+            return legacy_error_response("plugin_id or plugin_key is required.", http_status=400)
 
         plugin_queryset = AgentPluginDefinition.objects.filter(tenant=tenant, enabled=True)
         if plugin_id:
@@ -453,7 +447,7 @@ class AgentPluginInstallationListCreateView(APIView):
         else:
             plugin_version = request.data.get("plugin_version")
             if plugin_version is not None and not isinstance(plugin_version, str):
-                return Response({"detail": "plugin_version must be a string."}, status=400)
+                return legacy_error_response("plugin_version must be a string.", http_status=400)
             key_query = plugin_queryset.filter(plugin_key=plugin_key)
             if plugin_version:
                 plugin = get_object_or_404(key_query, version=plugin_version)
@@ -464,11 +458,10 @@ class AgentPluginInstallationListCreateView(APIView):
         granted = request.data.get("granted_capabilities", [])
         capability_error = _validate_capabilities(granted)
         if capability_error:
-            return Response({"detail": capability_error}, status=400)
+            return legacy_error_response(capability_error, http_status=400)
         if not set(granted).issubset(set(plugin.capabilities)):
-            return Response(
-                {"detail": "Granted capabilities must be declared by the agent plugin."},
-                status=400,
+            return legacy_error_response(
+                "Granted capabilities must be declared by the agent plugin.", http_status=400
             )
 
         credential_ref = request.data.get("credential_ref", "")
@@ -478,22 +471,19 @@ class AgentPluginInstallationListCreateView(APIView):
             failure = _credential_reference_error(credential_ref)
             if failure is not None:
                 detail, code = failure
-                return Response({"detail": detail, "code": code}, status=400)
+                return legacy_error_response(detail, http_status=400, code=code)
         if plugin.auth_required and not credential_ref:
-            return Response(
-                {
-                    "detail": (
-                        "credential_ref is required for this agent plugin; "
-                        "provide a secret reference, not a credential value."
-                    ),
-                    "code": _CREDENTIAL_CODE_REQUIRED,
-                },
-                status=400,
+            return legacy_error_response(
+                (
+                    "credential_ref is required for this agent plugin; "
+                    "provide a secret reference, not a credential value."
+                ),
+                http_status=400,
+                code=_CREDENTIAL_CODE_REQUIRED,
             )
         if not plugin.auth_required and credential_ref:
-            return Response(
-                {"detail": "This agent plugin does not accept a credential reference."},
-                status=400,
+            return legacy_error_response(
+                "This agent plugin does not accept a credential reference.", http_status=400
             )
 
         installation = (
@@ -559,13 +549,11 @@ class AgentCapabilityListView(APIView):
     def get(self, request, tenant_id, project_id):
         tenant = _tenant_for_user(request, tenant_id)
         project = _project_for_user(request, tenant, project_id)
-        installations = (
-            AgentPluginInstallation.objects.filter(
-                tenant=tenant,
-                project=project,
-                status=AgentPluginInstallation.Status.INSTALLED,
-            ).select_related("plugin")
-        )
+        installations = AgentPluginInstallation.objects.filter(
+            tenant=tenant,
+            project=project,
+            status=AgentPluginInstallation.Status.INSTALLED,
+        ).select_related("plugin")
         entries = []
         for installation in installations:
             plugin = installation.plugin
@@ -602,9 +590,7 @@ class AgentCapabilityListView(APIView):
                         ),
                     }
                 )
-        entries.sort(
-            key=lambda item: (item["name"], item["plugin_key"], item["installation_id"])
-        )
+        entries.sort(key=lambda item: (item["name"], item["plugin_key"], item["installation_id"]))
         return Response({"capabilities": entries})
 
 
@@ -619,19 +605,23 @@ class AgentPluginInstallationStatusView(APIView):
             pk=installation_id,
         )
         if not _can_manage_project(request.user, installation.tenant, installation.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         status_value = request.data.get("status")
         if status_value not in {
             AgentPluginInstallation.Status.INSTALLED,
             AgentPluginInstallation.Status.DISABLED,
             AgentPluginInstallation.Status.UNINSTALLED,
         }:
-            return Response({"detail": "Unsupported agent plugin installation status."}, status=400)
+            return legacy_error_response(
+                "Unsupported agent plugin installation status.", http_status=400
+            )
         if (
             status_value == AgentPluginInstallation.Status.INSTALLED
             and not installation.plugin.enabled
         ):
-            return Response({"detail": "Disabled agent plugins cannot be reactivated."}, status=409)
+            return legacy_error_response(
+                "Disabled agent plugins cannot be reactivated.", http_status=409
+            )
         previous_status = installation.status
         installation.status = status_value
         installation.save(update_fields=["status", "updated_at"])
@@ -674,22 +664,18 @@ class AgentPluginCredentialRotateView(APIView):
             pk=installation_id,
         )
         if not _can_manage_project(request.user, installation.tenant, installation.project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         if installation.status == AgentPluginInstallation.Status.UNINSTALLED:
-            return Response(
-                {
-                    "detail": (
-                        "Uninstalled installations cannot rotate a credential; install it again."
-                    ),
-                    "code": "INSTALLATION_NOT_ACTIVE",
-                },
-                status=409,
+            return legacy_error_response(
+                ("Uninstalled installations cannot rotate a credential; install it again."),
+                http_status=409,
+                code="INSTALLATION_NOT_ACTIVE",
             )
         if not installation.plugin.auth_required:
             error = CredentialNotAcceptedError(
                 "This agent plugin does not accept a credential reference."
             )
-            return Response({"detail": str(error), "code": error.code}, status=400)
+            return legacy_error_response(str(error), http_status=400, code=error.code)
 
         credential_ref = request.data.get("credential_ref", "")
         failure = (
@@ -702,7 +688,7 @@ class AgentPluginCredentialRotateView(APIView):
         )
         if failure is not None:
             detail, code = failure
-            return Response({"detail": detail, "code": code}, status=400)
+            return legacy_error_response(detail, http_status=400, code=code)
         scheme = validate_reference(credential_ref)
         try:
             resolve(credential_ref)
@@ -710,12 +696,10 @@ class AgentPluginCredentialRotateView(APIView):
             # The provider's own code is surfaced: a missing variable and an
             # unconfigured secret store are different operator actions, and the
             # reference itself is never echoed back.
-            return Response({"detail": str(error), "code": error.code}, status=400)
+            return legacy_error_response(str(error), http_status=400, code=error.code)
 
         previous_scheme = (
-            validate_reference(installation.credential_ref)
-            if installation.credential_ref
-            else ""
+            validate_reference(installation.credential_ref) if installation.credential_ref else ""
         )
         new_scheme = scheme
         installation.credential_ref = credential_ref
@@ -744,6 +728,7 @@ _DISCOVER_ADAPTERS = {
     "openai_compatible": discover_openai,
 }
 
+
 class AgentPluginDiscoverView(APIView):
     """Merge capabilities discovered from a remote protocol endpoint into the manifest."""
 
@@ -755,8 +740,8 @@ class AgentPluginDiscoverView(APIView):
             pk=tenant_id,
         )
         if not _is_tenant_admin(request.user, tenant):
-            return Response(
-                {"detail": "Tenant administrator permission required."}, status=403
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
             )
         plugin = get_object_or_404(
             AgentPluginDefinition.objects.filter(tenant=tenant), pk=plugin_id
@@ -764,13 +749,10 @@ class AgentPluginDiscoverView(APIView):
 
         discover = _DISCOVER_ADAPTERS.get(plugin.protocol)
         if discover is None:
-            return Response(
-                {
-                    "detail": (
-                        f"Protocol {plugin.protocol!r} does not support remote discovery."
-                    )
-                },
-                status=400,
+            return legacy_error_response(
+                f"Protocol {plugin.protocol!r} does not support remote discovery.",
+                http_status=400,
+                code="PLUGIN_PROTOCOL_DISCOVERY_UNSUPPORTED",
             )
 
         installation = (
@@ -790,13 +772,13 @@ class AgentPluginDiscoverView(APIView):
         try:
             discovered = discover(installation)
         except CapabilityResolutionError as exc:
-            return Response({"detail": str(exc), "code": exc.code}, status=502)
+            return legacy_error_response(str(exc), http_status=502, code=exc.code)
         except (ToolExecutionError, CredentialError) as exc:
-            return Response({"detail": str(exc)}, status=502)
+            return legacy_error_response(str(exc), http_status=502)
 
         if not isinstance(discovered, list):
-            return Response(
-                {"detail": "Adapter discovery returned an invalid payload."}, status=502
+            return legacy_error_response(
+                "Adapter discovery returned an invalid payload.", http_status=502
             )
 
         manifest = plugin.manifest if isinstance(plugin.manifest, dict) else {}
@@ -807,9 +789,7 @@ class AgentPluginDiscoverView(APIView):
             else []
         )
         by_name: dict[str, dict] = {
-            entry["name"]: entry
-            for entry in existing_entries
-            if isinstance(entry.get("name"), str)
+            entry["name"]: entry for entry in existing_entries if isinstance(entry.get("name"), str)
         }
         discovered_names: list[str] = []
         for entry in discovered:
@@ -820,17 +800,15 @@ class AgentPluginDiscoverView(APIView):
                 discovered_names.append(entry["name"])
         merged = list(by_name.values())
         if len(merged) > agent_plugin_manifest.MAX_CAPABILITIES:
-            return Response(
-                {"detail": "Manifest declares too many capabilities."}, status=400
+            return legacy_error_response(
+                "Manifest declares too many capabilities.", http_status=400
             )
 
         merged_manifest = dict(manifest)
         merged_manifest["capabilities"] = merged
         if plugin.protocol in agent_plugin_manifest.DISCOVERY_PROTOCOLS:
             discovery_record = {
-                "endpoint": agent_plugin_manifest.endpoint_fingerprint(
-                    plugin.endpoint_url
-                ),
+                "endpoint": agent_plugin_manifest.endpoint_fingerprint(plugin.endpoint_url),
                 "discovered_at": timezone.now().isoformat(),
                 "tool_count": len(discovered_names),
                 "tools": discovered_names,
@@ -845,7 +823,7 @@ class AgentPluginDiscoverView(APIView):
             merged_manifest, plugin.protocol, endpoint_url=plugin.endpoint_url
         )
         if manifest_error:
-            return Response({"detail": manifest_error}, status=400)
+            return legacy_error_response(manifest_error, http_status=400)
 
         plugin.manifest = merged_manifest
         plugin.capabilities = [entry["name"] for entry in merged]

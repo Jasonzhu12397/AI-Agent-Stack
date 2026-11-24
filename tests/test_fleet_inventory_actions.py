@@ -165,7 +165,7 @@ def test_a_discovered_machine_cannot_be_commissioned_directly():
                        to_state="commissioned")
 
     assert response.status_code == 409
-    assert response.json()["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
+    assert response.json()["error"]["code"] == "LIFECYCLE_TRANSITION_NOT_ENABLED"
 
 
 @pytest.mark.django_db

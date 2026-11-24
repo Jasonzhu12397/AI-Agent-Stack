@@ -242,4 +242,4 @@ def test_discovery_refuses_a_retired_machine_before_any_boot(monkeypatch):
     )
 
     assert response.status_code == 409
-    assert response.data["code"] == "MACHINE_NOT_BOOTABLE"
+    assert response.data["error"]["code"] == "MACHINE_NOT_BOOTABLE"

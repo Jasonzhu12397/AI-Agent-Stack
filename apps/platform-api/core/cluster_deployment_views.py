@@ -82,6 +82,7 @@ from core.models import (
     ProjectMembership,
     TenantMembership,
 )
+from core.api_errors import legacy_error_response
 
 
 def _deployment_data(deployment):
@@ -93,15 +94,13 @@ def _deployment_data(deployment):
         "cluster_name": deployment.cluster_name,
         "kubernetes_version": deployment.kubernetes_version,
         "eph_node_id": str(deployment.eph_node_id),
-        "target_node_id": (
-            str(deployment.target_node_id) if deployment.target_node_id else None
-        ),
+        "target_node_id": (str(deployment.target_node_id) if deployment.target_node_id else None),
         "status": deployment.status,
         "spec": deployment.spec,
         "network_spec_status": {
-            "version": (
-                deployment.spec.get("network_spec", {}) or {}
-            ).get("network_spec_version", 1)
+            "version": (deployment.spec.get("network_spec", {}) or {}).get(
+                "network_spec_version", 1
+            )
             if isinstance(deployment.spec, dict)
             else 1,
             "current_version": NETWORK_SPEC_VERSION,
@@ -242,11 +241,7 @@ def _network_readiness(project, spec):
                     if isinstance(policy_spec.get("nicSelector"), dict)
                     else {}
                 )
-                expected_pci = (
-                    selector.get("rootDevices")
-                    or selector.get("pciAddresses")
-                    or []
-                )
+                expected_pci = selector.get("rootDevices") or selector.get("pciAddresses") or []
                 num_vfs = policy_spec.get("numVfs")
                 policy_name = (
                     policy.get("metadata", {}).get("name")
@@ -385,9 +380,8 @@ def _validated_spec(request, *, infra_profile=None, project=None):
         or len(cluster_name) > 63
     ):
         return None, "cluster_name must be a DNS label."
-    if (
-        not isinstance(kubernetes_version, str)
-        or not re.fullmatch(r"v1\.\d+\.\d+", kubernetes_version)
+    if not isinstance(kubernetes_version, str) or not re.fullmatch(
+        r"v1\.\d+\.\d+", kubernetes_version
     ):
         return None, "kubernetes_version must use v1.x.y format."
     if (
@@ -562,9 +556,9 @@ def _validated_spec(request, *, infra_profile=None, project=None):
         if not isinstance(worker_contract, dict) and isinstance(
             spec.get("worker_provisioning"), dict
         ):
-            worker_contract = spec["worker_provisioning"].get(
-                "worker_network_contract"
-            ) or spec["worker_provisioning"].get("network_contract")
+            worker_contract = spec["worker_provisioning"].get("worker_network_contract") or spec[
+                "worker_provisioning"
+            ].get("network_contract")
         try:
             spec["storage_addon"] = plan_storage_addon_contract(
                 storage_addon,
@@ -593,14 +587,14 @@ class ClusterDeploymentListCreateView(APIView):
 
     def post(self, request, tenant_id, project_id):
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
         if not _can_edit_project(request.user, tenant, project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         try:
             eph_node_id = uuid.UUID(str(request.data.get("eph_node_id")))
         except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid eph_node_id is required."}, status=400)
+            return legacy_error_response("A valid eph_node_id is required.", http_status=400)
         eph_node = get_object_or_404(
             AgentNode.objects.filter(
                 tenant=tenant,
@@ -613,9 +607,8 @@ class ClusterDeploymentListCreateView(APIView):
             eph_node.last_seen_at is None
             or eph_node.last_seen_at < timezone.now() - datetime.timedelta(seconds=60)
         ):
-            return Response(
-                {"detail": "The selected EPH agent must have a fresh heartbeat."},
-                status=409,
+            return legacy_error_response(
+                "The selected EPH agent must have a fresh heartbeat.", http_status=409
             )
         raw_spec = request.data.get("cluster_spec")
         infra_profile = None
@@ -627,26 +620,21 @@ class ClusterDeploymentListCreateView(APIView):
                 # The saved project profile is the single source of truth;
                 # callers do not have to paste the same JSON again.
                 infra_profile = profile_record.profile
-        spec, payload_error = _validated_spec(
-            request, infra_profile=infra_profile, project=project
-        )
+        spec, payload_error = _validated_spec(request, infra_profile=infra_profile, project=project)
         if payload_error:
-            return Response({"detail": payload_error}, status=400)
+            return legacy_error_response(payload_error, http_status=400)
         readiness = _network_readiness(project, spec)
         if readiness is not None and not readiness["ready"]:
-            return Response(
-                {
-                    "detail": (
-                        "Network readiness gate failed: "
-                        f"{readiness['control_plane_ready']}/"
-                        f"{readiness['required_control_plane']} control-plane and "
-                        f"{readiness['worker_ready']}/"
-                        f"{readiness['required_worker']} worker nodes verified. "
-                        "Run Collect all node networks, then retry."
-                    ),
-                    "network_readiness": readiness,
-                },
-                status=409,
+            return legacy_error_response(
+                "Network readiness gate failed: "
+                f"{readiness['control_plane_ready']}/"
+                f"{readiness['required_control_plane']} control-plane and "
+                f"{readiness['worker_ready']}/"
+                f"{readiness['required_worker']} worker nodes verified. "
+                "Run Collect all node networks, then retry.",
+                http_status=409,
+                code="NETWORK_READINESS_GATE_FAILED",
+                extra={"network_readiness": readiness},
             )
         if readiness is not None:
             # Bind the plan to the exact inventory revision it was validated against.
@@ -657,9 +645,7 @@ class ClusterDeploymentListCreateView(APIView):
             "ironic_workload": {
                 "configured": isinstance(ironic_section, dict),
                 "warnings": (
-                    []
-                    if isinstance(ironic_section, dict)
-                    else ["IRONIC_WORKLOAD_CR_REQUIRED"]
+                    [] if isinstance(ironic_section, dict) else ["IRONIC_WORKLOAD_CR_REQUIRED"]
                 ),
                 "defaults_sources": spec.get("ironic_defaults_sources") or [],
             },
@@ -670,7 +656,9 @@ class ClusterDeploymentListCreateView(APIView):
         kubernetes_version = spec["kubernetes_version"]
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not idempotency_key or len(idempotency_key) > 128:
-            return Response({"detail": "A valid Idempotency-Key header is required."}, status=400)
+            return legacy_error_response(
+                "A valid Idempotency-Key header is required.", http_status=400
+            )
 
         deployment = ClusterDeployment.objects.filter(
             tenant=tenant,
@@ -697,6 +685,7 @@ class ClusterDeploymentListCreateView(APIView):
                     tenant=tenant,
                     idempotency_key=idempotency_key,
                 )
+
         def _spec_signature(value):
             if not isinstance(value, dict):
                 return value
@@ -712,9 +701,8 @@ class ClusterDeploymentListCreateView(APIView):
             or deployment.eph_node_id != eph_node.id
             or _spec_signature(deployment.spec) != _spec_signature(spec)
         ):
-            return Response(
-                {"detail": "Idempotency-Key was used for a different cluster plan."},
-                status=409,
+            return legacy_error_response(
+                "Idempotency-Key was used for a different cluster plan.", http_status=409
             )
 
         plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
@@ -722,9 +710,7 @@ class ClusterDeploymentListCreateView(APIView):
         # the field outright dropped the runtime snapshots the EPH had already
         # reported, and the detail page fell back to guessing from the spec.
         stored_preflight = (
-            deployment.preflight_result
-            if isinstance(deployment.preflight_result, dict)
-            else {}
+            deployment.preflight_result if isinstance(deployment.preflight_result, dict) else {}
         )
         merged_preflight = {**stored_preflight, **preflight}
         if merged_preflight != stored_preflight:
@@ -732,16 +718,14 @@ class ClusterDeploymentListCreateView(APIView):
             deployment.save(update_fields=["preflight_result", "updated_at"])
         drift = _network_evidence_drift(project, deployment.spec)
         if drift:
-            return Response(
-                {
-                    "detail": (
-                        "Node network inventory changed after the readiness check. "
-                        "Collect all node networks again before installing."
-                    ),
-                    "code": "NETWORK_EVIDENCE_DRIFT",
-                    "drift": drift,
-                },
-                status=409,
+            return legacy_error_response(
+                (
+                    "Node network inventory changed after the readiness check. "
+                    "Collect all node networks again before installing."
+                ),
+                http_status=409,
+                code="NETWORK_EVIDENCE_DRIFT",
+                extra={"drift": drift},
             )
         control = plan_result.get("cloud_control")
         if isinstance(control, dict) and isinstance(control.get("spec"), dict):
@@ -759,12 +743,10 @@ class ClusterDeploymentListCreateView(APIView):
                 if created:
                     deployment.delete()
                 code = exc.code
-                return Response(
-                    {
-                        "detail": str(exc) or "No complete bare-metal fleet is available.",
-                        "code": code,
-                    },
-                    status=409,
+                return legacy_error_response(
+                    str(exc) or "No complete bare-metal fleet is available.",
+                    http_status=409,
+                    code=code,
                 )
             installation_id, cluster_id = control_identity(
                 tenant.id,
@@ -789,11 +771,7 @@ class ClusterDeploymentListCreateView(APIView):
             # handoff, and the EPH renders the workload CR from ``ironic``.
             # Both are injected explicitly because a cached plan result may
             # predate either field.
-            forwarded = {
-                key: spec[key]
-                for key in ("network_evidence", "ironic")
-                if spec.get(key)
-            }
+            forwarded = {key: spec[key] for key in ("network_evidence", "ironic") if spec.get(key)}
             if forwarded:
                 control_spec = {**control_spec, **forwarded}
             cached = plan_result.get("cloud_control")
@@ -815,12 +793,10 @@ class ClusterDeploymentListCreateView(APIView):
                 spec=control_spec,
             )
         except CloudControlNotConfigured:
-            return Response(
-                {
-                    "detail": "Cloud Control API is not configured on this platform.",
-                    "code": "CLOUD_CONTROL_NOT_CONFIGURED",
-                },
-                status=503,
+            return legacy_error_response(
+                "Cloud Control API is not configured on this platform.",
+                http_status=503,
+                code="CLOUD_CONTROL_NOT_CONFIGURED",
             )
         except CloudControlBridgeError:
             deployment.error = {
@@ -828,12 +804,10 @@ class ClusterDeploymentListCreateView(APIView):
                 "retryable": True,
             }
             deployment.save(update_fields=["error", "updated_at"])
-            return Response(
-                {
-                    "detail": "Cloud Control did not accept the deployment.",
-                    "code": "CLOUD_CONTROL_DISPATCH_FAILED",
-                },
-                status=502,
+            return legacy_error_response(
+                "Cloud Control did not accept the deployment.",
+                http_status=502,
+                code="CLOUD_CONTROL_DISPATCH_FAILED",
             )
 
         with transaction.atomic():
@@ -884,7 +858,7 @@ class ClusterDeploymentDetailView(APIView):
                 project=deployment.project,
                 user=request.user,
             ).exists():
-                return Response({"detail": "Project membership required."}, status=403)
+                return legacy_error_response("Project membership required.", http_status=403)
         # Anything the EPH already reported becomes visible without a button.
         reconcile_deployment_quietly(deployment)
         data = _deployment_data(deployment)
@@ -921,7 +895,7 @@ class ClusterDeploymentEphPreflightView(APIView):
                 project=deployment.project,
                 user=request.user,
             ).exists():
-                return Response({"detail": "Project membership required."}, status=403)
+                return legacy_error_response("Project membership required.", http_status=403)
         client = None
         try:
             client = build_cloud_control_client()
@@ -930,17 +904,16 @@ class ClusterDeploymentEphPreflightView(APIView):
                 EPH_PREFLIGHT_ACTION,
             )
         except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
-            return Response(
-                {"detail": str(exc), "code": "eph_preflight_unavailable"},
-                status=503,
+            return legacy_error_response(
+                str(exc),
+                http_status=503,
+                code="EPH_PREFLIGHT_UNAVAILABLE",
             )
         except CloudControlDispatchError:
-            return Response(
-                {
-                    "detail": "Cloud Control request failed.",
-                    "code": "eph_preflight_unavailable",
-                },
-                status=502,
+            return legacy_error_response(
+                "Cloud Control request failed.",
+                http_status=502,
+                code="EPH_PREFLIGHT_UNAVAILABLE",
             )
         finally:
             if client is not None:
@@ -978,7 +951,7 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
                 project=deployment.project,
                 user=request.user,
             ).exists():
-                return Response({"detail": "Project membership required."}, status=403)
+                return legacy_error_response("Project membership required.", http_status=403)
         client = None
         try:
             client = build_cloud_control_client()
@@ -987,14 +960,14 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
                 BMH_INSPECT_ACTION,
             )
         except (CloudControlNotConfigured, CloudControlBridgeError) as exc:
-            return Response(
-                {"detail": str(exc), "code": "bmh_inventory_unavailable"},
-                status=503,
+            return legacy_error_response(
+                str(exc), http_status=503, code="BMH_INVENTORY_UNAVAILABLE"
             )
         except CloudControlDispatchError:
-            return Response(
-                {"detail": "Cloud Control request failed.", "code": "bmh_inventory_unavailable"},
-                status=502,
+            return legacy_error_response(
+                "Cloud Control request failed.",
+                http_status=502,
+                code="BMH_INVENTORY_UNAVAILABLE",
             )
         finally:
             if client is not None:
@@ -1005,17 +978,17 @@ class ClusterDeploymentBmhInventorySyncView(APIView):
             return Response({"bmh_inventory": record, "updated": updated}, status=200)
         store_snapshot(deployment, BMH_INVENTORY_KEY, record)
         if error == "bmh_inspect_not_succeeded":
-            return Response(
-                {
-                    "detail": "The EPH inspection did not succeed.",
-                    "code": error,
-                    "bmh_inventory": record,
-                },
-                status=409,
+            return legacy_error_response(
+                "The EPH inspection did not succeed.",
+                http_status=409,
+                code=error,
+                extra={"bmh_inventory": record},
             )
-        return Response(
-            {"detail": f"bmh: {error}", "error_code": error},
-            status=400,
+        return legacy_error_response(
+            f"bmh: {error}",
+            http_status=400,
+            code=str(error).upper(),
+            extra={"error_code": error},
         )
 
 
@@ -1033,7 +1006,7 @@ class ClusterDeploymentIronicTemplateView(APIView):
     def post(self, request, tenant_id, project_id):
         tenant, project, _ = _tenant_and_project(request, tenant_id, project_id)
         if not _can_edit_project(request.user, tenant, project):
-            return Response({"detail": "Project editor permission required."}, status=403)
+            return legacy_error_response("Project editor permission required.", http_status=403)
         profile = request.data.get("infra_network_profile")
         if profile is None:
             stored = InfrastructureNetworkProfile.objects.filter(project=project).first()
@@ -1048,9 +1021,8 @@ class ClusterDeploymentIronicTemplateView(APIView):
         try:
             template = ironic_template_for_profile(profile, eph_address=eph_address)
         except InfraNetworkError as exc:
-            return Response(
-                {"detail": str(exc), "code": "ironic_template_profile_invalid"},
-                status=400,
+            return legacy_error_response(
+                str(exc), http_status=400, code="IRONIC_TEMPLATE_PROFILE_INVALID"
             )
         return Response(template)
 
@@ -1070,7 +1042,7 @@ class ClusterDeploymentNetworkEvidenceView(APIView):
                 project=deployment.project,
                 user=request.user,
             ).exists():
-                return Response({"detail": "Project membership required."}, status=403)
+                return legacy_error_response("Project membership required.", http_status=403)
         drift = _network_evidence_drift(deployment.project, deployment.spec)
         if drift is None:
             return Response(

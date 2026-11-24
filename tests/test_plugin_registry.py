@@ -234,7 +234,7 @@ def test_auth_required_http_connector_rejects_unauthenticated_connection(plugin_
     )
 
     assert rejected.status_code == 400
-    assert "requires authentication" in rejected.data["detail"]
+    assert "requires authentication" in rejected.data["error"]["message"]
     assert accepted.status_code == 201
     assert accepted.data["credential_configured"] is True
     assert PluginConnection.objects.count() == 1

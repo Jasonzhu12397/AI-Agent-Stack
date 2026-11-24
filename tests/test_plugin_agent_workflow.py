@@ -373,7 +373,7 @@ def test_workflow_validation_rejects_capability_mismatch(
         f"/api/v1/workflows/{workflow.id}/publish/", {}, format="json"
     )
     assert response.status_code == 400
-    assert "capability" in response.data["detail"].lower()
+    assert "capability" in response.data["error"]["message"].lower()
     assert WorkflowRun.objects.count() == 0
 
 

@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
 from core.models import (
     Project,
@@ -105,9 +106,8 @@ class WorkflowListCreateView(APIView):
         tenant = workflow_tenant(request, tenant_id)
         project = workflow_project(request, tenant, project_id)
         if not can_edit_workflow_project(request, tenant, project):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         serializer = WorkflowDraftSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -144,14 +144,12 @@ class WorkflowDetailView(APIView):
     def patch(self, request, workflow_id):
         workflow = get_workflow(request, workflow_id)
         if not can_edit_workflow(request, workflow):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if workflow.is_archived:
-            return Response(
-                {"detail": "Archived workflows are read-only."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Archived workflows are read-only.", http_status=status.HTTP_409_CONFLICT
             )
         serializer = WorkflowDraftSerializer(workflow, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -177,9 +175,8 @@ class WorkflowValidateView(APIView):
     def post(self, request, workflow_id):
         workflow = get_workflow(request, workflow_id)
         if not can_edit_workflow(request, workflow):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         definition = workflow.draft_definition
         node_values = definition.get("nodes") if isinstance(definition, dict) else None
@@ -229,24 +226,19 @@ class WorkflowPublishView(APIView):
         with transaction.atomic():
             workflow = get_workflow(request, workflow_id)
             if not can_edit_workflow(request, workflow):
-                return Response(
-                    {"detail": "Project editor permission required."},
-                    status=status.HTTP_403_FORBIDDEN,
+                return legacy_error_response(
+                    "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
                 )
             workflow = WorkflowDefinition.objects.select_for_update().get(pk=workflow.pk)
             if workflow.is_archived:
-                return Response(
-                    {"detail": "Archived workflows cannot be published."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "Archived workflows cannot be published.", http_status=status.HTTP_409_CONFLICT
                 )
             try:
                 graph = validate_workflow_definition(workflow.draft_definition)
                 validate_model_references(graph, workflow.tenant, workflow.project)
             except WorkflowValidationError as exc:
-                return Response(
-                    {"detail": str(exc)},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return legacy_error_response(str(exc), http_status=status.HTTP_400_BAD_REQUEST)
             version_number = (
                 WorkflowVersion.objects.filter(workflow=workflow)
                 .order_by("-version")
@@ -296,19 +288,16 @@ class WorkflowRunListCreateView(APIView):
     def post(self, request, workflow_id):
         workflow = get_workflow(request, workflow_id)
         if workflow.is_archived or workflow.current_version <= 0:
-            return Response(
-                {"detail": "Workflow must have a published version before it can run."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Workflow must have a published version before it can run.",
+                http_status=status.HTTP_409_CONFLICT,
             )
         if not isinstance(request.data, dict):
-            return Response(
-                {"detail": "Request body must be a JSON object."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "Request body must be a JSON object.", http_status=status.HTTP_400_BAD_REQUEST
             )
         input_data = request.data.get("input", {})
-        deadline_seconds = request.data.get(
-            "deadline_seconds", DEFAULT_WORKFLOW_DEADLINE_SECONDS
-        )
+        deadline_seconds = request.data.get("deadline_seconds", DEFAULT_WORKFLOW_DEADLINE_SECONDS)
         if (
             isinstance(deadline_seconds, bool)
             or not isinstance(deadline_seconds, int)
@@ -316,22 +305,20 @@ class WorkflowRunListCreateView(APIView):
             <= deadline_seconds
             <= MAX_WORKFLOW_DEADLINE_SECONDS
         ):
-            return Response(
-                {
-                    "detail": "deadline_seconds must be an integer between 60 and 604800."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "deadline_seconds must be an integer between 60 and 604800.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         idempotency_key = request.headers.get("Idempotency-Key", "").strip()
         if not isinstance(input_data, dict) or len(json.dumps(input_data)) > 65536:
-            return Response(
-                {"detail": "input must be a JSON object no larger than 64 KiB."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "input must be a JSON object no larger than 64 KiB.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         if not idempotency_key or len(idempotency_key) > 128:
-            return Response(
-                {"detail": "A valid Idempotency-Key header is required."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "A valid Idempotency-Key header is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         version = get_object_or_404(
             WorkflowVersion,
@@ -360,9 +347,9 @@ class WorkflowRunListCreateView(APIView):
                 or task.task_type != "workflow.run"
                 or task.payload != payload
             ):
-                return Response(
-                    {"detail": "Idempotency-Key was already used with a different request."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "Idempotency-Key was already used with a different request.",
+                    http_status=status.HTTP_409_CONFLICT,
                 )
             run, _ = WorkflowRun.objects.get_or_create(
                 task=task,
@@ -370,8 +357,7 @@ class WorkflowRunListCreateView(APIView):
                     "workflow_version": version,
                     "input_data": input_data,
                     "state": {"input": input_data},
-                    "deadline_at": timezone.now()
-                    + timedelta(seconds=deadline_seconds),
+                    "deadline_at": timezone.now() + timedelta(seconds=deadline_seconds),
                 },
             )
         record_audit_event(
@@ -416,13 +402,15 @@ class WorkflowRunDetailView(APIView):
             user=request.user,
             role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
         ).exists()
-        if not tenant_admin and not ProjectMembership.objects.filter(
-            project=workflow.project,
-            user=request.user,
-        ).exists():
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if (
+            not tenant_admin
+            and not ProjectMembership.objects.filter(
+                project=workflow.project,
+                user=request.user,
+            ).exists()
+        ):
+            return legacy_error_response("Not found.", http_status=status.HTTP_404_NOT_FOUND)
         return Response(WorkflowRunSerializer(run).data)
-
 
 
 def _workflow_run_for_user(request, run_id):
@@ -459,22 +447,21 @@ class WorkflowStepApprovalView(APIView):
     def post(self, request, run_id, node_id):
         reason = request.data.get("reason", "")
         if not isinstance(reason, str) or len(reason) > 500:
-            return Response(
-                {"detail": "reason must be a string no longer than 500 characters."},
-                status=status.HTTP_400_BAD_REQUEST,
+            return legacy_error_response(
+                "reason must be a string no longer than 500 characters.",
+                http_status=status.HTTP_400_BAD_REQUEST,
             )
         run = _workflow_run_for_user(request, run_id)
         workflow = run.workflow_version.workflow
         if not _can_decide_workflow_approval(request, workflow):
-            return Response(
-                {"detail": "Project administrator permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project administrator permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if run.deadline_at and run.deadline_at <= timezone.now():
             expire_workflow_runs(limit=100)
-            return Response(
-                {"detail": "Workflow run deadline exceeded before the decision."},
-                status=status.HTTP_409_CONFLICT,
+            return legacy_error_response(
+                "Workflow run deadline exceeded before the decision.",
+                http_status=status.HTTP_409_CONFLICT,
             )
         now = timezone.now()
         with transaction.atomic():
@@ -486,14 +473,13 @@ class WorkflowStepApprovalView(APIView):
                 node_type="approval",
             )
             if step.status != WorkflowStepRun.Status.AWAITING_APPROVAL:
-                return Response(
-                    {"detail": "Workflow step is not awaiting approval."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "Workflow step is not awaiting approval.", http_status=status.HTTP_409_CONFLICT
                 )
             if task.status != Task.Status.WAITING_APPROVAL:
-                return Response(
-                    {"detail": "Workflow task is no longer waiting for approval."},
-                    status=status.HTTP_409_CONFLICT,
+                return legacy_error_response(
+                    "Workflow task is no longer waiting for approval.",
+                    http_status=status.HTTP_409_CONFLICT,
                 )
             decision_payload = {
                 "decision": self.decision,
@@ -505,9 +491,7 @@ class WorkflowStepApprovalView(APIView):
                 step.status = WorkflowStepRun.Status.SUCCEEDED
                 step.output_data = decision_payload
                 step.finished_at = now
-                step.save(
-                    update_fields=["status", "output_data", "finished_at"]
-                )
+                step.save(update_fields=["status", "output_data", "finished_at"])
                 task.status = Task.Status.QUEUED
                 task.available_at = now
                 task.attempts = 0
@@ -535,9 +519,7 @@ class WorkflowStepApprovalView(APIView):
                 }
                 step.output_data = decision_payload
                 step.finished_at = now
-                step.save(
-                    update_fields=["status", "error", "output_data", "finished_at"]
-                )
+                step.save(update_fields=["status", "error", "output_data", "finished_at"])
                 task.status = Task.Status.FAILED
                 task.error = {
                     "code": "WORKFLOW_APPROVAL_REJECTED",

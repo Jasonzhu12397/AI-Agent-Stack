@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
 from core.models import (
     KnowledgeBase,
@@ -132,12 +133,11 @@ class KnowledgeBaseListCreateView(APIView):
     def post(self, request, tenant_id, project_id):
         tenant, project = _tenant_and_project(request, tenant_id, project_id)
         if not _can_edit(request, tenant, project):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         name = request.data.get("name")
         slug = request.data.get("slug")
         description = request.data.get("description", "")
@@ -145,24 +145,24 @@ class KnowledgeBaseListCreateView(APIView):
         chunk_size = request.data.get("chunk_size", 1200)
         chunk_overlap = request.data.get("chunk_overlap", 160)
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
-            return Response(
-                {"detail": "name is required and must be at most 120 characters."},
-                status=400,
+            return legacy_error_response(
+                "name is required and must be at most 120 characters.", http_status=400
             )
         if not isinstance(slug, str) or not re.fullmatch(
             r"[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?",
             slug,
         ):
-            return Response({"detail": "slug must be a lowercase URL-safe identifier."}, status=400)
+            return legacy_error_response(
+                "slug must be a lowercase URL-safe identifier.", http_status=400
+            )
         if not isinstance(description, str) or len(description) > 4000:
-            return Response(
-                {"detail": "description must be a string up to 4,000 characters."},
-                status=400,
+            return legacy_error_response(
+                "description must be a string up to 4,000 characters.", http_status=400
             )
         try:
             model_uuid = uuid.UUID(str(model_id))
         except (TypeError, ValueError, AttributeError):
-            return Response({"detail": "A valid embedding_model_id is required."}, status=400)
+            return legacy_error_response("A valid embedding_model_id is required.", http_status=400)
         model = get_object_or_404(
             ModelConfig.objects.select_related("provider").filter(
                 Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
@@ -172,9 +172,8 @@ class KnowledgeBaseListCreateView(APIView):
             pk=model_uuid,
         )
         if "embeddings" not in (model.capabilities or []):
-            return Response(
-                {"detail": "Selected model does not declare embeddings capability."},
-                status=400,
+            return legacy_error_response(
+                "Selected model does not declare embeddings capability.", http_status=400
             )
         if (
             not isinstance(chunk_size, int)
@@ -184,11 +183,10 @@ class KnowledgeBaseListCreateView(APIView):
             or isinstance(chunk_overlap, bool)
             or not 0 <= chunk_overlap < chunk_size
         ):
-            return Response({"detail": "Invalid chunk_size or chunk_overlap."}, status=400)
+            return legacy_error_response("Invalid chunk_size or chunk_overlap.", http_status=400)
         if KnowledgeBase.objects.filter(project=project, slug=slug).exists():
-            return Response(
-                {"detail": "Knowledge base slug already exists in this project."},
-                status=409,
+            return legacy_error_response(
+                "Knowledge base slug already exists in this project.", http_status=409
             )
         item = KnowledgeBase.objects.create(
             tenant=tenant,
@@ -228,15 +226,18 @@ class KnowledgeBaseDocumentListCreateView(APIView):
 
     def get(self, request, knowledge_base_id):
         item = self.get_knowledge_base(request, knowledge_base_id)
-        if not ProjectMembership.objects.filter(
-            project=item.project,
-            user=request.user,
-        ).exists() and not TenantMembership.objects.filter(
-            tenant=item.tenant,
-            user=request.user,
-            role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
-        ).exists():
-            return Response({"detail": "Not found."}, status=404)
+        if (
+            not ProjectMembership.objects.filter(
+                project=item.project,
+                user=request.user,
+            ).exists()
+            and not TenantMembership.objects.filter(
+                tenant=item.tenant,
+                user=request.user,
+                role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+            ).exists()
+        ):
+            return legacy_error_response("Not found.", http_status=404)
         documents = item.documents.all()
         return Response(
             {
@@ -248,31 +249,29 @@ class KnowledgeBaseDocumentListCreateView(APIView):
     def post(self, request, knowledge_base_id):
         item = self.get_knowledge_base(request, knowledge_base_id)
         if not _can_edit(request, item.tenant, item.project):
-            return Response(
-                {"detail": "Project editor permission required."},
-                status=status.HTTP_403_FORBIDDEN,
+            return legacy_error_response(
+                "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
             )
         if not isinstance(request.data, dict):
-            return Response({"detail": "Request body must be a JSON object."}, status=400)
+            return legacy_error_response("Request body must be a JSON object.", http_status=400)
         title = request.data.get("title")
         content = request.data.get("content")
         metadata = request.data.get("metadata", {})
         if not isinstance(title, str) or not title.strip() or len(title) > 240:
-            return Response(
-                {"detail": "title is required and must be at most 240 characters."},
-                status=400,
+            return legacy_error_response(
+                "title is required and must be at most 240 characters.", http_status=400
             )
         if not isinstance(content, str) or not content.strip() or len(content) > 1_000_000:
-            return Response(
-                {"detail": "content must be non-empty and no larger than 1 MB."},
-                status=400,
+            return legacy_error_response(
+                "content must be non-empty and no larger than 1 MB.", http_status=400
             )
         if not isinstance(metadata, dict) or len(json.dumps(metadata)) > 16384:
-            return Response({"detail": "metadata must be a JSON object up to 16 KiB."}, status=400)
+            return legacy_error_response(
+                "metadata must be a JSON object up to 16 KiB.", http_status=400
+            )
         if _contains_secret_key(metadata):
-            return Response(
-                {"detail": "Document metadata cannot contain credential fields."},
-                status=400,
+            return legacy_error_response(
+                "Document metadata cannot contain credential fields.", http_status=400
             )
         checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
         with transaction.atomic():
@@ -326,21 +325,16 @@ class KnowledgeDocumentDetailView(APIView):
                 )
                 knowledge_base = document.knowledge_base
                 if not _can_edit(request, knowledge_base.tenant, knowledge_base.project):
-                    return Response(
-                        {"detail": "Project editor permission required."},
-                        status=status.HTTP_403_FORBIDDEN,
+                    return legacy_error_response(
+                        "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
                     )
                 document_tasks = Task.objects.select_for_update().filter(
                     payload__knowledge_document_id=str(document.id),
                 )
                 if document_tasks.filter(status=Task.Status.RUNNING).exists():
-                    return Response(
-                        {
-                            "detail": (
-                                "Document ingestion is running; retry deletion after it finishes."
-                            )
-                        },
-                        status=status.HTTP_409_CONFLICT,
+                    return legacy_error_response(
+                        ("Document ingestion is running; retry deletion after it finishes."),
+                        http_status=status.HTTP_409_CONFLICT,
                     )
                 document_tasks.filter(status=Task.Status.QUEUED).update(
                     status=Task.Status.CANCELLED,
@@ -376,9 +370,9 @@ class KnowledgeDocumentDetailView(APIView):
                 )
                 document.delete()
         except VectorStoreError:
-            return Response(
-                {"detail": "Vector cleanup failed; the source document was retained."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            return legacy_error_response(
+                "Vector cleanup failed; the source document was retained.",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -401,14 +395,13 @@ class KnowledgeDocumentRetryView(APIView):
                 )
                 knowledge_base = document.knowledge_base
                 if not _can_edit(request, knowledge_base.tenant, knowledge_base.project):
-                    return Response(
-                        {"detail": "Project editor permission required."},
-                        status=status.HTTP_403_FORBIDDEN,
+                    return legacy_error_response(
+                        "Project editor permission required.", http_status=status.HTTP_403_FORBIDDEN
                     )
                 if document.status != KnowledgeDocument.Status.FAILED:
-                    return Response(
-                        {"detail": "Only failed documents can be retried."},
-                        status=status.HTTP_409_CONFLICT,
+                    return legacy_error_response(
+                        "Only failed documents can be retried.",
+                        http_status=status.HTTP_409_CONFLICT,
                     )
                 existing_tasks = Task.objects.select_for_update().filter(
                     payload__knowledge_document_id=str(document.id),
@@ -416,9 +409,9 @@ class KnowledgeDocumentRetryView(APIView):
                 if existing_tasks.filter(
                     status__in=[Task.Status.QUEUED, Task.Status.RUNNING]
                 ).exists():
-                    return Response(
-                        {"detail": "A document ingestion task is already active."},
-                        status=status.HTTP_409_CONFLICT,
+                    return legacy_error_response(
+                        "A document ingestion task is already active.",
+                        http_status=status.HTTP_409_CONFLICT,
                     )
                 store = QdrantVectorStore()
                 if document.vector_collection:
@@ -462,8 +455,8 @@ class KnowledgeDocumentRetryView(APIView):
                     },
                 )
         except VectorStoreError:
-            return Response(
-                {"detail": "Vector cleanup failed; retry was not queued."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            return legacy_error_response(
+                "Vector cleanup failed; retry was not queued.",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(_document_data(document), status=status.HTTP_202_ACCEPTED)
