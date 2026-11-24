@@ -70,5 +70,16 @@ jobs:
           CS: ${{ inputs.codespace }}
         run: |
           set -o pipefail
-          curl -fsS -o /dev/null "https://${CS}-8000.app.github.dev/health/ready"
-          curl -fsS "https://${CS}-8000.app.github.dev/" | head -c 120
+          base="https://${CS}-8000.app.github.dev"
+          # The forwarded port can take a few seconds to start answering after the
+          # console boots, so poll instead of failing on the first probe.
+          for attempt in $(seq 1 12); do
+            if curl -fsS -o /dev/null "${base}/health/ready"; then
+              echo "health ready after ${attempt} attempt(s)"
+              break
+            fi
+            echo "health not ready yet (attempt ${attempt})"
+            sleep 5
+          done
+          curl -fsS -o /dev/null "${base}/health/ready"
+          curl -fsS "${base}/" | head -c 120
