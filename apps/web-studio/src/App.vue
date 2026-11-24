@@ -97,6 +97,16 @@ function evidenceText(item: RoadmapItem): string {
 let timer: number | undefined;
 
 const isLogin = computed(() => route.path === "/login");
+const roadmapSummary = computed(() => {
+  const items = roadmap.value.length ? roadmap.value : ROADMAP_FALLBACK;
+  if (!items.length) return "delivery roadmap unavailable";
+  const verified = items.filter((item) => item.status === "verified").map((item) => item.code);
+  const open = items.filter((item) => item.status !== "verified").map((item) => item.code);
+  if (!open.length) return `${verified.join(", ")} verified`;
+  if (!verified.length) return `${open.join(", ")} in progress`;
+  return `${verified.join(", ")} verified, ${open.join(", ")} not yet`;
+});
+
 const isSettings = computed(() => route.path.startsWith("/settings"));
 // The Control Agent spends the whole viewport on the conversation, so the
 // marketing hero stays out of its way.
@@ -250,7 +260,7 @@ onUnmounted(() => {
         </section>
       </template>
       <footer>
-        <span>AI Agent Studio <span class="muted">·</span> M0 verified, M1–M3 partial</span>
+        <span>AI Agent Studio <span class="muted">·</span> {{ roadmapSummary }}</span>
         <span>Policy first. Observable by design.</span>
       </footer>
     </main>

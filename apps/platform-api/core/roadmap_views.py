@@ -50,6 +50,9 @@ class PlatformRoadmapView(APIView):
         succeeded_steps = WorkflowStepRun.objects.filter(
             status=WorkflowStepRun.Status.SUCCEEDED
         ).count()
+        enrolled_nodes = AgentNode.objects.count()
+        # Liveness is an operational signal (a quiet node goes offline after a
+        # minute), so the milestone is proven by enrollment, not by a heartbeat.
         online_nodes = AgentNode.objects.filter(status=AgentNode.Status.ONLINE).count()
         # A command that reached a settled state proves both the approval gate
         # and the lease round-trip took place.
@@ -103,9 +106,10 @@ class PlatformRoadmapView(APIView):
                     "and approval gate"
                 ),
                 "status": _status(
-                    {"online_nodes": online_nodes, "settled_commands": settled_commands}
+                    {"enrolled_nodes": enrolled_nodes, "settled_commands": settled_commands}
                 ),
                 "evidence": {
+                    "enrolled_nodes": enrolled_nodes,
                     "online_nodes": online_nodes,
                     "settled_commands": settled_commands,
                     "approved_commands": approved_commands,

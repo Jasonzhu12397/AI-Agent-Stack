@@ -123,7 +123,8 @@ def test_runtime_and_workflow_evidence_flips_milestones_to_verified(platform_sco
         created_by=user,
         name="eph-1",
         node_type=AgentNode.NodeType.EPH_NODE,
-        status=AgentNode.Status.ONLINE,
+        # A node without heartbeat is offline but still proves enrollment.
+        status=AgentNode.Status.OFFLINE,
         credential_hash="0" * 64,
     )
     AgentCommand.objects.create(
@@ -146,7 +147,8 @@ def test_runtime_and_workflow_evidence_flips_milestones_to_verified(platform_sco
     assert by_code["M2"]["status"] == "verified"
     assert by_code["M2"]["evidence"]["succeeded_steps"] == 1
     assert by_code["M3"]["status"] == "verified"
-    assert by_code["M3"]["evidence"]["online_nodes"] == 1
+    assert by_code["M3"]["evidence"]["enrolled_nodes"] == 1
+    assert by_code["M3"]["evidence"]["online_nodes"] == 0
     assert model.id  # the model above is the same one the chat falls back to
 
 
