@@ -57,10 +57,15 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  // Proxies in front of this origin may reject DELETE/PATCH/PUT outright, so
+  // those travel as POST with an override header the API turns back.
+  const tunnelled = ["DELETE", "PATCH", "PUT"].includes(method);
+  const wireMethod = tunnelled ? "POST" : method;
+  if (tunnelled) headers.set("X-HTTP-Method-Override", method);
   if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
     headers.set("X-CSRFToken", await csrfToken());
   }
-  const response = await fetch(`${apiBase}${path}`, { ...init, method, headers, credentials: "include" });
+  const response = await fetch(`${apiBase}${path}`, { ...init, method: wireMethod, headers, credentials: "include" });
   if (response.status === 204) return undefined as T;
   const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) throw readError(response.status, payload);

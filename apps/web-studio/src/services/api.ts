@@ -165,8 +165,13 @@ export function apiErrorCode(error: unknown): string | null {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const method = (init.method ?? "GET").toUpperCase();
+  const requested = (init.method ?? "GET").toUpperCase();
+  // Hosting proxies can reject DELETE/PATCH/PUT outright; send them as POST
+  // with an override header that the API turns back into the real verb.
+  const tunnelled = ["DELETE", "PATCH", "PUT"].includes(requested);
+  const method = tunnelled ? "POST" : requested;
   const headers = new Headers(init.headers);
+  if (tunnelled) headers.set("X-HTTP-Method-Override", requested);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
