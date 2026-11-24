@@ -310,6 +310,21 @@ class SubscriptionCancelView(_SubscriptionAdminView):
         return Response({"subscription": _subscription_dict(subscription)})
 
 
+class SubscriptionResumeView(_SubscriptionAdminView):
+    """Clear a scheduled cancellation so the subscription keeps renewing."""
+
+    def post(self, request, tenant_id):
+        tenant = self.get_tenant()
+        subscription = get_object_or_404(Subscription.objects.filter(tenant=tenant))
+        try:
+            subscription = subscription_service.resume_subscription(
+                subscription=subscription, request=request
+            )
+        except SubscriptionStateError as exc:
+            return _subscription_error(exc)
+        return Response({"subscription": _subscription_dict(subscription)})
+
+
 class SubscriptionRenewView(_SubscriptionAdminView):
     def post(self, request, tenant_id):
         tenant = self.get_tenant()
@@ -867,6 +882,28 @@ _RECONCILED_STATUSES = {
 
 _PROVIDER_MISSING_STATES = {"", "unknown", "not_found", "not_exist"}
 
+# Provider trade states that imply the original payment succeeded, so they are
+# compatible with any local refund state that still rests on a paid trade.
+_PROVIDER_PAID_STATES = {"paid"}
+_LOCAL_REFUND_STATES = {
+    Order.Status.PARTIAL_REFUNDED,
+    Order.Status.REFUNDED,
+}
+
+
+def _refund_compatible(provider_status: str, local_status: str) -> bool:
+    """Whether a provider payment state can coexist with the local status."""
+
+    if provider_status == local_status:
+        return True
+    if provider_status in _PROVIDER_PAID_STATES and local_status in _LOCAL_REFUND_STATES:
+        return True
+    # WeChat reports a fully refunded trade as ``refunded``; a locally
+    # refunded order is consistent with that.
+    if provider_status == Order.Status.REFUNDED and local_status == Order.Status.REFUNDED:
+        return True
+    return False
+
 
 class ReconciliationView(_SubscriptionAdminView):
     """Read-only date-window reconciliation report for one tenant.
@@ -979,7 +1016,12 @@ class ReconciliationView(_SubscriptionAdminView):
         }
         if provider_status in _PROVIDER_MISSING_STATES:
             return {**base, "kind": "provider_not_found"}
-        if provider_status != order.status:
+        # A provider reports the *payment* state; the refund state lives in
+        # separate refund records. A trade that is still paid upstream is a
+        # consistent neighbour of a locally refunded order, and only the
+        # per-slice refund comparison may disagree with us. Comparing raw
+        # strings here would flag every refunded order as drifted.
+        if not _refund_compatible(provider_status, order.status):
             return {**base, "kind": "status_mismatch"}
         if provider_amount is not None and provider_amount != order.amount_cents:
             return {**base, "kind": "amount_mismatch"}

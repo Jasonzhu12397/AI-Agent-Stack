@@ -7,10 +7,13 @@ import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  cancelSubscription,
   closeOrder,
   fetchReconciliation,
   fetchSubscriptionBundle,
   refundOrder,
+  resumeSubscription,
+  type CancelMode,
   type ReconciliationReport,
 } from "./api";
 import {
@@ -193,6 +196,57 @@ async function loadReconciliation(): Promise<void> {
   }
 }
 
+// Subscription lifecycle: scheduling a cancellation is reversible, and an
+// immediate cancellation is gated behind an explicit confirmation.
+const lifecycleBusy = ref(false);
+
+async function cancelSubscriptionAction(mode: CancelMode): Promise<void> {
+  if (!activeTenantId.value) return;
+  const confirmText =
+    mode === "immediate"
+      ? t("Cancel immediately? The subscription stops serving right away and this cannot be undone.")
+      : t("Cancel at the end of the current period? You can resume before it ends.");
+  try {
+    await ElMessageBox.confirm(confirmText, t("Cancel subscription"), {
+      confirmButtonText: mode === "immediate" ? t("Cancel immediately") : t("Cancel at period end"),
+      cancelButtonText: t("Keep subscription"),
+      type: "warning",
+    });
+  } catch {
+    return;
+  }
+  lifecycleBusy.value = true;
+  actionError.value = "";
+  try {
+    await cancelSubscription(activeTenantId.value, mode);
+    ElMessage.success(
+      mode === "immediate" ? t("The subscription was cancelled.") : t("Cancellation scheduled."),
+    );
+    await resource.reload();
+  } catch (cause) {
+    actionError.value =
+      cause instanceof ApiError ? describeError(cause.code) : t("The subscription could not be cancelled.");
+  } finally {
+    lifecycleBusy.value = false;
+  }
+}
+
+async function resumeSubscriptionAction(): Promise<void> {
+  if (!activeTenantId.value) return;
+  lifecycleBusy.value = true;
+  actionError.value = "";
+  try {
+    await resumeSubscription(activeTenantId.value);
+    ElMessage.success(t("The subscription will keep renewing."));
+    await resource.reload();
+  } catch (cause) {
+    actionError.value =
+      cause instanceof ApiError ? describeError(cause.code) : t("The subscription could not be resumed.");
+  } finally {
+    lifecycleBusy.value = false;
+  }
+}
+
 onMounted(() => void resource.reload());
 void pageLabels;
 </script>
@@ -223,6 +277,29 @@ void pageLabels;
         </p>
         <p class="muted">{{ t("Billing period") }}: {{ subscription.current_period_start || "—" }} → {{ subscription.current_period_end || "—" }}</p>
         <p class="muted">Renewal: {{ subscription.renewal_mode }}</p>
+        <div class="settings-usage-row lifecycle-actions">
+          <el-button
+            v-if="subscription.cancel_at_period_end"
+            :loading="lifecycleBusy"
+            type="primary"
+            plain
+            @click="resumeSubscriptionAction"
+          >{{ t("Resume subscription") }}</el-button>
+          <template v-else>
+            <el-button
+              v-if="subscription.status !== 'cancelled' && subscription.status !== 'expired'"
+              :loading="lifecycleBusy"
+              @click="cancelSubscriptionAction('period_end')"
+            >{{ t("Cancel at period end") }}</el-button>
+            <el-button
+              v-if="subscription.status !== 'cancelled' && subscription.status !== 'expired'"
+              :loading="lifecycleBusy"
+              type="danger"
+              plain
+              @click="cancelSubscriptionAction('immediate')"
+            >{{ t("Cancel immediately") }}</el-button>
+          </template>
+        </div>
       </div>
       <el-empty v-else description="No subscription is active. Nothing is billed for this tenant." :image-size="64" />
     </el-card>

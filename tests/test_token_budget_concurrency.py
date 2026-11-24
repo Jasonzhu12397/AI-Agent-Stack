@@ -39,6 +39,17 @@ def _is_postgres() -> bool:
     return settings.DATABASES["default"]["ENGINE"].endswith("postgresql")
 
 
+# These tests prove that two threads racing the reservation critical section
+# cannot double-spend. That proof needs real row locks: on SQLite
+# ``select_for_update`` is a no-op and competing writers surface as
+# "database is locked" flakiness instead of a meaningful assertion. CI runs the
+# suite against PostgreSQL, where the lock is real.
+pytestmark = pytest.mark.skipif(
+    not _is_postgres(),
+    reason="requires PostgreSQL row locks; SQLite cannot serialize this proof",
+)
+
+
 @pytest.fixture
 def budget_run(db):
     user = get_user_model().objects.create_user(username="concurrency-budget-user")
@@ -193,7 +204,6 @@ def test_release_restores_capacity(budget_run):
     assert retry.reserved_tokens == 60
 
 
-@pytest.mark.skipif(not _is_postgres(), reason="PostgreSQL row-lock proof runs on CI only")
 @pytest.mark.django_db(transaction=True)
 def test_postgres_concurrent_reservation_allocates_remaining_once(budget_run):
     task, run, budget = budget_run

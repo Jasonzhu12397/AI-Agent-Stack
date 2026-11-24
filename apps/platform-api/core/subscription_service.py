@@ -196,6 +196,50 @@ def cancel_subscription(
 
 
 @transaction.atomic
+def resume_subscription(*, subscription: Subscription, request=None, actor=None) -> Subscription:
+    """Undo a scheduled cancellation before the period ends.
+
+    ``cancel at period end`` is a reversible intent, but without this path an
+    accidental click could only be undone by buying another period. The flag is
+    cleared and audited; a subscription in a terminal state or one that was
+    never scheduled for cancellation is a state error.
+    """
+
+    if subscription.status in {Subscription.Status.CANCELLED, Subscription.Status.EXPIRED}:
+        raise SubscriptionStateError(
+            "SUBSCRIPTION_INVALID_TRANSITION",
+            f"Subscription in status {subscription.status} cannot be resumed.",
+            http_status=409,
+            details={"status": subscription.status},
+        )
+    locked = Subscription.objects.select_for_update().get(pk=subscription.pk)
+    if not locked.cancel_at_period_end:
+        raise SubscriptionStateError(
+            "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCEL",
+            "This subscription is not scheduled for cancellation.",
+            http_status=409,
+            details={"status": locked.status},
+        )
+    locked.cancel_at_period_end = False
+    locked.save(update_fields=["cancel_at_period_end", "updated_at"])
+    record_audit_event(
+        request,
+        locked.tenant,
+        "billing.subscription.resume_scheduled_cancel",
+        "subscription",
+        locked.id,
+        actor=actor,
+        metadata={
+            "plan_code": locked.plan.code,
+            "current_period_end": locked.current_period_end.isoformat()
+            if locked.current_period_end
+            else None,
+        },
+    )
+    return locked
+
+
+@transaction.atomic
 def renew_subscription(
     *,
     subscription: Subscription,

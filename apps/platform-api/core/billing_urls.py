@@ -12,6 +12,7 @@ from core.billing_views import (
     ReconciliationView,
     SubscriptionCancelView,
     SubscriptionRenewView,
+    SubscriptionResumeView,
     SubscriptionSettleView,
     SubscriptionTrialView,
     SubscriptionView,
@@ -43,6 +44,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/billing/subscription/cancel/",
         SubscriptionCancelView.as_view(),
         name="billing-subscription-cancel",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/billing/subscription/resume/",
+        SubscriptionResumeView.as_view(),
+        name="billing-subscription-resume",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/billing/subscription/renew/",

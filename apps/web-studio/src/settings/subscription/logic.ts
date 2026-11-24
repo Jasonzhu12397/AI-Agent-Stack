@@ -215,6 +215,12 @@ export function describeError(code: string): string {
       return "The refund amount must be a positive amount within the refundable remainder.";
     case "ORDER_STATE_CONFLICT":
       return "This order can no longer change state.";
+    case "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCEL":
+      return "This subscription is not scheduled for cancellation.";
+    case "SUBSCRIPTION_INVALID_TRANSITION":
+      return "This subscription can no longer change state.";
+    case "SUBSCRIPTION_CANCEL_MODE_INVALID":
+      return "Cancel mode must be scheduled or immediate.";
     case "HTTP_401":
       return "Your session has expired. Sign in again.";
     case "HTTP_403":

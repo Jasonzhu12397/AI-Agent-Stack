@@ -55,3 +55,13 @@ test("the subscription page exposes the read-only reconciliation report", () => 
   assert.match(page, /reconciliationDiscrepancyCount/);
   assert.match(page, /data-refund-discrepancies/);
 });
+
+test("the subscription lifecycle is operable, including resume", () => {
+  assert.match(api, /export async function cancelSubscription/);
+  assert.match(api, /export async function resumeSubscription/);
+  assert.match(api, /billing\/subscription\/cancel\//);
+  assert.match(api, /billing\/subscription\/resume\//);
+  assert.match(page, /resumeSubscriptionAction/);
+  assert.match(page, /cancelSubscriptionAction/);
+  assert.match(page, /Cancel immediately/);
+});

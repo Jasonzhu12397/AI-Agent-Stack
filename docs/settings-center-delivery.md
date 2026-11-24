@@ -11,7 +11,7 @@ All 14 items in the acceptance document are routed Vue pages backed by real Djan
 |---|---|---|---|---|
 | 1 | Account Management | `account` | `apps/web-studio/src/settings/account/` | `GET/PATCH /api/v1/users/me/`, `GET /api/v1/users/me/identities/`, `GET /api/v1/users/me/sessions/`, `POST .../sessions/<key>/revoke/` |
 | 2 | Standard Plan | `plan` | `src/settings/plan/` | `GET /api/v1/tenants/<t>/billing/plans/`, `GET .../billing/capabilities/` |
-| 3 | Subscription & Usage Management | `subscription` | `src/settings/subscription/` | `GET .../billing/subscription/`, `GET .../billing/usage/`, `GET/POST .../billing/orders/`, `GET .../orders/<id>/status/`, `POST .../orders/<id>/close/`, `POST .../orders/<id>/refund/`, `GET .../billing/reconciliation/` |
+| 3 | Subscription & Usage Management | `subscription` | `src/settings/subscription/` | `GET .../billing/subscription/`, `GET .../billing/usage/`, `GET/POST .../billing/orders/`, `GET .../orders/<id>/status/`, `POST .../orders/<id>/close/`, `POST .../orders/<id>/refund/`, `POST .../billing/subscription/cancel/`, `POST .../billing/subscription/resume/`, `GET .../billing/reconciliation/` |
 | 4 | General | `general` | `src/settings/general/` | `GET/PATCH .../settings/general/`, `GET/PATCH .../projects/<p>/settings/general/` |
 | 5 | Plugins & Connectors | `connectors` | `src/settings/connectors/` | `GET .../connectors/`, `POST .../connectors/<slug>/install/`, `PATCH .../installations/<id>/`, `POST .../health/`, `POST .../test/` |
 | 6 | Appearance | `appearance` | `src/settings/appearance/` | `GET/PUT/PATCH /api/v1/users/me/preferences/appearance/` |

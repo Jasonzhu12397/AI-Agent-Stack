@@ -81,3 +81,26 @@ export async function fetchReconciliation(
     tenantPath(tenantId, `/billing/reconciliation/?${query}`),
   );
 }
+
+export const CANCEL_MODES = ["period_end", "immediate"] as const;
+export type CancelMode = (typeof CANCEL_MODES)[number];
+
+/** Schedule (``period_end``) or perform (``immediate``) a cancellation. */
+export async function cancelSubscription(
+  tenantId: string,
+  mode: CancelMode,
+): Promise<{ subscription: unknown }> {
+  return request(tenantPath(tenantId, "/billing/subscription/cancel/"), {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+}
+
+/** Clear a scheduled cancellation; the subscription keeps renewing. */
+export async function resumeSubscription(
+  tenantId: string,
+): Promise<{ subscription: unknown }> {
+  return request(tenantPath(tenantId, "/billing/subscription/resume/"), {
+    method: "POST",
+  });
+}

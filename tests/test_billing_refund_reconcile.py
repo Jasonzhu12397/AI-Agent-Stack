@@ -737,3 +737,48 @@ def test_reconciliation_marks_the_channel_unavailable_when_a_refund_query_fails(
     assert response.status_code == 200
     assert response.data["refund_discrepancies"] == []
     assert response.data["unavailable_channels"] == ["wechat"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("local_status", ["partial_refunded", "refunded"])
+def test_a_refunded_order_is_not_flagged_just_because_the_trade_is_still_paid(
+    refund_setup, monkeypatch, local_status
+):
+    """A provider reports payment state; refund state lives in its own records."""
+
+    owner, tenant, plan, _ = refund_setup
+    order = _make_paid_order(tenant, plan, owner, f"rec-paid-{local_status}")
+    order.refunded_cents = 4900 if local_status == "partial_refunded" else 9900
+    order.status = local_status
+    order.save(update_fields=["refunded_cents", "status", "updated_at"])
+    stub = StubProvider("wechat", status="paid", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    assert response.data["discrepancies"] == []
+
+
+@pytest.mark.django_db
+def test_a_local_paid_order_that_the_provider_reports_refunded_is_still_a_mismatch(
+    refund_setup, monkeypatch
+):
+    owner, tenant, plan, _ = refund_setup
+    _make_paid_order(tenant, plan, owner, "rec-provider-refunded")
+    stub = StubProvider("wechat", status="refunded", amount_cents=9900)
+    _install_providers(monkeypatch, {"wechat": stub})
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    start, end = _today_window()
+    response = client.get(_reconciliation_url(tenant.id, start, end))
+
+    assert response.status_code == 200
+    item = response.data["discrepancies"][0]
+    assert item["kind"] == "status_mismatch"
+    assert item["local_status"] == Order.Status.PAID
+    assert item["provider_status"] == "refunded"
