@@ -35,6 +35,13 @@ jobs:
         run: |
           gh codespace ports visibility 8000:public -c "$CS"
           gh codespace ports -c "$CS"
+      - name: Report the API log
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && tail -n 40 .devdata/api.log; echo ---; grep -c "" .devdata/bootstrap.log || true; tail -n 5 .devdata/bootstrap.log || true'
+
       - name: Open a gate-free tunnel for the console
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
