@@ -56,7 +56,9 @@ def stop_previous() -> None:
         return
     for pid in pids:
         try:
-            os.kill(int(pid), signal.SIGTERM)
+            # Servers were spawned in their own session, so killing the group
+            # also stops the node process npm would otherwise leave behind.
+            os.killpg(int(pid), signal.SIGTERM)
         except (ProcessLookupError, ValueError):
             continue
     time.sleep(1.0)
@@ -107,6 +109,13 @@ def main() -> None:
 
     PID_FILE.write_text(json.dumps([api, web]))
     print(f"console ready: port {WEB_PORT} (API on {API_PORT})", flush=True)
+    # Publish the self-check so the deployment is verifiable without shell access.
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("healthcheck.py"))],
+        cwd=str(REPO_ROOT),
+        env={**os.environ, **env},
+        check=False,
+    )
 
 
 if __name__ == "__main__":
