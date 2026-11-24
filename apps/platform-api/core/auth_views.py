@@ -66,11 +66,16 @@ class LoginView(APIView):
             actor=user,
         )
         login(request, user)
+        if request.session.session_key is None:
+            request.session.save()
         return Response(
             {
                 "id": user.pk,
                 "username": user.get_username(),
                 "email": user.email,
+                # The same server-side session key, usable as a header when the
+                # cookie is dropped by an access proxy or a partitioned webview.
+                "session_token": request.session.session_key,
             }
         )
 

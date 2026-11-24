@@ -1033,6 +1033,9 @@ class AgentPluginDefinition(models.Model):
         MCP = "mcp", "Model Context Protocol"
         A2A = "a2a", "Agent-to-Agent"
         OPENAI_COMPATIBLE = "openai_compatible", "OpenAI Compatible"
+        # Capabilities executed inside the platform from open data providers,
+        # so they need no operator endpoint or credential.
+        OPEN_DATA = "open_data", "Open Data (built-in)"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     tenant = models.ForeignKey(

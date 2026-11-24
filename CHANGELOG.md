@@ -8,9 +8,20 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- Built-in map and weather connectors (`open_data` protocol): place search via
+  the Open-Meteo geocoder, driving routes via OSRM, current conditions and
+  forecast via wttr.in. They need no endpoint or API key and declare typed
+  input/output schemas, so the chat tool passes real arguments.
+- `X-Session-Token` session authentication plus `session_token` in the login
+  response: consoles behind an access proxy or a partitioned webview no longer
+  report "登录已过期" for every call after sign-in.
+
 - `stack_plan_deployment` now takes `cluster_name`, `kubernetes_version` and
   optional replica counts instead of a nested spec, and falls back to the
   newest online EPH node when no node id is named.
+- `declared_capabilities` now accepts capability rows stored as declarations
+  (dicts) as well as legacy bare names; the catalog writes dicts, and a plugin
+  whose manifest was empty looked capability-less.
 - `stack_get_deployment`: read one deployment's status, plan hash, preflight
   (network readiness, Ironic warnings) and plan phases from a chat turn.
 - `stack_create_command` now validates the command against the node's role

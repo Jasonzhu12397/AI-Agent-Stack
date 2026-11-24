@@ -193,18 +193,34 @@ def declared_capabilities(plugin: Any) -> list[dict[str, Any]]:
     fallback_schema = getattr(plugin, "input_schema", _EMPTY_OBJECT_SCHEMA) or _EMPTY_OBJECT_SCHEMA
     fallback_output = getattr(plugin, "output_schema", _EMPTY_OBJECT_SCHEMA) or _EMPTY_OBJECT_SCHEMA
     timeout = getattr(plugin, "timeout_seconds", 30)
-    return [
-        {
-            "name": name,
-            "description": "",
-            "risk_level": "low",
-            "timeout_seconds": timeout,
-            "input_schema": fallback_schema,
-            "output_schema": fallback_output,
-        }
-        for name in legacy
-        if isinstance(name, str)
-    ]
+    entries_out: list[dict[str, Any]] = []
+    for entry in legacy:
+        # The catalog stores full declaration dicts; older rows stored bare
+        # names. Both are declarations, and a dict row used to fall through
+        # this branch and make its plugin look capability-less.
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            entries_out.append(
+                {
+                    "description": "",
+                    "risk_level": "low",
+                    "timeout_seconds": timeout,
+                    "input_schema": fallback_schema,
+                    "output_schema": fallback_output,
+                    **entry,
+                }
+            )
+        elif isinstance(entry, str):
+            entries_out.append(
+                {
+                    "name": entry,
+                    "description": "",
+                    "risk_level": "low",
+                    "timeout_seconds": timeout,
+                    "input_schema": fallback_schema,
+                    "output_schema": fallback_output,
+                }
+            )
+    return entries_out
 
 
 def capability_definition(plugin: Any, capability_name: str) -> dict[str, Any] | None:

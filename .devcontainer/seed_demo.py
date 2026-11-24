@@ -267,6 +267,25 @@ for definition, caps in installations:
     )
     installed[definition.plugin_key] = row
 
+# Catalog connectors that need no credential (map, weather) are installed here
+# so a fresh demo can answer "天气怎么样" without a manual install step.
+for definition in AgentPluginDefinition.objects.filter(
+    tenant=tenant, plugin_key__in=("map", "weather"), enabled=True
+):
+    row, _ = AgentPluginInstallation.objects.update_or_create(
+        project=project,
+        plugin=definition,
+        defaults={
+            "tenant": tenant,
+            "plugin_version": definition.version,
+            "status": AgentPluginInstallation.Status.INSTALLED,
+            "granted_capabilities": [item["name"] for item in definition.capabilities],
+            "installed_by": user,
+            "credential_ref": "",
+        },
+    )
+    installed[definition.plugin_key] = row
+
 AgentCapabilityInvocation.objects.filter(installation__project=project).delete()
 records = [
     ("github-agent", "issue.read", "success", "", 412),

@@ -9,35 +9,405 @@
       "endpoint_env": "WECOM_CONNECTOR_URL",
       "auth_required": true,
       "capabilities": [
-        {"name": "wecom.message.list", "description": "List recent messages of one chat"},
-        {"name": "wecom.contact.list", "description": "List members of one department"}
+        {
+          "name": "wecom.message.list",
+          "description": "List recent messages of one chat"
+        },
+        {
+          "name": "wecom.contact.list",
+          "description": "List members of one department"
+        }
       ]
     },
     {
       "plugin_key": "map",
       "name": "地图",
-      "description": "Map connector: place search, reverse geocoding and route planning.",
+      "description": "Map connector: place search and driving route planning on OpenStreetMap data.",
       "version": "1.0.0",
-      "protocol": "http_json",
-      "endpoint_env": "MAP_CONNECTOR_URL",
+      "protocol": "open_data",
       "auth_required": false,
       "capabilities": [
-        {"name": "map.place.search", "description": "Search places by keyword"},
-        {"name": "map.route.plan", "description": "Plan a driving route between two places"}
-      ]
+        {
+          "name": "map.place.search",
+          "description": "Search places by keyword and return coordinates",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Free-text place query, e.g. 西安钟楼"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              }
+            },
+            "required": [
+              "query"
+            ]
+          },
+          "query_params": {
+            "query": "query",
+            "limit": "limit"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "query": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "places": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "admin1": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "latitude": {
+                      "type": "number"
+                    },
+                    "longitude": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "ok",
+              "query",
+              "count",
+              "places"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "map.route.plan",
+          "description": "Plan a route between two places by name",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "description": "Start place name"
+              },
+              "destination": {
+                "type": "string",
+                "description": "End place name"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "driving",
+                  "walking",
+                  "cycling"
+                ]
+              }
+            },
+            "required": [
+              "origin",
+              "destination"
+            ]
+          },
+          "query_params": {
+            "origin": "origin",
+            "destination": "destination",
+            "mode": "mode"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "admin1": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "destination": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "admin1": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "distance_km": {
+                "type": "number"
+              },
+              "duration_minutes": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ok",
+              "mode",
+              "origin",
+              "destination",
+              "distance_km",
+              "duration_minutes"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "builtin": true
     },
     {
       "plugin_key": "weather",
       "name": "天气",
-      "description": "Weather connector: current conditions and a short forecast for one city.",
+      "description": "Weather connector: current conditions and a short forecast from Open-Meteo.",
       "version": "1.0.0",
-      "protocol": "http_json",
-      "endpoint_env": "WEATHER_CONNECTOR_URL",
+      "protocol": "open_data",
       "auth_required": false,
       "capabilities": [
-        {"name": "weather.current", "description": "Current conditions for one city"},
-        {"name": "weather.forecast", "description": "Daily forecast for one city"}
-      ]
+        {
+          "name": "weather.current",
+          "description": "Current conditions for one city",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "place": {
+                "type": "string",
+                "description": "City name, e.g. 西安"
+              },
+              "latitude": {
+                "type": "number"
+              },
+              "longitude": {
+                "type": "number"
+              }
+            },
+            "required": []
+          },
+          "query_params": {
+            "place": "place",
+            "latitude": "latitude",
+            "longitude": "longitude"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "place": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "admin1": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "observed_at": {
+                "type": "string"
+              },
+              "temperature_c": {
+                "type": "number"
+              },
+              "apparent_temperature_c": {
+                "type": "number"
+              },
+              "humidity_percent": {
+                "type": "number"
+              },
+              "wind_kmh": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ok",
+              "place"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "weather.forecast",
+          "description": "Daily forecast for one city",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "place": {
+                "type": "string",
+                "description": "City name, e.g. 西安"
+              },
+              "days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 7
+              }
+            },
+            "required": [
+              "place"
+            ]
+          },
+          "query_params": {
+            "place": "place",
+            "days": "days"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "place": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "admin1": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "days": {
+                "type": "array",
+                "maxItems": 7,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "temperature_max_c": {
+                      "type": "number"
+                    },
+                    "temperature_min_c": {
+                      "type": "number"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "precipitation_probability": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "date"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "ok",
+              "place",
+              "days"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "builtin": true
     }
   ]
 }

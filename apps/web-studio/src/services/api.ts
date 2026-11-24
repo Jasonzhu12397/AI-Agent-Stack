@@ -7,7 +7,30 @@ export type CurrentUser = {
   username: string;
   email: string;
   is_staff: boolean;
+  session_token?: string;
 };
+
+// Access proxies and in-app webviews can partition or drop the session cookie,
+// which turned every call after sign-in into a 401. The login response also
+// carries the server-side session key, and it is sent as a header from then on.
+const SESSION_TOKEN_KEY = "agent-stack-session-token";
+
+export function storedSessionToken(): string {
+  try {
+    return window.localStorage.getItem(SESSION_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setSessionToken(token: string): void {
+  try {
+    if (token) window.localStorage.setItem(SESSION_TOKEN_KEY, token);
+    else window.localStorage.removeItem(SESSION_TOKEN_KEY);
+  } catch {
+    // Storage can be unavailable in a private webview; cookies still work.
+  }
+}
 
 export type Tenant = { id: string; name: string; slug: string };
 export type Project = { id: string; tenant_id: string; name: string; slug: string };
@@ -181,6 +204,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  const sessionToken = storedSessionToken();
+  if (sessionToken) headers.set("X-Session-Token", sessionToken);
   if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
     headers.set("X-CSRFToken", await csrfToken());
   }
@@ -248,18 +273,21 @@ export function getCurrentUser(): Promise<CurrentUser> {
   return request<CurrentUser>("/api/v1/auth/me/");
 }
 
-export function login(username: string, password: string): Promise<CurrentUser> {
-  return request<CurrentUser>("/api/v1/auth/login/", {
+export async function login(username: string, password: string): Promise<CurrentUser> {
+  const user = await request<CurrentUser>("/api/v1/auth/login/", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
+  if (user.session_token) setSessionToken(user.session_token);
+  return user;
 }
 
-export function logout(): Promise<void> {
-  return request<void>("/api/v1/auth/logout/", {
+export async function logout(): Promise<void> {
+  await request<void>("/api/v1/auth/logout/", {
     method: "POST",
     body: JSON.stringify({}),
   });
+  setSessionToken("");
 }
 
 export function getTenants(): Promise<Page<Tenant>> {

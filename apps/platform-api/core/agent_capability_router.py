@@ -330,8 +330,20 @@ def _http_adapter(
 
 # Protocol adapters are registered here; mcp/a2a adapters are intentionally
 # absent in this batch and surface CAPABILITY_PROTOCOL_UNSUPPORTED instead.
+def _open_data_adapter(installation, definition, arguments, approved):
+    """Run a built-in open-data capability in this process."""
+
+    from core import open_data
+
+    try:
+        return open_data.invoke(definition["name"], arguments)
+    except open_data.ConnectorError as exc:
+        raise CapabilityResolutionError(exc.code, exc.message) from exc
+
+
 _PROTOCOL_ADAPTERS: dict[str, Callable[..., dict[str, Any]]] = {
     AgentPluginDefinition.Protocol.HTTP_JSON: _http_adapter,
+    AgentPluginDefinition.Protocol.OPEN_DATA: _open_data_adapter,
 }
 
 # Process-local invalidation hooks run when an installation leaves the active

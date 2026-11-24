@@ -33,6 +33,25 @@ def _catalog_file() -> Path:
 
 
 def _capability(entry: dict) -> dict:
+    # A catalog entry that declares its own input schema and query mapping is
+    # callable with real arguments; the generic {"text"} shape stays for
+    # connectors whose upstream only accepts a prompt.
+    if isinstance(entry.get("input_schema"), dict):
+        return {
+            "name": entry["name"],
+            "description": entry.get("description", entry["name"]),
+            "input_schema": entry["input_schema"],
+            "output_schema": entry.get("output_schema")
+            or {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": True,
+            },
+            "query_params": entry.get("query_params") or {},
+            "risk_level": entry.get("risk_level", "low"),
+            "timeout_seconds": entry.get("timeout_seconds", 30),
+        }
     return {
         "name": entry["name"],
         "description": entry.get("description", entry["name"]),
@@ -55,7 +74,12 @@ def _capability(entry: dict) -> dict:
 
 def _manifest(endpoint: str, capabilities: list[dict]) -> dict:
     operations = {
-        item["name"]: {"method": "GET", "path": "/v1/" + item["name"]} for item in capabilities
+        item["name"]: {
+            "method": "GET",
+            "path": "/v1/" + item["name"],
+            "query_params": item.get("query_params") or {},
+        }
+        for item in capabilities
     }
     return {
         "http": {"base_url": endpoint, "operations": operations},
@@ -88,6 +112,7 @@ class Command(BaseCommand):
             if owner is None:
                 continue
             for entry in entries:
+                builtin = bool(entry.get("builtin"))
                 endpoint = (os.environ.get(entry.get("endpoint_env", "")) or "").strip()
                 capabilities = [_capability(item) for item in entry.get("capabilities", [])]
                 definition, _ = AgentPluginDefinition.objects.update_or_create(
@@ -98,7 +123,7 @@ class Command(BaseCommand):
                         "name": entry["name"],
                         "description": (
                             entry["description"]
-                            if endpoint
+                            if builtin or endpoint
                             else entry["description"]
                             + " Configure "
                             + entry.get("endpoint_env", "")
@@ -109,8 +134,12 @@ class Command(BaseCommand):
                         "endpoint_url": endpoint,
                         "auth_required": bool(entry.get("auth_required")),
                         "capabilities": capabilities,
-                        "manifest": _manifest(endpoint, capabilities) if endpoint else {},
-                        "enabled": bool(endpoint),
+                        "manifest": (
+                            _manifest(endpoint, capabilities)
+                            if endpoint and not builtin
+                            else {}
+                        ),
+                        "enabled": builtin or bool(endpoint),
                     },
                 )
                 created += 1

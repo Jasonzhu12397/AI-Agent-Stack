@@ -180,11 +180,29 @@ is run by the deployment after seeding.
 
 A connector whose variable is unset is still registered but disabled, and the
 composer lists it with the variable it needs instead of a dead button. Set
-`WECOM_CONNECTOR_URL` (plus a credential reference for the auth-required
-ones), `MAP_CONNECTOR_URL` or `WEATHER_CONNECTOR_URL`, re-run the command and
-the row becomes installable; installation goes through the ordinary
-`agent-plugin-installations` endpoint, so grants, credential validation and
-the invocation audit are the same as any other plugin.
+`WECOM_CONNECTOR_URL` (plus a credential reference for the auth-required ones),
+re-run the command and the row becomes installable; installation goes through
+the ordinary `agent-plugin-installations` endpoint, so grants, credential
+validation and the invocation audit are the same as any other plugin.
+
+地图 and 天气 are declared `"builtin": true` with protocol `open_data`: their
+capabilities run inside the platform (`core/open_data.py`) against keyless
+providers — the Open-Meteo geocoder for place lookup, the OSRM demo router for
+driving routes and wttr.in for current conditions and the daily forecast — so
+they are enabled without an operator endpoint or API key. The catalog declares
+each capability's real `input_schema`, `query_params` and `output_schema`, so
+the chat tool carries typed arguments (`place`, `origin`, `destination`, `days`)
+rather than one opaque prompt string.
+
+## Session tokens for proxied consoles
+
+An access proxy or in-app webview can drop or partition the session cookie,
+which used to turn every request after sign-in into a 401 that the shell
+reported as "登录已过期". `POST /api/v1/auth/login/` now also returns
+`session_token` (the same server-side session key), the console stores it and
+sends `X-Session-Token` on every call, and `core/api_auth.py` resolves that
+header against the session store. CSRF is not re-checked for the header path:
+the token travels in a custom header that a cross-site page cannot set.
 
 ## Local development database
 
