@@ -122,11 +122,16 @@ TenantTokenBudget.objects.update_or_create(
 )
 
 providers = [
-    ("DeepSeek V3 (domestic)", "openai_compatible", "https://api.deepseek.example/v1", "domestic"),
-    ("Qwen Max (domestic)", "openai_compatible", "https://dashscope.example/v1", "domestic"),
+    (
+        "DeepSeek V4.1 (domestic)",
+        "openai_compatible",
+        "https://api.deepseek.example/v1",
+        "domestic",
+    ),
+    ("Qwen3.8 Max (domestic)", "openai_compatible", "https://dashscope.example/v1", "domestic"),
     ("Local echo", "fake", "", "domestic"),
     (
-        "GPT-4o (overseas, unroutable)",
+        "GPT-5.6 (overseas, unroutable)",
         "openai_compatible",
         "https://api.openai.example/v1",
         "overseas",
