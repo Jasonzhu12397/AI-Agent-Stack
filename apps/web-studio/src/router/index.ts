@@ -5,6 +5,8 @@ import { resolveNavigation } from "./guard";
 import { settingsRoutes } from "../settings/routes";
 import LoginView from "../components/LoginView.vue";
 import WorkspaceView from "../components/WorkspaceView.vue";
+import ChatWorkspaceView from "../components/ChatWorkspaceView.vue";
+import ScheduledJobsView from "../components/ScheduledJobsView.vue";
 import Metal3FleetView from "../components/Metal3FleetView.vue";
 import type { CurrentUser } from "../services/api";
 
@@ -27,11 +29,11 @@ type WorkspaceSection =
   | "governance"
   | "audit"
   | "organization"
-  | "docs";
+  | "docs"
+  | "scheduled";
 
 const WORKSPACE_SECTIONS: { path: string; section: WorkspaceSection }[] = [
   { path: "/", section: "overview" },
-  { path: "/chat", section: "chat" },
   { path: "/models", section: "models" },
   { path: "/agents", section: "agents" },
   { path: "/teams", section: "teams" },
@@ -48,6 +50,20 @@ const WORKSPACE_SECTIONS: { path: string; section: WorkspaceSection }[] = [
 
 const legacyRoutes: RouteRecordRaw[] = [
   { path: "/login", name: "login", component: LoginView, meta: {} },
+  // The chat console and the scheduler are full-surface workbenches, so they
+  // mount their own views instead of the generic section workspace.
+  {
+    path: "/chat",
+    name: "chat-workspace",
+    component: ChatWorkspaceView,
+    meta: { section: "chat" },
+  },
+  {
+    path: "/scheduled",
+    name: "scheduled-jobs",
+    component: ScheduledJobsView,
+    meta: { section: "scheduled" },
+  },
   ...WORKSPACE_SECTIONS.map(({ path, section }) => ({
     path,
     name: `workspace-${section}`,

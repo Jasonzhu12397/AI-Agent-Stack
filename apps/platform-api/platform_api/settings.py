@@ -216,3 +216,8 @@ BMC_VAULT_TIMEOUT_SECONDS = _positive_float_env("BMC_VAULT_TIMEOUT_SECONDS", "5"
 PLATFORM_REGISTRY_HOST = os.getenv(
     "PLATFORM_REGISTRY_HOST", "registry.ai-agent-stack.internal"
 ).strip()
+
+# Chat attachments are the only user-supplied bytes the console stores. The
+# directory is deployment-controlled so containers can mount a volume.
+MEDIA_ROOT = os.getenv("MEDIA_ROOT", str(BASE_DIR / ".devdata" / "media"))
+MEDIA_URL = "/media/"

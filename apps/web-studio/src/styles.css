@@ -71,6 +71,13 @@ body.app-shell { height: 100dvh; overflow: hidden; }
 /* Vue mounts into #app, so the height chain has to pass through it too. */
 #app { height: 100%; }
 body.app-shell #app { display: flex; flex-direction: column; }
+/* Left rail owns the navigation; the main column keeps the page content and
+   scrolls on its own. Neither column is a third "task" pane: task details open
+   as a drawer or a dialog from inside the console. */
+.layout-shell { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.layout-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; }
+/* The chat console sizes itself to the viewport, so the column must not scroll. */
+.layout-main-fixed { overflow: hidden; }
 .shell { display: flex; flex-direction: column; flex: 1; min-height: 0; width: min(1400px, calc(100% - 40px)); margin: 0 auto; }
 .workspace { flex: 1; min-height: 0; overflow-y: auto; }
 /* Workbench: no page padding, no card chrome, the canvas is the page. */
@@ -994,4 +1001,21 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   /* Node buttons stay on one swipeable row instead of stacking above the graph. */
   .workspace-workbench .workflow-node-toolbar { flex-wrap: nowrap; overflow-x: auto; margin: 6px 0 8px; padding-bottom: 2px; }
   .workspace-workbench .workflow-node-toolbar .task-note { flex: 0 0 auto; }
+}
+
+/* The chat console is a direct child of the shell, so it claims the remaining
+   height instead of measuring it in JavaScript. */
+.shell-wide > .chat-workspace { flex: 1; min-height: 0; }
+/* Phones: the rail collapses into one swipeable strip of destinations. The
+   project and recent-chat lists live inside the console (composer project chip
+   and the thread title), so they do not eat half the screen up here. */
+@media (max-width: 900px) {
+  .layout-shell { flex-direction: column; }
+  .workspace-rail { width: auto !important; flex: 0 0 auto !important; height: auto !important; border-right: none !important; border-bottom: 1px solid #e2eaf1; }
+  .workspace-rail .rail-scroll { display: flex !important; flex-direction: row !important; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 8px 10px !important; scrollbar-width: none; }
+  .workspace-rail .rail-scroll::-webkit-scrollbar { display: none; }
+  .workspace-rail .rail-primary { display: flex !important; gap: 6px; flex-wrap: nowrap; }
+  .workspace-rail .rail-item { width: auto !important; white-space: nowrap; padding: 7px 10px !important; }
+  .workspace-rail .rail-scope, .workspace-rail .rail-account { display: none !important; }
+  .layout-main-fixed { overflow: hidden; }
 }

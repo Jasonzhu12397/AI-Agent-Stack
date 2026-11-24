@@ -1533,6 +1533,11 @@ class AuditEvent(models.Model):
 
 
 from core import billing_models, data_controls_models, settings_models  # noqa: E402,F401
-from core.chat_models import AgentChatMessage, AgentChatThread  # noqa: E402,F401
+from core.chat_models import (  # noqa: E402,F401
+    AgentChatAttachment,  # noqa: E402,F401
+    AgentChatMessage,
+    AgentChatThread,
+)
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
 from core.registry_models import RegistryEvent, RegistryImage  # noqa: E402,F401
+from core.scheduled_models import ScheduledChatJob  # noqa: E402,F401

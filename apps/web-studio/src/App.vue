@@ -4,6 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import en from "element-plus/es/locale/lang/en";
 import { locale, setLocale, t } from "./i18n";
+import WorkspaceRail from "./components/WorkspaceRail.vue";
+import { requestNewChat } from "./state/workspace";
 import {
   apiBase,
   getPlatformRoadmap,
@@ -20,26 +22,12 @@ const router = useRouter();
 const elementLocale = computed(() => (locale.value === "zh" ? zhCn : en));
 // Chat, workflow and infrastructure surfaces are working canvases, not reading
 // pages: they take the whole viewport width the way ChatGPT and Doubao do.
-const WIDE_SECTIONS = new Set(["chat", "workflows", "infrastructure", "agents", "marketplace"]);
+const WIDE_SECTIONS = new Set(["chat", "scheduled", "workflows", "infrastructure", "agents", "marketplace"]);
 const isWideSection = computed(() => WIDE_SECTIONS.has(route.meta.section as string));
+// The chat console carries its own title bar and composer, so the shared top bar
+// would only steal height from the transcript.
+const isChatSection = computed(() => route.meta.section === "chat");
 const appVersion = __APP_VERSION__;
-
-const navItems = [
-  { to: "/", label: "Overview" },
-  { to: "/chat", label: "Control Agent" },
-  { to: "/models", label: "Model Manager" },
-  { to: "/agents", label: "Agent Studio" },
-  { to: "/workflows", label: "Workflow DAG" },
-  { to: "/integrations", label: "Integration Hub" },
-  { to: "/marketplace", label: "Agent Marketplace" },
-  { to: "/knowledge", label: "Knowledge Bases" },
-  { to: "/registry", label: "Image Registry" },
-  { to: "/infrastructure", label: "Metal3 Fleet" },
-  { to: "/governance", label: "Governance" },
-  { to: "/audit", label: "Audit & Activity" },
-  { to: "/organization", label: "Organization" },
-  { to: "/docs", label: "Docs & Matrix" },
-];
 
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
@@ -119,7 +107,6 @@ const roadmapSummary = computed(() => {
   return `${verified.join(", ")} verified, ${open.join(", ")} not yet`;
 });
 
-const isSettings = computed(() => route.path.startsWith("/settings"));
 // The Control Agent spends the whole viewport on the conversation, so the
 // marketing hero stays out of its way.
 const isChat = computed(() => route.path === "/chat");
@@ -127,9 +114,12 @@ const isChat = computed(() => route.path === "/chat");
 // working section gets the viewport instead of a marketing banner on top.
 const isOverview = computed(() => route.path === "/");
 
-function isActive(to: string): boolean {
-  if (to === "/") return route.path === "/";
-  return route.path === to || route.path.startsWith(`${to}/`);
+// "New conversation" and "New task" are rail actions: the request lands on the
+// shared selection store, and the chat view either creates the thread or flips
+// the next one into plan-first mode.
+function startConversation(mode: "chat" | "task"): void {
+  void router.push("/chat");
+  requestNewChat(mode);
 }
 
 async function checkHealth(): Promise<void> {
@@ -183,8 +173,15 @@ onUnmounted(() => {
 <template>
   <el-config-provider :locale="elementLocale">
     <router-view v-if="isLogin" @authenticated="onAuthenticated" />
-    <main v-else class="shell" :class="{ 'shell-wide': isWideSection }">
-      <header class="topbar">
+    <div v-else class="layout-shell">
+      <WorkspaceRail
+        :user="currentUser?.username"
+        @new-chat="startConversation('chat')"
+        @new-task="startConversation('task')"
+      />
+      <div class="layout-main" :class="{ 'layout-main-fixed': isChatSection }">
+    <main class="shell" :class="{ 'shell-wide': isWideSection }">
+      <header v-if="!isChatSection" class="topbar">
         <router-link class="brand" to="/">
           <span class="brand-mark">A</span>
           <span>AI Agent <strong>Studio</strong></span>
@@ -206,17 +203,6 @@ onUnmounted(() => {
         :closable="true"
         @close="authError = ''"
       />
-      <nav class="main-nav" aria-label="Main navigation">
-        <router-link
-          v-for="item in navItems"
-          :key="item.to"
-          :to="item.to"
-          :class="{ active: isActive(item.to) }"
-        >
-          {{ item.label }}
-        </router-link>
-        <router-link to="/settings/account" :class="{ active: isSettings }">Settings</router-link>
-      </nav>
       <section v-if="isOverview" class="hero">
         <p class="eyebrow">AGENT PLATFORM</p>
         <h1>Build, orchestrate<br /><span>and govern AI agents.</span></h1>
@@ -274,10 +260,12 @@ onUnmounted(() => {
           </div>
         </section>
       </template>
-      <footer>
+      <footer v-if="!isWideSection">
         <span>AI Agent Studio <span class="muted">·</span> {{ roadmapSummary }}</span>
         <span>Policy first. Observable by design.</span>
       </footer>
     </main>
+      </div>
+    </div>
   </el-config-provider>
 </template>

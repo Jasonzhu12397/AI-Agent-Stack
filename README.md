@@ -35,7 +35,17 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 ### 1. Application multi-Agent runtime
 
 - **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
-- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace covering Agent Studio, Workflow Studio (visual DAG canvas with node inspector and edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure Agents, Metal3 Fleet with Redfish firmware management, Image Registry, Governance, Audit and Organization. The whole SaaS interface switches between English and Chinese through the central locale engine, persisted per browser and backed by Element Plus locale packs.
+- **Web Studio** (`apps/web-studio`): Vue 3 operator workspace with a persistent
+  left rail and a full-surface Control Agent chat column — thread-level
+  execution target, reasoning effort, goal and plan-first settings, file and
+  knowledge-base attachments, and scheduled turns the worker executes
+  unattended (see `docs/chat-workspace.md`). The rail and the column together
+  cover Agent Studio, Workflow Studio (visual DAG canvas with node inspector and
+  edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure
+  Agents, Metal3 Fleet with Redfish firmware management, Image Registry,
+  Governance, Audit, Organization and Scheduled tasks. The whole SaaS interface switches between
+  English and Chinese through the central locale engine, persisted per browser
+  and backed by Element Plus locale packs.
 - **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent, Workflow and Agent Team tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
 - **Agent Teams**: a project-scoped team publishes a versioned roster and one strategy: `sequential`, `coordinator`, `parallel` fan-out or `router` dispatch. Publishing materializes an immutable Workflow version made of `agent` and routing nodes, so every team run reuses the same lease, token-budget, retry and audit machinery as ordinary Workflows. Runs are idempotent by `Idempotency-Key` and expose per-member step records. See `docs/agent-teams.md`; members with plugin tools are rejected until per-member tool approvals exist.
 - **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.

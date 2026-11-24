@@ -2258,7 +2258,12 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
-  context: { skills?: string[]; plugins?: string[] };
+  context: {
+    skills?: string[];
+    plugins?: string[];
+    attachments?: string[];
+    knowledge_documents?: string[];
+  };
   usage: Record<string, unknown>;
   error_code?: string;
   created_at: string;
@@ -2270,6 +2275,10 @@ export type ChatThread = {
   project_id: string;
   model_config_id: string | null;
   archived: boolean;
+  execution_target: "cloud" | "local";
+  effort: "auto" | "low";
+  goal: string;
+  plan_first: boolean;
   created_at: string;
   updated_at: string;
   last_message?: { role: string; content: string; created_at: string };
@@ -2300,7 +2309,15 @@ export function createChatThread(
 
 export function updateChatThread(
   threadId: string,
-  payload: { title?: string; archived?: boolean; model_config_id?: string | null },
+  payload: {
+    title?: string;
+    archived?: boolean;
+    model_config_id?: string | null;
+    execution_target?: "cloud" | "local";
+    effort?: "auto" | "low";
+    goal?: string;
+    plan_first?: boolean;
+  },
 ): Promise<ChatThread> {
   return request<ChatThread>(`/api/v1/agent-chat/threads/${threadId}/`, {
     method: "PATCH",
@@ -2308,27 +2325,72 @@ export function updateChatThread(
   });
 }
 
-export function getChatThread(threadId: string): Promise<ChatThread & { messages: ChatMessage[] }> {
-  return request<ChatThread & { messages: ChatMessage[] }>(`/api/v1/agent-chat/threads/${threadId}/`);
+export function getChatThread(
+  threadId: string,
+): Promise<ChatThread & { messages: ChatMessage[]; attachments?: ChatAttachment[] }> {
+  return request<ChatThread & { messages: ChatMessage[]; attachments?: ChatAttachment[] }>(
+    `/api/v1/agent-chat/threads/${threadId}/`,
+  );
 }
 
 export function deleteChatThread(threadId: string): Promise<void> {
   return request<void>(`/api/v1/agent-chat/threads/${threadId}/`, { method: "DELETE" });
 }
 
+export type ChatAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+};
+
 export function sendChatMessage(
   threadId: string,
   payload: {
     content: string;
     model_config_id?: string | null;
-    context?: { skills?: string[]; plugins?: string[] };
+    context?: {
+      skills?: string[];
+      plugins?: string[];
+      attachments?: string[];
+      knowledge_documents?: string[];
+    };
   },
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ user: ChatMessage; assistant: ChatMessage }> {
   return request<{ user: ChatMessage; assistant: ChatMessage }>(
     `/api/v1/agent-chat/threads/${threadId}/messages/`,
-    { method: "POST", body: JSON.stringify(payload) },
+    { method: "POST", body: JSON.stringify(payload), signal: options.signal },
   );
 }
+
+export function uploadChatAttachment(
+  threadId: string,
+  file: File,
+): Promise<ChatAttachment> {
+  const body = new FormData();
+  body.append("file", file);
+  return request<ChatAttachment>(`/api/v1/agent-chat/threads/${threadId}/attachments/`, {
+    method: "POST",
+    body,
+  });
+}
+
+export function getChatAttachments(
+  threadId: string,
+): Promise<{ items: ChatAttachment[] }> {
+  return request(`/api/v1/agent-chat/threads/${threadId}/attachments/`);
+}
+
+export function deleteChatAttachment(attachmentId: string): Promise<void> {
+  return request(`/api/v1/agent-chat/attachments/${attachmentId}/`, { method: "DELETE" });
+}
+
+export function chatAttachmentUrl(attachmentId: string): string {
+  return `/api/v1/agent-chat/attachments/${attachmentId}/`;
+}
+
 
 export type RoadmapItem = {
   code: string;
@@ -2499,4 +2561,96 @@ export function getRegistryImageEvents(
   imageId: string,
 ): Promise<{ events: RegistryEvent[] }> {
   return request(registryBase(tenantId, projectId) + "/images/" + imageId + "/events/");
+}
+
+// ---------------------------------------------------------------------------
+// Recurring Control Agent turns
+// ---------------------------------------------------------------------------
+export type ScheduledJob = {
+  id: string;
+  name: string;
+  prompt: string;
+  cadence: "hourly" | "daily" | "weekly";
+  hour: number;
+  weekday: number;
+  execution_target: "cloud" | "local";
+  effort: "auto" | "low";
+  status: "active" | "paused";
+  enabled: boolean;
+  thread_id: string | null;
+  model_config_id: string | null;
+  next_run_at: string;
+  last_run_at: string | null;
+  last_error_code: string;
+};
+
+function scheduledBase(tenantId: string, projectId: string): string {
+  return `/api/v1/tenants/${tenantId}/projects/${projectId}/scheduled-jobs`;
+}
+
+export function getScheduledJobs(
+  tenantId: string,
+  projectId: string,
+): Promise<{ items: ScheduledJob[] }> {
+  return request(`${scheduledBase(tenantId, projectId)}/`);
+}
+
+export function createScheduledJob(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    name: string;
+    prompt: string;
+    cadence: "hourly" | "daily" | "weekly";
+    hour: number;
+    weekday?: number;
+    execution_target?: "cloud" | "local";
+    effort?: "auto" | "low";
+    model_config_id?: string | null;
+  },
+): Promise<ScheduledJob> {
+  return request(`${scheduledBase(tenantId, projectId)}/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateScheduledJob(
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+  payload: {
+    name?: string;
+    prompt?: string;
+    cadence?: "hourly" | "daily" | "weekly";
+    hour?: number;
+    weekday?: number;
+    enabled?: boolean;
+    effort?: "auto" | "low";
+    execution_target?: "cloud" | "local";
+  },
+): Promise<ScheduledJob> {
+  return request(`${scheduledBase(tenantId, projectId)}/${jobId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteScheduledJob(
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+): Promise<void> {
+  return request(`${scheduledBase(tenantId, projectId)}/${jobId}/`, { method: "DELETE" });
+}
+
+export function runScheduledJobNow(
+  tenantId: string,
+  projectId: string,
+  jobId: string,
+): Promise<ScheduledJob> {
+  return request(`${scheduledBase(tenantId, projectId)}/${jobId}/run-now/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }

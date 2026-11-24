@@ -10,10 +10,15 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "platform_api.settings")
 django.setup()
 
+from core.scheduled_service import dispatch_due_jobs  # noqa: E402
+
 from worker_app.tasks import process_once  # noqa: E402
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger("ai-agent-worker")
+#: Recurring Control Agent turns are dispatched from this loop: the worker is
+#: the only process that owns execution time, so it also owns the clock.
+DISPATCH_INTERVAL_SECONDS = 30
 stopping = False
 poll_seconds = float(os.getenv("WORKER_POLL_SECONDS", "2"))
 worker_id = os.getenv("WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
@@ -31,9 +36,18 @@ def run() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     logger.info("Worker started (worker_id=%s, poll_seconds=%s)", worker_id, poll_seconds)
+    last_dispatch = 0.0
     for _ in count():
         if stopping:
             break
+        if time.monotonic() - last_dispatch >= DISPATCH_INTERVAL_SECONDS:
+            last_dispatch = time.monotonic()
+            try:
+                ran = dispatch_due_jobs(limit=3)
+                if ran:
+                    logger.info("Dispatched %s scheduled turn(s)", ran)
+            except Exception:
+                logger.exception("Scheduled dispatch failed")
         try:
             worked = process_once(worker_id)
             if not worked:

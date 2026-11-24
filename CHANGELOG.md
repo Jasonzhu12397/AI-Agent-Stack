@@ -8,6 +8,18 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- **Chat workspace** — the Control Agent console is now a mainstream chat
+  surface: one left rail (new task / new conversation / workbench / scheduled
+  tasks / plugins · skills · partners / knowledge / more, project and
+  conversation lists, account) and one full-width conversation column with
+  Markdown, code and an Agent execution state. Task details open in a drawer,
+  never a permanent third column. `AgentChatThread` gained `execution_target`,
+  `effort`, `goal` and `plan_first`; `effort=low` really caps output tokens.
+  `AgentChatAttachment` adds thread-scoped file uploads (20 MB, 10 per turn).
+  `ScheduledChatJob` adds hourly/daily/weekly turns executed by the worker,
+  with pause/resume and run-now. Interactive and scheduled turns share one
+  `core/chat_runtime.py`, so a scheduled turn behaves like a typed one. See
+  `docs/chat-workspace.md`.
 - **Central Container Image Registry** — a mandatory platform capability for the
   image supply chain. `RegistryImage` / `RegistryEvent` model the catalog; the
   API refuses mutable tags, gates readiness on a passed security scan, requires

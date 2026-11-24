@@ -19,22 +19,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core import provider_accounts
+from core import chat_runtime, provider_accounts
 from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
-from core.chat_models import AgentChatMessage, AgentChatThread
-from core.model_gateway import ModelGateway, ModelGatewayError
+from core.chat_models import AgentChatAttachment, AgentChatMessage, AgentChatThread
 from core.models import (
     AgentPluginInstallation,
     AuditEvent,
+    KnowledgeDocument,
     ModelConfig,
     ModelProvider,
     Project,
     Tenant,
 )
-from core.provider_accounts import AccountTokenGuard, ProviderAccountError
-from core.token_budget import TenantTokenBudgetExceeded
-from core.token_guard import AdHocTokenGuard
 
 MAX_MESSAGE_CHARS = 20000
 #: How many earlier turns travel to the model. The transcript keeps everything;
@@ -60,6 +57,10 @@ def thread_payload(thread, last_message=None):
         "project_id": str(thread.project_id),
         "model_config_id": str(thread.model_config_id) if thread.model_config_id else None,
         "archived": thread.archived,
+        "execution_target": thread.execution_target,
+        "effort": thread.effort,
+        "goal": thread.goal,
+        "plan_first": thread.plan_first,
         "created_at": thread.created_at.isoformat(),
         "updated_at": thread.updated_at.isoformat(),
     }
@@ -138,6 +139,9 @@ class AgentChatThreadDetailView(APIView):
             {
                 **thread_payload(thread),
                 "messages": [message_payload(message) for message in messages],
+                "attachments": [
+                    attachment_payload(item) for item in thread.attachments.all()
+                ],
             }
         )
 
@@ -154,6 +158,33 @@ class AgentChatThreadDetailView(APIView):
             thread.title = title.strip()[:200]
         if "archived" in request.data:
             thread.archived = bool(request.data.get("archived"))
+        if "execution_target" in request.data:
+            target = str(request.data.get("execution_target") or "").strip()
+            if target not in chat_runtime.EXECUTION_TARGETS:
+                return legacy_error_response(
+                    "execution_target must be cloud or local.",
+                    http_status=400,
+                    code="INVALID_EXECUTION_TARGET",
+                )
+            thread.execution_target = target
+        if "effort" in request.data:
+            effort = str(request.data.get("effort") or "").strip()
+            if effort not in chat_runtime.EFFORTS:
+                return legacy_error_response(
+                    "effort must be auto or low.", http_status=400, code="INVALID_EFFORT"
+                )
+            thread.effort = effort
+        if "goal" in request.data:
+            goal = request.data.get("goal")
+            if not isinstance(goal, str) or len(goal) > 500:
+                return legacy_error_response(
+                    "goal must be a string of at most 500 characters.",
+                    http_status=400,
+                    code="INVALID_GOAL",
+                )
+            thread.goal = goal.strip()
+        if "plan_first" in request.data:
+            thread.plan_first = bool(request.data.get("plan_first"))
         if "model_config_id" in request.data:
             thread.model_config = _resolve_model_config(
                 request, thread.tenant, request.data.get("model_config_id")
@@ -384,7 +415,13 @@ def _resolve_model_config(request, tenant, model_config_id):
 
 def _normalize_context(thread, raw):
     """Validate composer attachments and keep only what exists in this project."""
-    context: dict = {"project_id": str(thread.project_id), "skills": [], "plugins": []}
+    context: dict = {
+        "project_id": str(thread.project_id),
+        "skills": [],
+        "plugins": [],
+        "attachments": [],
+        "knowledge_documents": [],
+    }
     if raw in (None, ""):
         return context
     if not isinstance(raw, dict):
@@ -426,6 +463,38 @@ def _normalize_context(thread, raw):
             return "context.plugins contains a plugin not installed in this project."
     context["skills"] = sorted(set(skills))
     context["plugins"] = sorted(set(plugins))
+    attachment_ids = raw.get("attachments") or []
+    if not isinstance(attachment_ids, list) or len(attachment_ids) > 10:
+        return "context.attachments must be a list of at most 10 ids."
+    attachments = {
+        str(item.id): item
+        for item in AgentChatAttachment.objects.filter(thread=thread)
+    }
+    for attachment_id in attachment_ids:
+        if not isinstance(attachment_id, str) or attachment_id not in attachments:
+            return "context.attachments contains a file that is not attached to this thread."
+    context["attachments"] = [
+        attachments[attachment_id].filename for attachment_id in sorted(set(attachment_ids))
+    ]
+    context["attachment_ids"] = sorted(set(attachment_ids))
+    document_ids = raw.get("knowledge_documents") or []
+    if not isinstance(document_ids, list) or len(document_ids) > 10:
+        return "context.knowledge_documents must be a list of at most 10 ids."
+    documents = {
+        str(item.id): item
+        for item in KnowledgeDocument.objects.filter(
+            knowledge_base__tenant=thread.tenant,
+            knowledge_base__project=thread.project,
+            knowledge_base__is_archived=False,
+        )
+    }
+    for document_id in document_ids:
+        if not isinstance(document_id, str) or document_id not in documents:
+            return "context.knowledge_documents contains a document outside this project."
+    context["knowledge_documents"] = [
+        documents[document_id].title for document_id in sorted(set(document_ids))
+    ]
+    context["knowledge_document_ids"] = sorted(set(document_ids))
     return context
 
 
@@ -438,38 +507,11 @@ def _is_uuid(value):
 
 
 def _system_prompt(thread, context):
-    lines = [
-        "You are the Control Agent of AI-Agent-Stack, a multi-agent platform.",
-        "You own the delivery chain (Cloud Control, Target and EPH agents), the agent marketplace,",
-        "the skill catalog and the plugin installs. Answer as that operator.",
-        f"Tenant: {thread.tenant.name}",
-        f"Project: {thread.project.name}",
-    ]
-    if context.get("skills"):
-        lines.append("Skills in scope for this conversation: " + ", ".join(context["skills"]))
-    plugin_names = [
-        installation.plugin.plugin_key
-        for installation in AgentPluginInstallation.objects.filter(
-            tenant=thread.tenant, project=thread.project
-        ).select_related("plugin")
-        if str(installation.id) in context.get("plugins", [])
-    ]
-    if plugin_names:
-        lines.append("Plugins in scope: " + ", ".join(plugin_names))
-    lines.append("Be concrete: name the resources, the commands and the next step.")
-    return "\n".join(lines)
+    return chat_runtime.system_prompt(thread, context)
 
 
 def _history(thread):
-    turns = list(thread.messages.order_by("-created_at")[:CONTEXT_WINDOW])
-    turns.reverse()
-    history = []
-    for message in turns:
-        if message.role == AgentChatMessage.Role.USER:
-            history.append({"role": "user", "content": message.content})
-        elif message.role == AgentChatMessage.Role.ASSISTANT and not message.error_code:
-            history.append({"role": "assistant", "content": message.content})
-    return history
+    return chat_runtime.history(thread, CONTEXT_WINDOW)
 
 
 def _generate_reply(request, thread, model_config, context):
@@ -491,7 +533,6 @@ def _generate_reply(request, thread, model_config, context):
             code="MODEL_NOT_CONFIGURED",
         )
 
-    provider = model_config.provider
     messages = [{"role": "system", "content": _system_prompt(thread, context)}]
     messages.extend(_history(thread))
     user_message = thread.messages.last()
@@ -499,47 +540,20 @@ def _generate_reply(request, thread, model_config, context):
     idempotency_key = f"agent-chat:{thread.id}:{user_message.id}"
 
     try:
-        if provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
-            link = provider_accounts.active_link(request.user, provider)
-            if link is None:
-                return None, legacy_error_response(
-                    "Link your own account on this platform before chatting through it.",
-                    http_status=403,
-                    code="PROVIDER_ACCOUNT_NOT_LINKED",
-                )
-            result = ModelGateway(account=AccountTokenGuard(link=link)).complete(
-                model_config, messages, idempotency_key=idempotency_key
-            )
-        else:
-            guard = AdHocTokenGuard(tenant=thread.tenant, scope_ref=f"agent-chat:{thread.id}")
-            result = ModelGateway(guard=guard).complete(
-                model_config, messages, idempotency_key=idempotency_key
-            )
-    except ProviderAccountError as exc:
-        return None, _failure(request, thread, model_config, exc.code, str(exc), exc.http_status)
-    except TenantTokenBudgetExceeded as exc:
-        return None, _failure(
-            request,
-            thread,
+        content, usage = chat_runtime.generate(
+            thread.tenant,
             model_config,
-            "TENANT_TOKEN_BUDGET_EXCEEDED",
-            f"Tenant {exc.period} token budget would be exceeded.",
-            status.HTTP_402_PAYMENT_REQUIRED,
+            messages,
+            user=request.user,
+            idempotency_key=idempotency_key,
+            effort=thread.effort,
+            execution_target=thread.execution_target,
         )
-    except ModelGatewayError as exc:
-        # A rejected credential is the member's own account, not an outage, so
-        # the composer can point at the authorize flow instead of "try later".
-        http_status = (
-            status.HTTP_403_FORBIDDEN
-            if exc.code == "MODEL_CREDENTIAL_REJECTED"
-            else status.HTTP_502_BAD_GATEWAY
-        )
+    except chat_runtime.ChatRuntimeError as exc:
         return None, _failure(
-            request, thread, model_config, exc.code, str(exc), http_status
+            request, thread, model_config, exc.code, exc.message, exc.http_status
         )
-
-    usage = result.as_dict().get("usage") or {}
-    return {"content": result.content, "usage": usage}, None
+    return {"content": content, "usage": usage}, None
 
 
 def _failure(request, thread, model_config, code, message, http_status):
@@ -553,3 +567,93 @@ def _failure(request, thread, model_config, code, message, http_status):
         metadata={"error_code": code, "model_config_id": str(model_config.id)},
     )
     return legacy_error_response(message, http_status=http_status, code=code)
+
+
+#: A single attachment above this size is refused: the composer is for source
+#: documents and screenshots, not for shipping datasets through a chat box.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def attachment_payload(attachment):
+    return {
+        "id": str(attachment.id),
+        "filename": attachment.filename,
+        "content_type": attachment.content_type,
+        "size_bytes": attachment.size_bytes,
+        "created_at": attachment.created_at.isoformat(),
+    }
+
+
+class AgentChatAttachmentListCreateView(APIView):
+    """Files the member attaches to this thread through the composer."""
+
+    permission_classes = [IsAuthenticated]
+
+    def _thread(self, request, thread_id):
+        return get_object_or_404(
+            AgentChatThread.objects.filter(tenant__memberships__user=request.user),
+            pk=thread_id,
+        )
+
+    def get(self, request, thread_id):
+        thread = self._thread(request, thread_id)
+        return Response(
+            {"items": [attachment_payload(item) for item in thread.attachments.all()]}
+        )
+
+    def post(self, request, thread_id):
+        thread = self._thread(request, thread_id)
+        upload = request.FILES.get("file")
+        if upload is None:
+            return legacy_error_response(
+                "A file part named file is required.", http_status=400, code="FILE_REQUIRED"
+            )
+        if upload.size > MAX_ATTACHMENT_BYTES:
+            return legacy_error_response(
+                f"Files must be at most {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB.",
+                http_status=413,
+                code="FILE_TOO_LARGE",
+            )
+        attachment = AgentChatAttachment.objects.create(
+            thread=thread,
+            uploaded_by=request.user,
+            filename=upload.name[:255],
+            content_type=(upload.content_type or "")[:128],
+            size_bytes=upload.size,
+            file=upload,
+        )
+        return Response(attachment_payload(attachment), status=status.HTTP_201_CREATED)
+
+
+class AgentChatAttachmentDetailView(APIView):
+    """Download or remove one attachment; both require thread membership."""
+
+    permission_classes = [IsAuthenticated]
+
+    def _attachment(self, request, attachment_id):
+        return get_object_or_404(
+            AgentChatAttachment.objects.select_related("thread").filter(
+                thread__tenant__memberships__user=request.user
+            ),
+            pk=attachment_id,
+        )
+
+    def get(self, request, attachment_id):
+        from django.http import FileResponse
+
+        attachment = self._attachment(request, attachment_id)
+        response = FileResponse(
+            attachment.file.open("rb"),
+            as_attachment=True,
+            filename=attachment.filename,
+            content_type=attachment.content_type or "application/octet-stream",
+        )
+        return response
+
+    def delete(self, request, attachment_id):
+        attachment = self._attachment(request, attachment_id)
+        storage, name = attachment.file.storage, attachment.file.name
+        attachment.delete()
+        if name:
+            storage.delete(name)
+        return Response(status=status.HTTP_204_NO_CONTENT)
