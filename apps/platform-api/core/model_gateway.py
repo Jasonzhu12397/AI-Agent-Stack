@@ -61,19 +61,25 @@ def resolve_credential(credential_ref, user=None):
                 "Your saved platform credential could not be read. Link the account again.",
             )
         return secret
-    if not credential_ref.startswith("env:"):
-        raise ModelGatewayError(
-            "CREDENTIAL_REFERENCE_UNSUPPORTED",
-            "Only environment and saved member credentials are enabled.",
-        )
-    variable_name = credential_ref.removeprefix("env:")
-    secret = os.getenv(variable_name)
-    if not secret:
-        raise ModelGatewayError(
-            "MODEL_CREDENTIAL_MISSING",
-            "The configured model credential is not available to the runtime.",
-        )
-    return secret
+    # Both spellings exist in the platform: the plugin resolver uses the URI
+    # form ``env://NAME`` while older provider rows use ``env:NAME``. Accepting
+    # only one of them made a row look configured and still fail at call time.
+    for prefix in ("env://", "env:"):
+        if credential_ref.startswith(prefix):
+            variable_name = credential_ref[len(prefix) :]
+            secret = os.getenv(variable_name)
+            if not secret:
+                raise ModelGatewayError(
+                    "MODEL_CREDENTIAL_MISSING",
+                    f"Credential reference {credential_ref} is not set in this runtime. "
+                    f"Set {variable_name} in the container, or authorize your own account "
+                    "under Agent Marketplace → Platform accounts.",
+                )
+            return secret
+    raise ModelGatewayError(
+        "CREDENTIAL_REFERENCE_UNSUPPORTED",
+        "Only environment and saved member credentials are enabled.",
+    )
 
 
 def _is_local_http_provider(provider):

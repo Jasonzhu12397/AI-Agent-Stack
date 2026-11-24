@@ -121,22 +121,19 @@ TenantTokenBudget.objects.update_or_create(
     tenant=tenant, defaults={"daily_limit": 1_000_000, "monthly_limit": 20_000_000}
 )
 
-providers = [
-    (
-        "DeepSeek V4.1 (domestic)",
-        "openai_compatible",
-        "https://api.deepseek.example/v1",
-        "domestic",
-    ),
-    ("Qwen3.8 Max (domestic)", "openai_compatible", "https://dashscope.example/v1", "domestic"),
-    ("Local echo", "fake", "", "domestic"),
-    (
-        "GPT-5.6 (overseas, unroutable)",
-        "openai_compatible",
-        "https://api.openai.example/v1",
-        "overseas",
-    ),
-]
+# Demo providers carry no real credential: the local echo model answers, and
+# every remote platform is reached through the member's own authorized account
+# in Agent Marketplace. Placeholder rows pointing at example hosts with a
+# missing environment variable only produced "credential not available" on
+# send, so they are removed instead of shipped.
+providers = [("Local echo", "fake", "", "domestic")]
+for legacy in ModelProvider.objects.filter(
+    tenant=tenant, base_url__endswith=".example/v1"
+):
+    legacy.delete()
+for legacy in ModelProvider.objects.filter(tenant=tenant, name="Local Fake Provider"):
+    legacy.delete()
+
 for name, kind, base, region in providers:
     ModelProvider.objects.update_or_create(
         tenant=tenant,

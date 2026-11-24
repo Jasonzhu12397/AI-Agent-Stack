@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """Report how model credentials resolve inside the console container.
 
 An operator sees "The configured model credential is not available to the
@@ -47,8 +48,9 @@ def describe(reference):
 from django.conf import settings as django_settings  # noqa: E402
 
 print(f"== db == {django_settings.DATABASES['default'].get('NAME')}")
+from core.models import ModelConfig as _Config  # noqa: E402
+from core.models import Tenant as _Tenant
 from django.db import connection  # noqa: E402
-from core.models import ModelConfig as _Config, Tenant as _Tenant  # noqa: E402
 
 with connection.cursor() as cursor:
     cursor.execute("select count(*) from core_modelprovider")

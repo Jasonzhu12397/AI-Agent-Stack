@@ -190,3 +190,22 @@ def test_rejected_key_reports_the_credential_not_an_outage(workspace, monkeypatc
 
     assert caught.value.code == "MODEL_CREDENTIAL_REJECTED"
     assert caught.value.retryable is False
+
+
+def test_both_environment_spellings_resolve(monkeypatch):
+    """``env:NAME`` and ``env://NAME`` are the same reference, so both work."""
+
+    monkeypatch.setenv("DEMO_MODEL_KEY", "sk-env-value")
+
+    assert resolve_credential("env:DEMO_MODEL_KEY") == "sk-env-value"
+    assert resolve_credential("env://DEMO_MODEL_KEY") == "sk-env-value"
+
+
+def test_missing_environment_names_the_variable(monkeypatch):
+    monkeypatch.delenv("PLUGIN_SECRET_MODEL_KEY", raising=False)
+
+    with pytest.raises(ModelGatewayError) as caught:
+        resolve_credential("env://PLUGIN_SECRET_MODEL_KEY")
+
+    assert caught.value.code == "MODEL_CREDENTIAL_MISSING"
+    assert "PLUGIN_SECRET_MODEL_KEY" in str(caught.value)
