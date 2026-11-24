@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PlatformAccountsPanel from "./PlatformAccountsPanel.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import {
   catalogInstallPayload,
@@ -324,6 +325,8 @@ onMounted(() => void refresh());
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
+
+    <PlatformAccountsPanel :tenant-id="props.tenantId" />
 
     <section class="integration-panel marketplace-browse">
       <div class="integration-panel-title">
