@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { t, tf } from "../i18n";
 import {
   createWorkflow,
   createWorkflowRun,
@@ -16,6 +17,84 @@ import {
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
+
+// The DAG claims the remaining viewport instead of a fixed 640px box: measure
+// where the canvas starts and expose it as a CSS variable for the stylesheet.
+const studioRoot = ref<HTMLElement | null>(null);
+const canvasScroll = ref<HTMLElement | null>(null);
+const studioVars = ref<Record<string, string>>({});
+// The DAG is drawn at fixed node sizes, so a wide screen would leave it tiny in
+// the corner. Fit it to the viewport box instead, clamped so a two-node draft
+// does not turn into billboards.
+const canvasScale = ref(1);
+// The painted sheet never shrinks below the visible box, otherwise the dot grid
+// stops mid-air and the draft looks pasted into the corner of a blank panel.
+const paintWidth = ref(0);
+const paintHeight = ref(0);
+let resizeObserver: ResizeObserver | null = null;
+const scaledWidth = computed(() => Math.round((paintWidth.value || canvasLayout.value.width) * canvasScale.value));
+const scaledHeight = computed(() => Math.round((paintHeight.value || canvasLayout.value.height) * canvasScale.value));
+
+function fitCanvas(): void {
+  const box = canvasScroll.value;
+  if (!box) return;
+  const width = box.clientWidth - 16;
+  const height = box.clientHeight - 16;
+  const layout = canvasLayout.value;
+  if (!width || !height || !layout.width || !layout.height) return;
+  const raw = Math.min(width / layout.width, height / layout.height);
+  const scale = Math.max(0.6, Math.min(2, Number(raw.toFixed(3))));
+  canvasScale.value = scale;
+  paintWidth.value = Math.max(layout.width, Math.round(width / scale));
+  paintHeight.value = Math.max(layout.height, Math.round(height / scale));
+}
+
+function fitStudio(): void {
+  const root = studioRoot.value;
+  if (!root) return;
+  // Measure the canvas box itself once it exists; the +150 estimate drifts
+  // because the toolbar above the canvas wraps at narrow widths.
+  const boxTop = canvasScroll.value?.getBoundingClientRect().top;
+  const offset = Math.round(
+    typeof boxTop === "number" && boxTop > 0
+      ? boxTop
+      : root.getBoundingClientRect().top + 150,
+  );
+  studioVars.value = { "--studio-canvas-height": `calc(100dvh - ${offset}px - 16px)` };
+  fitCanvas();
+}
+
+onMounted(() => {
+  fitStudio();
+  window.addEventListener("resize", fitStudio);
+  window.addEventListener("resize", fitCanvas);
+  // The scroll box only has a height once the measured CSS variable lands,
+  // so fit again after paint and whenever the graph changes.
+  // Fonts, the workflow toolbar and the draft panel all settle over the first
+  // frames and each of them moves the canvas box, so measure a few times.
+  void nextTick(() => fitStudio());
+  window.setTimeout(() => fitStudio(), 150);
+  window.setTimeout(() => fitStudio(), 450);
+  const observer = new ResizeObserver(() => {
+    fitStudio();
+    fitCanvas();
+  });
+  if (canvasScroll.value) observer.observe(canvasScroll.value);
+  // Loading a draft grows the toolbar above the canvas, which moves the box
+  // down; observing the section keeps the measured height honest.
+  const root = studioRoot.value;
+  if (root) {
+    observer.observe(root);
+    for (const child of Array.from(root.children)) observer.observe(child);
+  }
+  resizeObserver = observer;
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", fitStudio);
+  window.removeEventListener("resize", fitCanvas);
+  resizeObserver?.disconnect();
+});
 const workflows = ref<WorkflowDraft[]>([]);
 const selectedWorkflowId = ref("");
 const selectedWorkflow = ref<WorkflowDraft | null>(null);
@@ -183,6 +262,18 @@ const canvasLayout = computed(() => {
   };
 });
 
+// The graph (and its scroll box) can appear after the first paint, e.g. once
+// the draft finishes loading, so refit whenever either one becomes measurable.
+watch(canvasLayout, () => nextTick(fitCanvas));
+watch(canvasScroll, (el) => {
+  if (!el) return;
+  nextTick(() => {
+    fitStudio();
+    fitCanvas();
+  });
+  resizeObserver?.observe(el);
+});
+
 function commitDefinition(definition: Record<string, unknown>): void {
   definitionText.value = JSON.stringify(definition, null, 2);
   validationResult.value = null;
@@ -209,8 +300,10 @@ function startNodeDrag(event: PointerEvent, item: CanvasNode): void {
 
 function onCanvasPointerMove(event: PointerEvent): void {
   if (!dragState.value) return;
-  const nextX = Math.max(0, dragState.value.originX + event.clientX - dragState.value.startX);
-  const nextY = Math.max(0, dragState.value.originY + event.clientY - dragState.value.startY);
+  // Pointer deltas are screen pixels; the canvas is scaled, so divide them
+  // back into layout space or a node drifts away from the cursor.
+  const nextX = Math.max(0, dragState.value.originX + (event.clientX - dragState.value.startX) / canvasScale.value);
+  const nextY = Math.max(0, dragState.value.originY + (event.clientY - dragState.value.startY) / canvasScale.value);
   canvasPositions.value = {
     ...canvasPositions.value,
     [dragState.value.nodeId]: { x: nextX, y: nextY },
@@ -232,27 +325,27 @@ function applyNodeDraft(): void {
     : [];
   const index = nodes.findIndex((node) => String(node.id) === selectedNodeId.value);
   if (index < 0) {
-    error.value = "Select a node before applying changes.";
+    error.value = t("Select a node before applying changes.");
     return;
   }
   const nextId = nodeIdDraft.value.trim();
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(nextId)) {
-    error.value = "Node IDs must match A-Z, a-z, 0-9, underscore or dash, up to 120 characters.";
+    error.value = t("Node IDs must match A-Z, a-z, 0-9, underscore or dash, up to 120 characters.");
     return;
   }
   if (nodes.some((node, itemIndex) => itemIndex !== index && String(node.id) === nextId)) {
-    error.value = "Node IDs must be unique.";
+    error.value = t("Node IDs must be unique.");
     return;
   }
   let config: unknown;
   try {
     config = JSON.parse(nodeConfigText.value || "{}");
   } catch {
-    error.value = "Node config must be valid JSON.";
+    error.value = t("Node config must be valid JSON.");
     return;
   }
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    error.value = "Node config must be a JSON object.";
+    error.value = t("Node config must be a JSON object.");
     return;
   }
   const previousId = String(nodes[index].id ?? "");
@@ -276,7 +369,7 @@ function applyNodeDraft(): void {
     canvasPositions.value = nextPositions;
   }
   selectedNodeId.value = nextId;
-  notice.value = "Node " + nextId + " updated.";
+  notice.value = tf("Node {0} updated.", nextId);
   error.value = "";
 }
 
@@ -300,17 +393,17 @@ function removeSelectedNode(): void {
   selectedNodeId.value = "";
   edgeSource.value = "";
   edgeTarget.value = "";
-  notice.value = "Node removed.";
+  notice.value = t("Node removed.");
   error.value = "";
 }
 
 function addEdge(): void {
   if (!edgeSource.value || !edgeTarget.value) {
-    error.value = "Choose a source and target node.";
+    error.value = t("Choose a source and target node.");
     return;
   }
   if (edgeSource.value === edgeTarget.value) {
-    error.value = "Self edges are not allowed.";
+    error.value = t("Self edges are not allowed.");
     return;
   }
   const definition = parseDefinition();
@@ -325,7 +418,7 @@ function addEdge(): void {
         String(edge.target) === edgeTarget.value,
     )
   ) {
-    error.value = "That edge already exists.";
+    error.value = t("That edge already exists.");
     return;
   }
   const edge: Record<string, unknown> = {
@@ -338,7 +431,7 @@ function addEdge(): void {
   edges.push(edge);
   definition.edges = edges;
   commitDefinition(definition);
-  notice.value = "Edge added.";
+  notice.value = t("Edge added.");
   error.value = "";
 }
 
@@ -351,7 +444,7 @@ function removeEdge(index: number): void {
   edges.splice(index, 1);
   definition.edges = edges;
   commitDefinition(definition);
-  notice.value = "Edge removed.";
+  notice.value = t("Edge removed.");
   error.value = "";
 }
 
@@ -509,7 +602,7 @@ function repairSkeleton(
 
 function addWorkflowNode(type: InsertableNodeType): void {
   if (!selectedWorkflowId.value) {
-    error.value = "Select or create a workflow draft before inserting nodes.";
+    error.value = t("Select or create a workflow draft before inserting nodes.");
     return;
   }
   const definition = parseDefinition();
@@ -525,7 +618,7 @@ function addWorkflowNode(type: InsertableNodeType): void {
   const endId = String(endNode.id ?? "");
   const incoming = edges.filter((edge) => edge.target === endId);
   if (incoming.length === 0) {
-    error.value = "The end node has no incoming path; add an edge from a node to " + endId + " first.";
+    error.value = tf("The end node has no incoming path; add an edge from a node to {0} first.", endId);
     return;
   }
   // Every incoming branch gets its own processing node. A single join node
@@ -547,21 +640,19 @@ function addWorkflowNode(type: InsertableNodeType): void {
   definition.edges = edges;
   definitionText.value = JSON.stringify(definition, null, 2);
   validationResult.value = null;
-  const prefix = repairs.length > 0 ? "Draft repaired (" + repairs.join("; ") + "). " : "";
+  const prefix = repairs.length > 0 ? tf("Draft repaired ({0}). ", repairs.join("; ")) : "";
   const multiple = incoming.length > 1
-    ? " One node was inserted on each of the " + String(incoming.length) +
-      " branches into " + endId + ", because guarded branches cannot share a single join node."
+    ? tf(
+      " One node was inserted on each of the {0} branches into {1}, because guarded branches cannot share a single join node.",
+      incoming.length,
+      endId,
+    )
     : "";
   notice.value =
     prefix +
-    type.toUpperCase() +
-    " node inserted before " +
-    endId +
-    " (" +
-    insertedIds.join(", ") +
-    ")." +
+    tf("{0} node inserted before {1} ({2}).", type.toUpperCase(), endId, insertedIds.join(", ")) +
     multiple +
-    " Pick its references in Node inspector, then validate.";
+    t(" Pick its references in Node inspector, then validate.");
   error.value = "";
 }
 
@@ -571,7 +662,10 @@ async function decideStep(runId: string, nodeId: string, decision: "approve" | "
   notice.value = "";
   try {
     await decideWorkflowStep(runId, nodeId, decision, "");
-    notice.value = "Workflow step " + nodeId + (decision === "approve" ? " approved." : " rejected.");
+    notice.value = tf(
+      decision === "approve" ? "Workflow step {0} approved." : "Workflow step {0} rejected.",
+      nodeId,
+    );
     await loadRuns();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to decide the workflow step.";
@@ -588,7 +682,11 @@ async function validateDraft(): Promise<void> {
   try {
     validationResult.value = await validateWorkflow(selectedWorkflowId.value);
     if (validationResult.value.is_valid) {
-      notice.value = "DAG validation passed. " + validationResult.value.node_count + " nodes and " + validationResult.value.edge_count + " edges.";
+      notice.value = tf(
+        "DAG validation passed. {0} nodes and {1} edges.",
+        validationResult.value.node_count,
+        validationResult.value.edge_count,
+      );
     } else {
       error.value = validationResult.value.errors.join("; ");
     }
@@ -682,7 +780,7 @@ async function createDraft(): Promise<void> {
     });
     workflows.value = [...workflows.value, created];
     selectWorkflow(created.id);
-    notice.value = "Draft created. Configure the workflow definition and save it.";
+    notice.value = t("Draft created. Configure the workflow definition and save it.");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create workflow.";
   } finally {
@@ -721,7 +819,7 @@ async function saveDraft(): Promise<void> {
     );
     selectedWorkflow.value = updated;
     validationResult.value = null;
-    notice.value = "Draft saved. Published versions remain immutable.";
+    notice.value = t("Draft saved. Published versions remain immutable.");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to save workflow.";
   } finally {
@@ -739,7 +837,7 @@ async function publishDraft(): Promise<void> {
   try {
     const version = await publishWorkflow(selectedWorkflowId.value);
     await loadWorkflows();
-    notice.value = "Published immutable version v" + version.version + ".";
+    notice.value = tf("Published immutable version v{0}.", version.version);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Workflow publish failed.";
   } finally {
@@ -753,11 +851,11 @@ async function runWorkflow(): Promise<void> {
   try {
     input = JSON.parse(runInputText.value);
   } catch {
-    error.value = "Run input must be valid JSON.";
+    error.value = t("Run input must be valid JSON.");
     return;
   }
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    error.value = "Run input must be a JSON object.";
+    error.value = t("Run input must be a JSON object.");
     return;
   }
   running.value = true;
@@ -769,10 +867,10 @@ async function runWorkflow(): Promise<void> {
       input as Record<string, unknown>,
     );
     runs.value = [run, ...runs.value.filter((item) => item.id !== run.id)];
-    notice.value =
-      "Workflow run " +
-      run.id.slice(0, 8) +
-      " queued. The worker starts it within a second; Execution history shows each node's result.";
+    notice.value = tf(
+      "Workflow run {0} queued. The worker starts it within a second; Execution history shows each node's result.",
+      run.id.slice(0, 8),
+    );
     await loadRuns();
     window.setTimeout(() => void loadRuns(), 1000);
   } catch (cause) {
@@ -809,7 +907,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="workflow-studio">
+  <section ref="studioRoot" class="workflow-studio" :style="studioVars">
     <div class="workflow-heading">
       <div>
         <p class="eyebrow">WORKFLOW ORCHESTRATION</p>
@@ -834,7 +932,7 @@ onUnmounted(() => {
           />
         </el-select>
         <el-tag type="info" effect="plain">
-          {{ selectedWorkflow.is_archived ? "ARCHIVED" : selectedWorkflow.current_version ? "PUBLISHED v" + selectedWorkflow.current_version : "DRAFT ONLY" }}
+          {{ selectedWorkflow.is_archived ? t("ARCHIVED") : selectedWorkflow.current_version ? tf("PUBLISHED v{0}", selectedWorkflow.current_version) : t("DRAFT ONLY") }}
         </el-tag>
       </div>
       <section class="workflow-pipeline">
@@ -843,7 +941,7 @@ onUnmounted(() => {
             <h4>Workflow DAG</h4>
             <p class="task-note">Live visual preview of the editable draft. Server validation remains authoritative.</p>
           </div>
-          <el-tag type="info" effect="plain">{{ previewGraph.nodes.length }} nodes · {{ previewGraph.edges.length }} edges</el-tag>
+          <el-tag type="info" effect="plain">{{ tf("{0} nodes · {1} edges", previewGraph.nodes.length, previewGraph.edges.length) }}</el-tag>
         </div>
         <div class="workflow-node-toolbar">
           <span class="task-note">
@@ -859,10 +957,11 @@ onUnmounted(() => {
         </div>
         <el-alert v-if="previewGraph.parseError" :title="previewGraph.parseError" type="warning" :closable="false" />
         <div v-else class="workflow-canvas-grid">
-          <div class="workflow-canvas-scroll">
+          <div ref="canvasScroll" class="workflow-canvas-scroll">
+          <div class="workflow-canvas-frame" :style="{ width: scaledWidth + 'px', height: scaledHeight + 'px' }">
           <div
             class="workflow-canvas"
-            :style="{ width: canvasLayout.width + 'px', height: canvasLayout.height + 'px' }"
+            :style="{ width: (paintWidth || canvasLayout.width) + 'px', height: (paintHeight || canvasLayout.height) + 'px', transform: 'scale(' + canvasScale + ')' }"
             @pointerdown.self="selectedNodeId = ''"
           >
             <svg
@@ -919,6 +1018,7 @@ onUnmounted(() => {
               <code>{{ item.id }}</code>
               <small v-if="nodeDetail(item.node)">{{ nodeDetail(item.node) }}</small>
             </article>
+          </div>
           </div>
           </div>
           <aside class="workflow-node-inspector">

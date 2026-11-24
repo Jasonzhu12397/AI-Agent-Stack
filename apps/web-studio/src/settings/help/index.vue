@@ -64,7 +64,7 @@ async function submit(): Promise<void> {
       fieldErrors.value = fieldErrorsFromDetails(cause.details);
       submitError.value = `${describeError(cause.code)} (${cause.code})`;
     } else {
-      submitError.value = "Feedback could not be submitted.";
+      submitError.value = t("Feedback could not be submitted.");
     }
   }
 }

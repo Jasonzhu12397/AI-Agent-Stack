@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createAgentCommand,
@@ -242,7 +243,7 @@ async function saveBmcConfig(): Promise<void> {
   const endpoint = bmcEndpoint.value.trim();
   const credentialRef = bmcCredentialRef.value.trim();
   if (!endpoint || !credentialRef) {
-    bmcMessage.value = "BMC endpoint and credential reference are both required.";
+    bmcMessage.value = t("BMC endpoint and credential reference are both required.");
     return;
   }
   bmcBusy.value = true;
@@ -258,7 +259,7 @@ async function saveBmcConfig(): Promise<void> {
         ...(bmcTrustBundleRef.value.trim() ? { trust_bundle_ref: bmcTrustBundleRef.value.trim() } : {}),
       },
     );
-    bmcMessage.value = "BMC configuration saved.";
+    bmcMessage.value = t("BMC configuration saved.");
     bmcDialogVisible.value = false;
     await refreshData();
   } catch (cause) {
@@ -276,7 +277,7 @@ async function moveMachineLifecycle(machine: FleetMachine, target: string): Prom
   );
   if (reason === null) return;
   if (reason.trim().length < 10) {
-    lifecycleMessage.value = "A review reason of at least 10 characters is required.";
+    lifecycleMessage.value = t("A review reason of at least 10 characters is required.");
     return;
   }
   lifecycleBusy.value = machine.machine_id;
@@ -292,7 +293,7 @@ async function moveMachineLifecycle(machine: FleetMachine, target: string): Prom
         reason: reason.trim(),
       },
     );
-    lifecycleMessage.value = "Lifecycle moved to " + target + ".";
+    lifecycleMessage.value = tf("Lifecycle moved to {0}.", target);
     await refreshData();
   } catch (cause) {
     lifecycleMessage.value =
@@ -459,7 +460,7 @@ async function saveSriovConfig(): Promise<void> {
     );
     const index = deployments.value.findIndex((item) => item.id === updated.id);
     if (index >= 0) deployments.value[index] = updated;
-    sriovSaveMessage.value = "SR-IOV pool configuration saved to the deployment. It will be included in the Target Agent worker provisioning command.";
+    sriovSaveMessage.value = t("SR-IOV pool configuration saved to the deployment. It will be included in the Target Agent worker provisioning command.");
   } catch (cause) {
     sriovSaveMessage.value = cause instanceof Error ? cause.message : "Unable to save SR-IOV configuration.";
   } finally {
@@ -502,7 +503,7 @@ async function ingestBmhInventory(): Promise<void> {
   try {
     document = JSON.parse(bmhDocumentText.value);
   } catch {
-    bmhIngestMessage.value = "Inspection output must be valid JSON.";
+    bmhIngestMessage.value = t("Inspection output must be valid JSON.");
     return;
   }
   bmhIngestBusy.value = true;
@@ -533,7 +534,7 @@ async function collectAllNetworks(): Promise<void> {
   try {
     const result = await collectFleetNetwork(selectedTenantId.value, selectedProjectId.value);
     collectMessage.value =
-      "Queued " + result.queued_count + " node(s), skipped " + result.skipped_count + ".";
+      tf("Queued {0} node(s), skipped {1}.", result.queued_count, result.skipped_count);
     await refreshData();
   } catch (cause) {
     collectMessage.value = cause instanceof Error ? cause.message : "Unable to queue network collection.";
@@ -563,7 +564,7 @@ async function openNetworkPanel(machine: FleetMachine): Promise<void> {
 async function loadNetworkVerification(): Promise<void> {
   const machineId = networkMachine.value ? networkMachineId(networkMachine.value) : "";
   if (!machineId || !selectedTenantId.value || !selectedProjectId.value) {
-    networkError.value = "This machine has no persisted hardware record.";
+    networkError.value = t("This machine has no persisted hardware record.");
     return;
   }
   networkLoading.value = true;
@@ -590,7 +591,7 @@ async function requestNetworkObservation(): Promise<void> {
   networkError.value = "";
   try {
     await createAgentCommand(machine.identity.agent_node_id, "host.network.observe", {});
-    networkObserveMessage.value = "Observation queued. Wait for the Agent to finish, then re-check.";
+    networkObserveMessage.value = t("Observation queued. Wait for the Agent to finish, then re-check.");
   } catch (cause) {
     networkError.value = cause instanceof Error ? cause.message : "Unable to queue network observation.";
   }
@@ -619,7 +620,7 @@ async function openFirmwarePanel(machine: FleetMachine): Promise<void> {
 async function loadFirmwareState(): Promise<void> {
   const machineId = firmwareMachine.value ? firmwareMachineId(firmwareMachine.value) : "";
   if (!machineId) {
-    firmwareError.value = "This machine has no persisted hardware record or BMC configuration.";
+    firmwareError.value = t("This machine has no persisted hardware record or BMC configuration.");
     return;
   }
   firmwareLoading.value = true;
@@ -641,7 +642,7 @@ async function loadFirmwareState(): Promise<void> {
 async function applyFirmwareUpgrade(): Promise<void> {
   const machineId = firmwareMachine.value ? firmwareMachineId(firmwareMachine.value) : "";
   if (!machineId || !firmwareImageUrl.value.trim()) {
-    firmwareError.value = "An HTTPS firmware image URL is required.";
+    firmwareError.value = t("An HTTPS firmware image URL is required.");
     return;
   }
   firmwareBusy.value = true;
@@ -659,7 +660,7 @@ async function applyFirmwareUpgrade(): Promise<void> {
       },
     );
     firmwareJobs.value = [job, ...firmwareJobs.value.filter((item) => item.id !== job.id)];
-    firmwareMessage.value = "Firmware update submitted to the BMC. The task monitor is polled below.";
+    firmwareMessage.value = t("Firmware update submitted to the BMC. The task monitor is polled below.");
   } catch (cause) {
     firmwareError.value = cause instanceof Error ? cause.message : "Unable to submit firmware upgrade.";
   } finally {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   createAgentTeam,
@@ -193,7 +194,7 @@ function addMember(): void {
   )
     return;
   if (members.value.length >= 6) {
-    error.value = "A team can contain at most six members.";
+    error.value = t("A team can contain at most six members.");
     return;
   }
   members.value = [
@@ -208,7 +209,7 @@ function addMember(): void {
   newMemberAgentId.value = "";
   newMemberRouteLabel.value = "";
   newMemberInstructions.value =
-    "Handle your part of the task and return a concise result.";
+    t("Handle your part of the task and return a concise result.");
 }
 
 function removeMember(index: number): void {

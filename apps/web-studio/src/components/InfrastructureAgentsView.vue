@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   buildIronicWorkload,
@@ -393,21 +394,21 @@ function addInfraNetwork(): void {
   infraNetworkStatus.value = "";
   const draft = networkDraft.value;
   if (!draft.name.trim()) {
-    infraNetworkStatus.value = "Network name is required.";
+    infraNetworkStatus.value = t("Network name is required.");
     return;
   }
   if (!draft.cidr.trim() && draft.role !== "sriov") {
-    infraNetworkStatus.value = "A CIDR is required for this network role.";
+    infraNetworkStatus.value = t("A CIDR is required for this network role.");
     return;
   }
   const declaresVlan = Boolean(draft.vlan);
   if (!draft.interface.trim() && !draft.bondName.trim() && !declaresVlan) {
     infraNetworkStatus.value =
-      "Provide a NIC interface or a bond definition (a VLAN may inherit its base link).";
+      t("Provide a NIC interface or a bond definition (a VLAN may inherit its base link).");
     return;
   }
   if (draft.defaultRoute && !draft.gateway.trim()) {
-    infraNetworkStatus.value = "A default-route network needs a gateway.";
+    infraNetworkStatus.value = t("A default-route network needs a gateway.");
     return;
   }
   const network: InfraNetwork = {
@@ -468,7 +469,7 @@ async function saveInfraNetworks(): Promise<void> {
     infraNetworkProfile.value = response.profile;
     portInventory.value = response.port_inventory ?? null;
     infraNetworkStatus.value =
-      "Network profile validated. Metal3 networkData and IPPools were generated for control plane, workers and storage.";
+      t("Network profile validated. Metal3 networkData and IPPools were generated for control plane, workers and storage.");
   } catch (cause) {
     infraNetworkStatus.value =
       cause instanceof Error ? cause.message : "Unable to save infrastructure networks.";
@@ -599,7 +600,7 @@ async function enrollNode(): Promise<void> {
     enrollmentToken.value = enrolled.enrollment_token;
     enrollmentNodeId.value = enrolled.id;
     selectedNodeId.value = enrolled.id;
-    info.value = "Node enrolled. Copy the token now; it will not be shown again.";
+    info.value = t("Node enrolled. Copy the token now; it will not be shown again.");
     await loadNodes();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to enroll node.";
@@ -612,16 +613,16 @@ async function copyEnrollmentToken(): Promise<void> {
   if (!enrollmentToken.value) return;
   try {
     await navigator.clipboard.writeText(enrollmentToken.value);
-    info.value = "Enrollment token copied.";
+    info.value = t("Enrollment token copied.");
   } catch {
-    error.value = "Clipboard access was denied. Select and copy the token manually.";
+    error.value = t("Clipboard access was denied. Select and copy the token manually.");
   }
 }
 
 async function generateClusterPlan(): Promise<void> {
   if (!selectedNode.value || selectedNode.value.node_type !== "eph_node") return;
   if (!buildClusterName.value.trim() || !buildKubernetesVersion.value.trim()) {
-    error.value = "Cluster name and Kubernetes version are required.";
+    error.value = t("Cluster name and Kubernetes version are required.");
     return;
   }
   submitting.value = true;
@@ -789,7 +790,7 @@ async function runTargetPostflight(deployment: ClusterDeployment): Promise<void>
   if (!window.confirm("Confirm that CAPI / Metal3 / Ironic provisioning has completed and every worker is ready before running target-side checks?")) return;
   const targetNodeId = deploymentTargetNodeIds.value[deployment.id];
   if (!targetNodeId) {
-    error.value = "Select an online Target Cluster Agent first.";
+    error.value = t("Select an online Target Cluster Agent first.");
     return;
   }
   submitting.value = true;
@@ -798,7 +799,7 @@ async function runTargetPostflight(deployment: ClusterDeployment): Promise<void>
   try {
     await runClusterDeploymentPostflight(deployment.id, targetNodeId);
     selectedNodeId.value = targetNodeId;
-    info.value = "Read-only target cluster postflight command dispatched.";
+    info.value = t("Read-only target cluster postflight command dispatched.");
     await loadDeployments();
     await loadCommands();
   } catch (cause) {
@@ -812,7 +813,7 @@ async function cancelDeployment(deployment: ClusterDeployment): Promise<void> {
   if (!window.confirm("Cancel this cluster plan workflow?")) return;
   try {
     await cancelClusterDeployment(deployment.id);
-    info.value = "Cluster plan workflow cancelled.";
+    info.value = t("Cluster plan workflow cancelled.");
     await loadDeployments();
     await loadCommands();
   } catch (cause) {
@@ -830,7 +831,7 @@ async function approveCommand(command: AgentCommand): Promise<void> {
   error.value = "";
   try {
     await approveAgentCommand(command.id, command.plan_hash);
-    info.value = "Command approved. The node agent can now claim it.";
+    info.value = t("Command approved. The node agent can now claim it.");
     await loadCommands();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Approval failed.";
@@ -843,7 +844,7 @@ async function revokeNode(node: AgentNode): Promise<void> {
   if (!window.confirm("Revoke this node credential and cancel queued commands?")) return;
   try {
     await revokeAgentNode(node.id);
-    info.value = "Node credential revoked.";
+    info.value = t("Node credential revoked.");
     await loadNodes();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to revoke node.";

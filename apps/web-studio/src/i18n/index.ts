@@ -18,7 +18,20 @@ export function setLocale(next: Locale): void {
 
 export function t(source: string): string {
   if (locale.value === "en") return source;
-  return zhCN[source.replace(/\s+/g, " ").trim()] ?? source;
+  return zhIndex.get(source.replace(/\s+/g, " ").trim()) ?? source;
+}
+
+/**
+ * Translate a message that carries runtime values. The dictionary key is the
+ * English template with {0}, {1} placeholders, so notices built from IDs, counts
+ * and node names switch language instead of staying English.
+ */
+export function tf(source: string, ...parts: Array<string | number>): string {
+  const template = t(source);
+  return template.replace(/\{(\d+)\}/g, (_match, index: string) => {
+    const value = parts[Number(index)];
+    return value === undefined ? "" : String(value);
+  });
 }
 
 watch(locale, (next) => {
@@ -37,6 +50,13 @@ function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+// Dictionary entries written as multi-line template literals carry their
+// source formatting; index them with collapsed whitespace so a long paragraph
+// in a template still matches.
+const zhIndex: Map<string, string> = new Map(
+  Object.entries(zhCN).map(([key, value]) => [normalize(key), value]),
+);
+
 function translateValue(value: string): string {
   const trimmed = value.trim();
   const translated = t(trimmed);
@@ -53,7 +73,7 @@ function translateTextNode(node: Text): void {
     if (original !== undefined && current !== original) node.data = original;
     return;
   }
-  if (zhCN[normalize(current)] === undefined && !/\b[A-Za-z]{3,}\b/.test(normalize(current))) {
+  if (zhIndex.get(normalize(current)) === undefined && !/\b[A-Za-z]{3,}\b/.test(normalize(current))) {
     return;
   }
   const original = originalText.get(node);
@@ -61,7 +81,7 @@ function translateTextNode(node: Text): void {
     originalText.set(node, current);
   }
   const source = originalText.get(node) ?? current;
-  if (zhCN[normalize(source)] === undefined) return;
+  if (zhIndex.get(normalize(source)) === undefined) return;
   const next = translateValue(source);
   if (next !== current) node.data = next;
 }

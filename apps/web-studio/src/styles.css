@@ -64,6 +64,9 @@ a { color: inherit; text-decoration: none; }
 }
 
 .shell { width: min(1400px, calc(100% - 40px)); margin: 0 auto; }
+/* Working canvases take the viewport: a chat column or a DAG pinned into a
+ * 1400px strip leaves the right half of a wide screen empty. */
+.shell-wide { width: calc(100% - 32px); max-width: none; }
 .topbar { height: 84px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e3eaf2; }
 .brand { display: flex; align-items: center; gap: 12px; font-size: 16px; letter-spacing: -.3px; }
 .brand strong { color: #0a7f58; }
@@ -124,6 +127,16 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .task-create .el-input { flex: 1; }
 .task-table { width: 100%; margin-top: 10px; }
 .task-note { margin: 16px 0 0; color: #566976; font-size: 11px; line-height: 1.6; }
+/* The chat layout variant has two classes, so the single-class collapse above
+   never applied on a phone: call it out with matching specificity. */
+@media (max-width: 900px) {
+  .workspace-grid.chat-layout { grid-template-columns: minmax(0, 1fr); }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  /* On a phone the conversation is the destination; the context pickers
+     follow it instead of pushing the transcript below the fold. */
+  .workspace-grid.chat-layout > :not(.workspace-sidebar) { order: 1; }
+  .workspace-grid.chat-layout .workspace-sidebar { order: 2; padding: 12px; }
+}
 @media (max-width: 760px) { .workspace-grid { grid-template-columns: 1fr; } .task-create { flex-direction: column; } .workspace-heading { align-items: flex-start; flex-direction: column; } }
 
 .model-manager { margin-top: 30px; padding-top: 24px; border-top: 1px solid #e3eaf2; }
@@ -183,9 +196,13 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-step-list span { padding: 4px 7px; border: 1px solid #e3eaf2; border-radius: 6px; }
 .workflow-step-list .workflow-step-entry { display: inline-flex; align-items: center; gap: 6px; }
 
-.workflow-canvas-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .7fr); gap: 12px; align-items: start; }
-.workflow-canvas-scroll { overflow: auto; max-height: 640px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 10px; }
-.workflow-canvas { position: relative; background-image: radial-gradient(ellipse at 75% 0%, #ffffff 0, #f5f9fc 48%); background-size: 22px 22px; }
+.workflow-canvas-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 12px; align-items: stretch; }
+/* The canvas and the inspector split the remaining viewport instead of a fixed
+ * 640px box, so a taller screen shows more of the DAG. */
+.workflow-canvas-scroll { display: flex; align-items: center; justify-content: center; overflow: auto; height: var(--studio-canvas-height, calc(100dvh - 380px)); min-height: 360px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 10px; }
+.workflow-node-inspector { max-height: var(--studio-canvas-height, calc(100dvh - 380px)); overflow: auto; }
+.workflow-canvas-frame { position: relative; }
+.workflow-canvas { position: relative; transform-origin: top left; background-image: radial-gradient(ellipse at 75% 0%, #ffffff 0, #f5f9fc 48%); background-size: 22px 22px; }
 .workflow-canvas-edges { position: absolute; inset: 0; pointer-events: none; }
 .workflow-canvas-node { position: absolute; display: grid; gap: 3px; padding: 10px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 9px; box-shadow: 0 8px 20px #05080f88; cursor: grab; user-select: none; }
 .workflow-canvas-node strong { overflow: hidden; color: #121f28; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -202,7 +219,11 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-edge-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .workflow-edge-list span { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; color: #0a7f58; border: 1px solid #e3eaf2; border-radius: 6px; font-size: 10px; }
 .workflow-edge-remove { padding: 0 3px; color: #d92d20; background: transparent; border: 0; cursor: pointer; }
-@media (max-width: 900px) { .workflow-canvas-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) {
+  .workflow-canvas-grid { grid-template-columns: minmax(0, 1fr); }
+  .workflow-canvas-scroll { height: var(--studio-canvas-height, calc(100dvh - 320px)); min-height: 280px; }
+  .workflow-node-inspector { max-height: none; }
+}
 @media (max-width: 900px) { .workflow-editor-grid { grid-template-columns: 1fr; } }
 
 
@@ -590,6 +611,17 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 }
 .main-nav a:hover { color: #121f28; background: #eef5fa; }
 .main-nav a.active { color: #0a7f58; border-color: #bfe8d7; background: #e6f7f1; }
+/* Thirteen destinations on one laptop row: tighten the chips instead of letting
+   the nav wrap into a second line. */
+@media (max-width: 1500px) { .main-nav a { padding: 8px 9px; font-size: 11.5px; } }
+@media (max-width: 640px) {
+  .topbar { height: 64px; gap: 8px; }
+  .brand { font-size: 13px; gap: 8px; white-space: nowrap; }
+  .brand-mark { width: 28px; height: 28px; border-radius: 8px; font-size: 13px; }
+  .version-chip { display: none; }
+  .account-actions { gap: 8px; }
+  .account-name { display: none; }
+}
 
 /* Settings center layout */
 /* Settings primitives.
@@ -854,4 +886,19 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 }
 .el-input__inner {
   min-height: 38px;
+}
+
+/* Phone chrome: one scrollable nav row keeps the working area above the fold
+ * instead of pushing the chat down three rows of links. */
+@media (max-width: 900px) {
+  .main-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 10px 0;
+    scrollbar-width: none;
+  }
+  .main-nav::-webkit-scrollbar { display: none; }
+  .main-nav a { flex: 0 0 auto; white-space: nowrap; }
+  .topbar { height: 68px; }
+  .account-actions { gap: 8px; }
 }

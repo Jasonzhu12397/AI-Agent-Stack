@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import en from "element-plus/es/locale/lang/en";
-import { locale, setLocale } from "./i18n";
+import { locale, setLocale, t } from "./i18n";
 import {
   apiBase,
   getPlatformRoadmap,
@@ -18,6 +18,10 @@ type Health = { status: string; database?: string };
 const route = useRoute();
 const router = useRouter();
 const elementLocale = computed(() => (locale.value === "zh" ? zhCn : en));
+// Chat, workflow and infrastructure surfaces are working canvases, not reading
+// pages: they take the whole viewport width the way ChatGPT and Doubao do.
+const WIDE_SECTIONS = new Set(["chat", "workflows", "infrastructure", "agents", "marketplace"]);
+const isWideSection = computed(() => WIDE_SECTIONS.has(route.meta.section as string));
 const appVersion = __APP_VERSION__;
 
 const navItems = [
@@ -152,7 +156,7 @@ function onAuthenticated(user: CurrentUser): void {
 
 function onSessionExpired(): void {
   resetAuthCache();
-  authError.value = "Your session expired. Sign in again to continue.";
+  authError.value = t("Your session expired. Sign in again to continue.");
   if (route.path !== "/login") void router.push({ path: "/login", query: { next: route.path } });
 }
 
@@ -171,14 +175,14 @@ onUnmounted(() => {
 <template>
   <el-config-provider :locale="elementLocale">
     <router-view v-if="isLogin" @authenticated="onAuthenticated" />
-    <main v-else class="shell">
+    <main v-else class="shell" :class="{ 'shell-wide': isWideSection }">
       <header class="topbar">
         <router-link class="brand" to="/">
           <span class="brand-mark">A</span>
           <span>AI Agent <strong>Studio</strong></span>
         </router-link>
         <div class="account-actions">
-          <el-tag effect="plain" type="info" size="small">v{{ appVersion }}</el-tag>
+          <el-tag class="version-chip" effect="plain" type="info" size="small">v{{ appVersion }}</el-tag>
           <span v-if="currentUser" class="account-name">{{ currentUser.username }}</span>
           <el-button-group class="locale-switch" size="small">
             <el-button :type="locale === 'en' ? 'primary' : 'default'" @click="setLocale('en')">English</el-button>

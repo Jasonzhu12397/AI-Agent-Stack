@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, onMounted, ref, watch } from "vue";
 import {
   approveAgentCommand,
@@ -68,7 +69,7 @@ async function refresh(): Promise<void> {
 
 async function approveCommand(command: AgentCommand): Promise<void> {
   if (!command.plan_hash) {
-    error.value = "Approval refused: command has no plan hash.";
+    error.value = t("Approval refused: command has no plan hash.");
     return;
   }
   busyId.value = command.id;
@@ -76,7 +77,7 @@ async function approveCommand(command: AgentCommand): Promise<void> {
   info.value = "";
   try {
     await approveAgentCommand(command.id, command.plan_hash);
-    info.value = "Command approval recorded against the current plan hash.";
+    info.value = t("Command approval recorded against the current plan hash.");
     await refresh();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Command approval failed.";
@@ -103,7 +104,7 @@ async function approveToolCall(approval: ToolApprovalRequest): Promise<void> {
 async function rejectToolCall(approval: ToolApprovalRequest): Promise<void> {
   const reason = (rejectionReasons.value[approval.id] ?? "").trim();
   if (!reason) {
-    error.value = "Enter a reason before rejecting a high-risk tool call.";
+    error.value = t("Enter a reason before rejecting a high-risk tool call.");
     return;
   }
   busyId.value = approval.id;

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, ref, watch } from "vue";
 
 type SriovResource = {
@@ -167,34 +168,34 @@ function validate(): boolean {
   error.value = "";
   const resources = Object.values(props.modelValue).flatMap((pool) => pool.sriov_network_device_plugin_configmap_data.resourceList);
   if (!Object.keys(props.modelValue).length || !resources.length) {
-    error.value = "Add at least one resource pool and one SR-IOV resource.";
+    error.value = t("Add at least one resource pool and one SR-IOV resource.");
     return false;
   }
   const names = new Set<string>();
   const bdfs = new Set<string>();
   for (const resource of resources) {
     if (!resource.resourceName.trim() || !resource.resourcePrefix.trim()) {
-      error.value = "Resource name and prefix are required.";
+      error.value = t("Resource name and prefix are required.");
       return false;
     }
     if (!resource.selectors.rootDevices.length) {
-      error.value = "Select at least one PCI bus address for every resource.";
+      error.value = t("Select at least one PCI bus address for every resource.");
       return false;
     }
     for (const bdf of resource.selectors.rootDevices) {
       if (!/^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$/.test(bdf)) {
-        error.value = "Invalid PCI BDF: " + bdf;
+        error.value = tf("Invalid PCI BDF: {0}", bdf);
         return false;
       }
       if (bdfs.has(bdf.toLowerCase())) {
-        error.value = "A PCI device cannot be assigned to multiple resources: " + bdf;
+        error.value = tf("A PCI device cannot be assigned to multiple resources: {0}", bdf);
         return false;
       }
       bdfs.add(bdf.toLowerCase());
     }
     const key = resource.resourcePrefix + "/" + resource.resourceName;
     if (names.has(key)) {
-      error.value = "Duplicate extended resource name: " + key;
+      error.value = tf("Duplicate extended resource name: {0}", key);
       return false;
     }
     names.add(key);

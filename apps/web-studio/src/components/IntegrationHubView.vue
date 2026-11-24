@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { computed, onMounted, ref, watch } from "vue";
 import {
   connectorTemplates,
@@ -161,7 +162,7 @@ async function createPlugin(): Promise<void> {
     const payload = JSON.parse(pluginJson.value) as Record<string, unknown>;
     payload.tenant_id = props.tenantId;
     const created = await registerPlugin(payload);
-    info.value = "Plugin " + created.plugin_key + "@" + created.version + " registered as Draft.";
+    info.value = tf("Plugin {0}@{1} registered as Draft.", created.plugin_key, created.version);
     selectedPluginId.value = created.id;
     await refresh();
   } catch (cause) {
@@ -248,7 +249,7 @@ async function testConnection(connectionId: string): Promise<void> {
   info.value = "";
   try {
     await testPluginConnection(connectionId);
-    info.value = "Connection health check succeeded; this connection is now active.";
+    info.value = t("Connection health check succeeded; this connection is now active.");
     await refresh();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Connection health check failed.";

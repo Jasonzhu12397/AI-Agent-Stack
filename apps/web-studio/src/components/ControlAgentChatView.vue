@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
+import { tServerError } from "../i18n/serverErrors";
 import {
   apiErrorCode,
   createChatThread,
@@ -40,9 +41,44 @@ const needsModelSetup = computed(
   () => errorCode.value === "MODEL_NOT_CONFIGURED" || usableModels.value.length === 0,
 );
 
+// A fixed "100vh minus 232px" guess leaves the composer under the fold on tall
+// or compact screens. Measure where the chat actually starts and claim the rest
+// of the viewport, the same way a chat client fills its window.
+const chatRoot = ref<HTMLElement | null>(null);
+const chatHeight = ref("");
+
+function fitChat(): void {
+  const root = chatRoot.value;
+  if (!root) return;
+  // On a phone the header alone eats a third of the screen, so locking the
+  // panel to the viewport squeezes the thread under the composer. Let the page
+  // scroll there and keep the chat panel auto-sized instead.
+  if (window.innerWidth <= 900 || window.innerHeight <= 560) {
+    chatHeight.value = "";
+    return;
+  }
+  const top = root.getBoundingClientRect().top;
+  chatHeight.value = `calc(100dvh - ${Math.round(top)}px - 16px)`;
+}
+
+onMounted(() => {
+  fitChat();
+  window.addEventListener("resize", fitChat);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", fitChat);
+});
+
+// Assistant replies that failed keep the raw backend message plus its code, so
+// the transcript can re-render the failure in the reader's language.
+function bubbleText(message: ChatMessage): string {
+  return message.error_code ? tServerError(message.error_code, message.content) : message.content;
+}
+
 function reportError(cause: unknown): void {
   errorCode.value = apiErrorCode(cause) ?? "";
-  error.value = cause instanceof Error ? cause.message : "Request failed.";
+  error.value = cause instanceof Error ? tServerError(apiErrorCode(cause), cause.message) : t("Request failed.");
 }
 
 function openMarketplace(): void {
@@ -209,15 +245,14 @@ watch(
 </script>
 
 <template>
-  <section class="agent-chat">
+  <section ref="chatRoot" class="agent-chat" :style="chatHeight ? { height: chatHeight } : undefined">
     <header class="chat-toolbar">
       <div class="chat-title">
         <span class="chat-avatar">CA</span>
         <div>
           <h3>Control Agent</h3>
           <p>
-            {{ context?.project.name ?? "Project" }} · {{ context?.plugins.length ?? 0 }} plugins ·
-            {{ context?.skills.length ?? 0 }} skills
+            {{ tf("{0} · {1} plugins · {2} skills", context?.project.name ?? t("Project"), context?.plugins.length ?? 0, context?.skills.length ?? 0) }}
           </p>
         </div>
       </div>
@@ -286,10 +321,10 @@ watch(
             :class="message.role"
           >
             <div class="bubble-head">
-              <span>{{ message.role === "user" ? "You" : "Control Agent" }}</span>
+              <span>{{ message.role === "user" ? t("You") : t("Control Agent") }}</span>
               <span class="bubble-time">{{ new Date(message.created_at).toLocaleTimeString() }}</span>
             </div>
-            <p class="bubble-body">{{ message.content }}</p>
+            <p class="bubble-body">{{ bubbleText(message) }}</p>
             <div v-if="message.context.skills?.length || message.context.plugins?.length" class="bubble-context">
               <el-tag v-for="skill in message.context.skills ?? []" :key="skill" size="small" effect="plain">
                 {{ t("Skill") }} · {{ skill }}
@@ -403,9 +438,10 @@ watch(
   gap: 12px;
   /* A chat deserves the viewport: a fixed tall column rather than a card that
      grows with the number of messages. */
-  /* Fill the viewport below the shell header, section heading and toolbar. */
-  height: calc(100vh - 350px);
-  min-height: 480px;
+  /* Fill the viewport below the shell header, section heading and toolbar.
+     dvh keeps the composer visible when a mobile browser hides its chrome. */
+  height: calc(100dvh - 232px);
+  min-height: 560px;
 }
 .chat-toolbar {
   display: flex;
@@ -443,7 +479,7 @@ watch(
   font-size: 12px;
 }
 .model-select {
-  width: 260px;
+  width: min(320px, 42vw);
 }
 .chat-actions {
   display: flex;
@@ -452,7 +488,7 @@ watch(
 }
 .chat-body {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 288px minmax(0, 1fr);
   gap: 12px;
   flex: 1;
   min-height: 0;
@@ -500,9 +536,14 @@ watch(
   font-size: 12px;
   color: #8b97a5;
 }
+/* A reading column, the way ChatGPT and Doubao lay out a thread: the shell is
+   full width, the messages keep a comfortable measure instead of stretching. */
 .chat-column {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
   min-height: 0;
   height: 100%;
 }
@@ -524,8 +565,8 @@ watch(
   margin: 0;
 }
 .bubble {
-  max-width: 72%;
-  padding: 10px 12px;
+  max-width: 78%;
+  padding: 12px 16px;
   border-radius: 8px;
   background: #fff;
   border: 1px solid #e3e8ee;
@@ -544,8 +585,8 @@ watch(
 }
 .bubble-body {
   margin: 6px 0 0;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.72;
   white-space: pre-wrap;
 }
 .bubble-context {
@@ -578,6 +619,8 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .composer-pickers {
   display: flex;
@@ -603,5 +646,99 @@ watch(
 .popover-open,
 .popover-browse {
   padding: 0;
+}
+
+/* Tablet: the thread rail stops competing for width. */
+@media (max-width: 1180px) {
+  .chat-body {
+    grid-template-columns: 232px minmax(0, 1fr);
+  }
+  .model-select {
+    width: min(260px, 44vw);
+  }
+}
+
+/* Phone: the rail becomes a horizontal strip above the thread, so the
+   transcript keeps the full width and the composer stays reachable. */
+@media (max-width: 900px) {
+  .agent-chat {
+    height: auto;
+    min-height: 0;
+  }
+  .transcript {
+    max-height: 62dvh;
+  }
+  .chat-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .chat-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .model-select {
+    flex: 1 1 160px;
+    width: auto;
+    min-width: 0;
+  }
+  .chat-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .thread-rail {
+    display: flex;
+    gap: 8px;
+    max-height: 92px;
+    padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .rail-label {
+    display: none;
+  }
+  .thread-item {
+    min-width: 180px;
+    max-width: 220px;
+    border-color: #e3e8ee;
+  }
+  .rail-empty {
+    margin: 4px;
+    white-space: nowrap;
+  }
+  .bubble {
+    max-width: 92%;
+  }
+  .composer {
+    padding: 10px 12px 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .agent-chat {
+    height: auto;
+  }
+  .transcript {
+    max-height: 56dvh;
+  }
+  .chat-title h3 {
+    font-size: 15px;
+  }
+  .chat-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+  }
+  .transcript {
+    padding: 10px;
+    gap: 8px;
+  }
+  .bubble {
+    max-width: 100%;
+  }
+  .composer-pickers {
+    flex-wrap: wrap;
+  }
 }
 </style>

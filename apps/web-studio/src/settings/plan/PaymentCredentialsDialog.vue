@@ -56,7 +56,7 @@ async function save(): Promise<void> {
     Object.entries(values.value).filter(([, value]) => value.trim().length > 0),
   );
   if (!Object.keys(payload).length) {
-    error.value = "Fill at least one field before saving.";
+    error.value = t("Fill at least one field before saving.");
     return;
   }
   saving.value = true;

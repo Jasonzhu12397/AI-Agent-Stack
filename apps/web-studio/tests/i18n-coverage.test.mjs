@@ -123,6 +123,27 @@ test("every translated attribute literal has a Chinese entry", () => {
   assert.deepEqual([...missing], [], `missing zh entries for attributes:\n${[...missing].join("\n")}`);
 });
 
+test("every t()/tf() key used at runtime has a Chinese translation", () => {
+  const missing = new Set();
+  const walkAll = (dir) =>
+    readdirSync(dir).flatMap((name) => {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) return walkAll(full);
+      return /[.](vue|ts)$/.test(full) ? [full] : [];
+    });
+  for (const file of walkAll(root)) {
+    if (file.includes("/i18n/")) continue;
+    const source = readFileSync(file, "utf8");
+    const call = /\b(?:tf|t)\(\s*("(?:[^"\\]|\\.)*")/g;
+    let match;
+    while ((match = call.exec(source))) {
+      const key = JSON.parse(match[1]);
+      if (key && !(key in dictionary)) missing.add(key);
+    }
+  }
+  assert.deepEqual([...missing], [], `missing zh entries for runtime keys:\n${[...missing].join("\n")}`);
+});
+
 test("the chat composer localizes its interpolated labels through t()", () => {
   const chat = readFileSync(join(root, "components", "ControlAgentChatView.vue"), "utf8");
   for (const label of ["Project", "Skill", "Skills", "Plugin", "Plugins", "Open"]) {
@@ -135,4 +156,15 @@ test("a plugin that still needs a credential offers authorization instead of sel
   assert.match(chat, /function pluginNeedsAuth/, "pluginNeedsAuth helper is required");
   assert.match(chat, /:disabled="pluginNeedsAuth\(plugin\)"/, "unauthorized plugins must not be selectable");
   assert.match(chat, /t\("Authorize"\)/, "unauthorized plugins must offer an authorize jump");
+});
+
+test("every model gateway error code has a Chinese translation", () => {
+  const gateway = readFileSync(join(root, "..", "..", "platform-api", "core", "model_gateway.py"), "utf8");
+  const codes = new Set();
+  const raised = /ModelGatewayError\(\s*"([A-Z0-9_]+)"/g;
+  let match;
+  while ((match = raised.exec(gateway))) codes.add(match[1]);
+  const table = readFileSync(join(root, "i18n", "serverErrors.ts"), "utf8");
+  const missing = [...codes].filter((code) => !table.includes(`${code}:`));
+  assert.deepEqual(missing, [], `backend error codes without a zh message:\n${missing.join("\n")}`);
 });

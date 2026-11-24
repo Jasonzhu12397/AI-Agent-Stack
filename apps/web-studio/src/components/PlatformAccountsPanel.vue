@@ -120,7 +120,7 @@ async function connect(): Promise<void> {
       item.id === provider?.id ? { ...item, account } : item,
     );
     info.value =
-      "Account authorized. Pick a model from this platform in Control Agent chat \u2014 calls now run on your own account and free allowance.";
+      t("Account authorized. Pick a model from this platform in Control Agent chat — calls now run on your own account and free allowance.");
     dialogOpen.value = false;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to link the account.";
@@ -148,7 +148,7 @@ async function finishOAuth(): Promise<void> {
   if (typeof code !== "string" || typeof state !== "string") return;
   const presetKey = window.sessionStorage.getItem(OAUTH_PRESET_KEY);
   if (!presetKey) {
-    error.value = "The authorization returned without its platform. Start again from the card.";
+    error.value = t("The authorization returned without its platform. Start again from the card.");
     return;
   }
   saving.value = true;
@@ -159,7 +159,7 @@ async function finishOAuth(): Promise<void> {
       result.provider,
     ];
     info.value =
-      "Account authorized. The platform issued the key itself, so nothing had to be pasted.";
+      t("Account authorized. The platform issued the key itself, so nothing had to be pasted.");
     window.sessionStorage.removeItem(OAUTH_PRESET_KEY);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to finish the authorization.";
@@ -176,7 +176,7 @@ async function disconnect(providerId: string): Promise<void> {
     providers.value = providers.value.map((item) =>
       item.id === providerId ? { ...item, account } : item,
     );
-    info.value = "Account unlinked.";
+    info.value = t("Account unlinked.");
     void account;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to unlink the account.";

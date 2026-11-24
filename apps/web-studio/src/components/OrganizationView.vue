@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from "../i18n";
 import { onMounted, ref, watch } from "vue";
 import {
   addTenantMember,
@@ -40,7 +41,7 @@ async function invite(): Promise<void> {
   info.value = "";
   try {
     await addTenantMember(props.tenantId, username.value.trim(), role.value);
-    info.value = "Member added to the organization.";
+    info.value = t("Member added to the organization.");
     username.value = "";
     role.value = "member";
     await refresh();

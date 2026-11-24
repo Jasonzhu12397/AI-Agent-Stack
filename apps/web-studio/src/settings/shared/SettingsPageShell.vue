@@ -70,7 +70,7 @@ const emit = defineEmits<{ (event: "retry"): void }>();
       v-else-if="state === 'error'"
       icon="error"
       :title="t('Settings could not be loaded')"
-      :sub-title="errorMessage || errorCode"
+      :sub-title="errorMessage ? t(errorMessage) : errorCode"
       data-settings-error
     >
       <template #extra>

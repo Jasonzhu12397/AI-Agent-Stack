@@ -30,4 +30,8 @@ export const messages: Record<string, string> = {
   "Unknown setting key.": "未知设置项。",
   "Invalid value for setting.": "设置值无效。",
   "Settings could not be saved.": "设置保存失败。",
+  // Shared shell copy used by every settings page
+  "Settings could not be loaded": "设置加载失败",
+  "No tenant selected.": "尚未选择租户。",
+  "General settings for the selected scope.": "所选范围内通用的设置项。",
 };

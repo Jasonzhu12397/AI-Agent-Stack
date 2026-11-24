@@ -52,11 +52,11 @@ function openDialog(): void {
 async function save(): Promise<void> {
   if (!props.tenantId) return;
   if (!form.value.name.trim() || !form.value.webhook_url.trim()) {
-    error.value = "Name and webhook URL are required.";
+    error.value = t("Name and webhook URL are required.");
     return;
   }
   if (secretRequired.value && !form.value.secret.trim()) {
-    error.value = "DingTalk robot signing secret is required when 加签 is enabled.";
+    error.value = t("DingTalk robot signing secret is required when 加签 is enabled.");
     return;
   }
   loading.value = true;
@@ -68,7 +68,7 @@ async function save(): Promise<void> {
       secret: form.value.secret.trim(),
     });
     dialogOpen.value = false;
-    info.value = "Robot added.";
+    info.value = t("Robot added.");
     await refresh();
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause.message : "Unable to add the robot.";
