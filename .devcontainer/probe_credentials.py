@@ -47,6 +47,15 @@ def describe(reference):
 from django.conf import settings as django_settings  # noqa: E402
 
 print(f"== db == {django_settings.DATABASES['default'].get('NAME')}")
+from django.db import connection  # noqa: E402
+from core.models import ModelConfig as _Config, Tenant as _Tenant  # noqa: E402
+
+with connection.cursor() as cursor:
+    cursor.execute("select count(*) from core_modelprovider")
+    rows = cursor.fetchone()[0]
+print(f"== raw provider rows == {rows}")
+print(f"== tenants == {list(_Tenant.objects.values_list('slug', flat=True))}")
+print(f"== model configs == {_Config.objects.count()}")
 print("== providers ==")
 for provider in ModelProvider.objects.select_related("tenant").order_by("name"):
     print(
