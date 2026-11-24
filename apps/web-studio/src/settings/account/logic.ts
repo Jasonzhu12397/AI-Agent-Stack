@@ -86,11 +86,44 @@ export function summarizeIdentities(identities: Identity[]): IdentitySummary {
 export type SessionInfo = {
   key: string;
   current?: boolean;
-  created_at?: string;
-  last_ip?: string;
-  user_agent?: string;
+  created_at?: string | null;
+  last_activity?: string | null;
+  expire_date?: string;
+  timestamps_source?: "session_metadata" | "unavailable";
   revoked?: boolean;
 };
+
+/** Server row shape for `/api/v1/users/me/sessions/`. */
+export type SessionRow = {
+  session_key: string;
+  is_current: boolean;
+  expire_date: string;
+  created_at: string | null;
+  last_activity: string | null;
+  timestamps_source?: "session_metadata" | "unavailable";
+};
+
+export type SessionPayload = SessionRow[] | { results?: SessionRow[] };
+
+export function isPagedSessions(payload: SessionPayload): payload is { results?: SessionRow[] } {
+  return !Array.isArray(payload);
+}
+
+export function mapSessionPayload(payload: SessionPayload): SessionInfo[] {
+  const rows = isPagedSessions(payload) ? payload.results ?? [] : payload;
+  return rows.map(mapSessionRow);
+}
+
+export function mapSessionRow(row: SessionRow): SessionInfo {
+  return {
+    key: row.session_key,
+    current: row.is_current,
+    created_at: row.created_at,
+    last_activity: row.last_activity,
+    expire_date: row.expire_date,
+    timestamps_source: row.timestamps_source,
+  };
+}
 
 export function sessionCanRevoke(session: SessionInfo): boolean {
   return !session.current && !session.revoked;

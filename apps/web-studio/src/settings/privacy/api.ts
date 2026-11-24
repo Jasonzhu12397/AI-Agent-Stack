@@ -1,5 +1,11 @@
 import { request, tenantPath } from "../../services/http";
-import type { DeletionRequest, Grant, PrivacySession } from "./logic";
+import {
+  mapPrivacySessions,
+  type DeletionRequest,
+  type Grant,
+  type PrivacySession,
+  type PrivacySessionRow,
+} from "./logic";
 
 export async function fetchGrants(tenantId: string): Promise<Grant[]> {
   const page = await request<{ results: Grant[] }>(tenantPath(tenantId, "/privacy/grants/"));
@@ -28,6 +34,8 @@ export async function createDeletionRequest(
 }
 
 export async function fetchSessions(tenantId: string): Promise<PrivacySession[]> {
-  const page = await request<{ results: PrivacySession[] }>(tenantPath(tenantId, "/privacy/sessions/"));
-  return page.results ?? [];
+  const page = await request<{ results: PrivacySessionRow[] }>(
+    tenantPath(tenantId, "/privacy/sessions/"),
+  );
+  return mapPrivacySessions(page.results ?? []);
 }

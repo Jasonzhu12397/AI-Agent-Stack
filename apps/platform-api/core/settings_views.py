@@ -573,16 +573,24 @@ class AccountSessionsView(SettingsBaseView):
                 yield session
 
     def get(self, request):
+        from core.session_activity import describe
+
         current_key = request.session.session_key
         results = []
         for session in self._user_sessions(request.user):
+            metadata = describe(session.session_key)
             results.append(
                 {
                     "session_key": session.session_key,
                     "is_current": session.session_key == current_key,
                     "expire_date": session.expire_date,
-                    "created_at": None,
-                    "last_activity": None,
+                    "created_at": metadata.get("created_at"),
+                    "last_activity": metadata.get("last_activity"),
+                    # ``null`` means the session predates this table; the value
+                    # is never synthesized.
+                    "timestamps_source": "session_metadata"
+                    if metadata
+                    else "unavailable",
                 }
             )
         return Response({"results": results})
@@ -602,6 +610,9 @@ class AccountSessionRevokeView(SettingsBaseView):
                 data = {}
             if str(data.get("_auth_user_id")) == user_id:
                 session.delete()
+                from core.session_activity import mark_revoked
+
+                mark_revoked(session_key)
                 revoked = True
                 record_audit_event(
                     request,

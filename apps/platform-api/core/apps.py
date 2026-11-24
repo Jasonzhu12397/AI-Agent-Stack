@@ -18,3 +18,7 @@ class CoreConfig(AppConfig):
         register_mcp_adapter()
         register_openai_compatible_adapter()
         register_a2a_adapter()
+
+        # Importing the module connects the login/logout receivers and defines
+        # the SessionActivity model; a broken import must fail startup loudly.
+        from core import session_activity  # noqa: F401

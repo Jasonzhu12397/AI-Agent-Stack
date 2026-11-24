@@ -22,11 +22,35 @@ export type DeletionRequest = {
 };
 
 export type PrivacySession = {
+  /** Masked session key; the raw key is never rendered. */
   id: string;
-  actor: string | null;
+  current: boolean;
   created_at: string | null;
-  last_seen_at: string | null;
+  last_activity: string | null;
+  created_at_source: "session_metadata" | "derived_from_expire_date";
+  last_activity_source: "session_metadata" | "unavailable";
 };
+
+export type PrivacySessionRow = {
+  session_key_masked: string;
+  is_current: boolean;
+  expire_date: string;
+  created_at: string;
+  created_at_source: "session_metadata" | "derived_from_expire_date";
+  last_activity: string | null;
+  last_activity_source: "session_metadata" | "unavailable";
+};
+
+export function mapPrivacySessions(rows: PrivacySessionRow[]): PrivacySession[] {
+  return rows.map((row) => ({
+    id: row.session_key_masked,
+    current: row.is_current,
+    created_at: row.created_at,
+    last_activity: row.last_activity,
+    created_at_source: row.created_at_source,
+    last_activity_source: row.last_activity_source,
+  }));
+}
 
 export type PrivacyBundle = {
   grants: Grant[];

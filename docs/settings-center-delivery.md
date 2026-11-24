@@ -11,7 +11,7 @@ All 14 items in the acceptance document are routed Vue pages backed by real Djan
 |---|---|---|---|---|
 | 1 | Account Management | `account` | `apps/web-studio/src/settings/account/` | `GET/PATCH /api/v1/users/me/`, `GET /api/v1/users/me/identities/`, `GET /api/v1/users/me/sessions/`, `POST .../sessions/<key>/revoke/` |
 | 2 | Standard Plan | `plan` | `src/settings/plan/` | `GET /api/v1/tenants/<t>/billing/plans/`, `GET .../billing/capabilities/` |
-| 3 | Subscription & Usage Management | `subscription` | `src/settings/subscription/` | `GET .../billing/subscription/`, `GET .../billing/usage/`, `GET/POST .../billing/orders/`, `POST .../orders/<id>/close/` |
+| 3 | Subscription & Usage Management | `subscription` | `src/settings/subscription/` | `GET .../billing/subscription/`, `GET .../billing/usage/`, `GET/POST .../billing/orders/`, `GET .../orders/<id>/status/`, `POST .../orders/<id>/close/`, `POST .../orders/<id>/refund/`, `GET .../billing/reconciliation/` |
 | 4 | General | `general` | `src/settings/general/` | `GET/PATCH .../settings/general/`, `GET/PATCH .../projects/<p>/settings/general/` |
 | 5 | Plugins & Connectors | `connectors` | `src/settings/connectors/` | `GET .../connectors/`, `POST .../connectors/<slug>/install/`, `PATCH .../installations/<id>/`, `POST .../health/`, `POST .../test/` |
 | 6 | Appearance | `appearance` | `src/settings/appearance/` | `GET/PUT/PATCH /api/v1/users/me/preferences/appearance/` |
@@ -74,8 +74,8 @@ Migration ownership: `0036`/`0037` settings + account/feedback, `0038` data expo
 ## 7. Known limits (deliberate, not silently faked)
 
 - WeChat Pay v3 and Alipay adapters are protocol skeletons: order JSON, RSA2/AES-GCM verification and decryption, query/refund entry points are implemented, but no real outbound HTTP transport and no merchant secrets are wired (`vault://` resolves as "not configured" in-process).
-- `GET .../privacy/sessions/` returns 503 `PRIVACY_DEPENDENCY_UNAVAILABLE` until the account service block is merged; it never returns fabricated session data. The privacy page's primary `grants/` endpoint is live.
-- Account session rows expose `expire_date` and `is_current` but `created_at` / `last_activity` are null: `django_session` has no timestamp columns and no session-metadata table was added in this block.
+- Session timestamps are real, not derived: `core/session_activity.py` keeps a `SessionActivity` row per session key (created_at, last_activity, revoked_at; no IP or user agent), populated on `user_logged_in`, refreshed by `SessionActivityMiddleware` with one conditional UPDATE per 60 s, and closed on logout/revoke. Account and privacy session lists report `created_at` / `last_activity` with `*_source = session_metadata`; a session that predates the table still reports the derived creation time and an explicit `unavailable` last activity instead of a fabricated value.
+- `GET .../privacy/sessions/` is live (list + revoke); the privacy page's primary `grants/` endpoint remains live as well.
 - `identities/` reports only local password method (`has_usable_password`); no external identity provider bindings exist in this codebase, so none are invented.
 - Postgres-specific concurrency and integration paths are skipped locally (no Postgres/Redis/docker on this machine) and are exercised only in CI.
 - Error-envelope unification covers the 14 settings pages' surfaces (billing, connectors, data-controls, archive, privacy, settings, meta). Membership and token-budget views outside that surface still return DRF `detail` and were left untouched.

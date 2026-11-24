@@ -687,6 +687,9 @@ def _session_owner_id(session_key):
 
 
 def _session_payload(session, *, is_current, cookie_age_seconds):
+    from core.session_activity import describe
+
+    metadata = describe(session.session_key)
     expire_date = session.expire_date
     # ``django_session`` has no ``created_at``/``last_activity`` column. The
     # only durable timestamp is ``expire_date``; the derived creation time is
@@ -697,12 +700,18 @@ def _session_payload(session, *, is_current, cookie_age_seconds):
         "session_key_masked": _mask_session_key(session.session_key),
         "is_current": is_current,
         "expire_date": expire_date.isoformat(),
-        "created_at": created_at.isoformat(),
-        "created_at_source": "derived_from_expire_date",
-        # No write point persists last activity for DB sessions in this codebase,
-        # so the field is reported as unavailable instead of faked with now().
-        "last_activity": None,
-        "last_activity_source": "unavailable",
+        "created_at": (metadata.get("created_at") or created_at).isoformat(),
+        "created_at_source": "session_metadata"
+        if metadata.get("created_at")
+        else "derived_from_expire_date",
+        # Only a recorded observation may be reported; a session that predates
+        # the metadata table stays explicitly unavailable instead of "now()".
+        "last_activity": metadata["last_activity"].isoformat()
+        if metadata.get("last_activity")
+        else None,
+        "last_activity_source": "session_metadata"
+        if metadata.get("last_activity")
+        else "unavailable",
     }
 
 

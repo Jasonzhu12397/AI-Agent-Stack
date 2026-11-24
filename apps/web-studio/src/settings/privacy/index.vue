@@ -218,9 +218,23 @@ void pageLabels;
         data-sessions-unavailable
       />
       <el-table v-else-if="sessions && sessions.length > 0" :data="sessions" size="small">
-        <el-table-column prop="actor" :label="t('Subject')" />
-        <el-table-column prop="created_at" :label="t('Granted at')" />
-        <el-table-column prop="last_seen_at" label="Last seen" />
+        <el-table-column label="Session">
+          <template #default="{ row }">
+            {{ row.id }}
+            <el-tag v-if="row.current" size="small" type="success">Current</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('Created')">
+          <template #default="{ row }">
+            {{ row.created_at }}
+            <span v-if="row.created_at_source === 'derived_from_expire_date'" class="muted">
+              (derived)
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('Last active')">
+          <template #default="{ row }">{{ row.last_activity ?? "—" }}</template>
+        </el-table-column>
       </el-table>
       <el-empty v-else-if="sessionsAvailable" description="No active sessions." :image-size="64" />
     </el-card>

@@ -8,12 +8,14 @@ import {
   profilePayload,
   summarizeIdentities,
   sessionCanRevoke,
+  mapSessionPayload,
   fieldErrorsFromError,
   stateFromError,
   errorMessageKey,
   type ProfileForm,
   type Identity,
   type SessionInfo,
+  type SessionPayload,
 } from "./logic";
 
 const profile = useSettingsResource<ProfileForm>(() =>
@@ -26,8 +28,8 @@ const identities = useSettingsResource<Identity[]>(async () => {
 });
 
 const sessions = useSettingsResource<SessionInfo[]>(async () => {
-  const payload = await request<{ results?: SessionInfo[] } | SessionInfo[]>("/api/v1/users/me/sessions/");
-  return Array.isArray(payload) ? payload : payload.results ?? [];
+  const payload = await request<SessionPayload>("/api/v1/users/me/sessions/");
+  return mapSessionPayload(payload);
 });
 
 const form = ref<ProfileForm>({ display_name: "", email: "", timezone: "", locale: "en" });
@@ -206,8 +208,8 @@ async function revokeSession(session: SessionInfo): Promise<void> {
             <span class="settings-list__title">
               {{ session.current ? "Current session" : "Session" }}
             </span>
-            <span v-if="session.last_ip" class="muted"> · {{ session.last_ip }}</span>
             <span v-if="session.created_at" class="muted"> · {{ session.created_at }}</span>
+            <span v-if="session.last_activity" class="muted"> · last active {{ session.last_activity }}</span>
           </div>
           <el-popconfirm
             v-if="sessionCanRevoke(session)"
