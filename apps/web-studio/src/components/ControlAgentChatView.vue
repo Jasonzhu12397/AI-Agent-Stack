@@ -32,8 +32,11 @@ const activeThread = computed(() => threads.value.find((item) => item.id === act
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value);
 
 const errorCode = ref("");
+const usableModels = computed(() =>
+  (context.value?.models ?? []).filter((model) => model.ready !== false),
+);
 const needsModelSetup = computed(
-  () => errorCode.value === "MODEL_NOT_CONFIGURED" || (context.value?.models.length ?? 1) === 0,
+  () => errorCode.value === "MODEL_NOT_CONFIGURED" || usableModels.value.length === 0,
 );
 
 function reportError(cause: unknown): void {
@@ -52,7 +55,9 @@ async function loadContext(): Promise<void> {
     if (!selectedModelId.value && context.value.models.length > 0) {
       // The local echo model needs no credential, so it is the safest default
       // until the member authorizes a real platform account.
-      const recommended = context.value.models.find((model) => model.recommended);
+      const recommended = context.value.models.find(
+        (model) => model.recommended && model.ready !== false,
+      );
       selectedModelId.value = (recommended ?? context.value.models[0]).id;
     }
   } catch (cause) {
@@ -214,8 +219,13 @@ watch(
           <el-option
             v-for="model in context?.models ?? []"
             :key="model.id"
-            :label="`${model.display_name} · ${model.provider_name}`"
+            :label="
+              model.auth_mode === 'platform_pool'
+                ? `${model.display_name} · included, no key needed`
+                : `${model.display_name} · ${model.provider_name}`
+            "
             :value="model.id"
+            :disabled="model.ready === false"
           />
         </el-select>
         <el-button text size="small" @click="openProviderAccounts">

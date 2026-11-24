@@ -287,6 +287,7 @@ class AgentChatContextView(APIView):
                     {"id": capability, "name": capability, "installation_id": str(installation.id)}
                 )
         projects = Project.objects.filter(tenant=tenant).order_by("name")
+        provider_accounts.sync_platform_providers(tenant=tenant, user=request.user)
         models = _available_models(request, tenant)
         return Response(
             {
@@ -331,6 +332,13 @@ def _available_models(request, tenant):
                 "provider_name": provider.name,
                 "auth_mode": provider.auth_mode,
                 "account": account,
+                #: False only for a shared-pool model whose operator key is
+                #: missing: the console greys it out instead of failing a send.
+                "ready": (
+                    provider_accounts.platform_env_configured(provider.preset_key)
+                    if provider.auth_mode == ModelProvider.AuthMode.PLATFORM_POOL
+                    else True
+                ),
             }
         )
     return items

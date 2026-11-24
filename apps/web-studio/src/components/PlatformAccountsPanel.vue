@@ -53,6 +53,19 @@ const platformRows = computed(() =>
   }),
 );
 
+const sharedRows = computed(() =>
+  (catalog.value?.presets ?? [])
+    .map((preset) => ({
+      preset,
+      provider:
+        providers.value.find(
+          (item) => item.preset_key === preset.key && item.auth_mode === "platform_pool",
+        ) ?? null,
+      configured: Boolean(preset.platform_configured),
+    }))
+    .filter((row) => row.configured || row.provider !== null),
+);
+
 async function refresh(): Promise<void> {
   if (!props.tenantId) return;
   loading.value = true;
@@ -186,6 +199,33 @@ defineExpose({ openPreset: openDialog });
     </p>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
+    <section v-if="sharedRows.length > 0" class="platform-shared">
+      <h4>Included with the workspace · no key required</h4>
+      <p class="hint">
+        These models run on the workspace credential, so any member who signs in can chat with
+        them straight away. Nothing is billed to your personal allowance.
+      </p>
+      <div class="platform-grid">
+        <article v-for="row in sharedRows" :key="'shared-' + row.preset.key" class="platform-card">
+          <header>
+            <h4>{{ row.preset.label }}</h4>
+            <el-tag :type="row.configured ? 'success' : 'warning'" size="small" effect="plain">
+              {{ row.configured ? "included" : "awaiting workspace key" }}
+            </el-tag>
+          </header>
+          <p class="platform-models">
+            {{ row.preset.models.map((model) => model.display_name).join(" · ") }}
+          </p>
+          <p class="platform-account">
+            {{
+              row.configured
+                ? "Ready after sign-in: pick these models in the chat, no API key of your own."
+                : "An administrator sets " + (row.preset.platform_env || "the workspace key") + " on the runtime to enable these."
+            }}
+          </p>
+        </article>
+      </div>
+    </section>
     <div class="platform-grid">
       <article v-for="row in platformRows" :key="row.preset.key" class="platform-card">
         <header>

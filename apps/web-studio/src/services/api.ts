@@ -24,7 +24,7 @@ export type ModelProvider = {
   id: string;
   name: string;
   provider_type: string;
-  auth_mode: "tenant_secret" | "user_account";
+  auth_mode: "tenant_secret" | "user_account" | "platform_pool";
   preset_key: string;
   base_url: string;
   credential_configured: boolean;
@@ -32,6 +32,8 @@ export type ModelProvider = {
   enabled: boolean;
 };
 export type ProviderPreset = {
+  platform_env?: string;
+  platform_configured?: boolean;
   key: string;
   label: string;
   base_url: string;
@@ -2231,8 +2233,9 @@ export type ChatModelOption = {
   model_name: string;
   display_name: string;
   provider_name: string;
-  auth_mode: "tenant_secret" | "user_account";
+  auth_mode: "tenant_secret" | "user_account" | "platform_pool";
   account: { linked: boolean; remaining_today: number } | null;
+  ready?: boolean;
 };
 export type ChatContext = {
   project: ChatContextItem;

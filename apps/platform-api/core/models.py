@@ -173,6 +173,9 @@ class ModelProvider(models.Model):
 
         TENANT_SECRET = "tenant_secret", "Tenant credential"
         USER_ACCOUNT = "user_account", "Linked user account"
+        #: One operator-held credential serves every member: after single
+        #: sign-on the member selects these models and never sees a key.
+        PLATFORM_POOL = "platform_pool", "Platform credential (no per-user key)"
 
     name = models.CharField(max_length=120)
     provider_type = models.CharField(max_length=32, choices=ProviderType.choices)

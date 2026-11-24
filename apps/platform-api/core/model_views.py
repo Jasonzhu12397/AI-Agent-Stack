@@ -282,7 +282,10 @@ class ModelProviderCatalogView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, tenant_id):
-        get_tenant(request, tenant_id)
+        tenant = get_tenant(request, tenant_id)
+        # Shared-pool rows appear as soon as the operator supplies a key, so a
+        # member who only signs in still has models to pick.
+        provider_accounts.sync_platform_providers(tenant=tenant, user=request.user)
         return Response(
             {
                 "presets": provider_accounts.catalogue(),

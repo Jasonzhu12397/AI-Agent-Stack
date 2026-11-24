@@ -28,6 +28,7 @@ from core.models import ModelProvider, ProviderAccountLink, ProviderAccountUsage
 #: serves all of them and a new platform is a line in this table.
 PROVIDER_PRESETS: dict[str, dict] = {
     "openai": {
+        "platform_env": "PLATFORM_OPENAI_KEY",
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "models": [
@@ -37,6 +38,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "google": {
+        "platform_env": "PLATFORM_GOOGLE_KEY",
         "label": "Google Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "models": [
@@ -46,6 +48,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "deepseek": {
+        "platform_env": "PLATFORM_DEEPSEEK_KEY",
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
         "models": [
@@ -54,6 +57,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "zhipu": {
+        "platform_env": "PLATFORM_ZHIPU_KEY",
         "label": "智谱 GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "models": [
@@ -62,6 +66,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "moonshot": {
+        "platform_env": "PLATFORM_MOONSHOT_KEY",
         "label": "Moonshot Kimi",
         "base_url": "https://api.moonshot.cn/v1",
         "models": [
@@ -70,6 +75,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "minimax": {
+        "platform_env": "PLATFORM_MINIMAX_KEY",
         "label": "MiniMax",
         "base_url": "https://api.minimax.chat/v1",
         "models": [
@@ -78,6 +84,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "qwen": {
+        "platform_env": "PLATFORM_QWEN_KEY",
         "label": "Qwen",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "models": [
@@ -87,6 +94,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         ],
     },
     "openrouter": {
+        "platform_env": "PLATFORM_OPENROUTER_KEY",
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "models": [
@@ -188,9 +196,73 @@ def catalogue() -> list[dict]:
             #: True when the platform can grant access itself, so the console
             #: offers "Authorize" instead of asking for a pasted key.
             "oauth": bool(preset.get("oauth")),
+            #: Operator-held credential for the shared pool. When it is present
+            #: the models work for every signed-in member with no key at all.
+            "platform_env": preset.get("platform_env", ""),
+            "platform_configured": bool(os.getenv(preset.get("platform_env", ""))
+                                        if preset.get("platform_env") else False),
         }
         for key, preset in PROVIDER_PRESETS.items()
     ]
+
+
+def is_platform_provider(provider) -> bool:
+    return provider.auth_mode == ModelProvider.AuthMode.PLATFORM_POOL
+
+
+def platform_credential_reference(preset_key: str) -> str:
+    preset = PROVIDER_PRESETS.get(preset_key)
+    if preset is None or not preset.get("platform_env"):
+        return ""
+    return "env://" + preset["platform_env"]
+
+
+def platform_env_configured(preset_key: str) -> bool:
+    preset = PROVIDER_PRESETS.get(preset_key)
+    variable = preset.get("platform_env") if preset else ""
+    return bool(variable and os.getenv(variable))
+
+
+def sync_platform_providers(*, tenant, user) -> list[ModelProvider]:
+    """Create the shared-pool rows for every platform whose key this runtime holds.
+
+    The rows are data, not code: an operator who sets ``PLATFORM_OPENAI_KEY``
+    gets working models after a plain SSO login, and one who does not gets no
+    phantom provider that fails at call time.
+    """
+
+    created: list[ModelProvider] = []
+    for preset_key in PROVIDER_PRESETS:
+        if not platform_env_configured(preset_key):
+            continue
+        existing = ModelProvider.objects.filter(
+            tenant=tenant,
+            preset_key=preset_key,
+            auth_mode=ModelProvider.AuthMode.PLATFORM_POOL,
+        ).first()
+        if existing is not None:
+            created.append(existing)
+            continue
+        preset = PROVIDER_PRESETS[preset_key]
+        name = f"{preset['label']} (platform)"
+        candidate, suffix = name, 2
+        with transaction.atomic():
+            while ModelProvider.objects.filter(tenant=tenant, name=candidate).exists():
+                candidate = f"{name} {suffix}"
+                suffix += 1
+            provider = ModelProvider.objects.create(
+                tenant=tenant,
+                created_by=user,
+                name=candidate,
+                provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+                auth_mode=ModelProvider.AuthMode.PLATFORM_POOL,
+                preset_key=preset_key,
+                base_url=preset["base_url"],
+                credential_ref=platform_credential_reference(preset_key),
+            )
+            seed_preset_models(provider)
+        created.append(provider)
+    return created
 
 
 def is_account_provider(provider) -> bool:

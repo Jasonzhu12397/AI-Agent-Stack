@@ -329,6 +329,13 @@ for name, kind, _base, _region in providers:
         },
     )
 
+# --- Shared pool: models that need no per-member key ------------------------
+# When the operator injects a platform key the tenant gets a shared-pool
+# provider, so a member who only signs in can chat immediately.
+from core.provider_accounts import sync_platform_providers
+
+platform_providers = sync_platform_providers(tenant=tenant, user=user)
+
 # --- M1: a published agent plus a run that actually succeeded ---------------
 agent, _ = AgentDefinition.objects.update_or_create(
     tenant=tenant,
