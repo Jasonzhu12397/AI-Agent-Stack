@@ -26,17 +26,19 @@ jobs:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
           CS: ${{ inputs.codespace }}
         run: |
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -60
+          set -o pipefail
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -80
       - name: Publish the console ports
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
           CS: ${{ inputs.codespace }}
         run: |
-          gh codespace ports visibility 5173:public 8000:public -c "$CS"
+          gh codespace ports visibility 8000:public -c "$CS"
           gh codespace ports -c "$CS"
       - name: Smoke test the public console
         env:
           CS: ${{ inputs.codespace }}
         run: |
-          curl -s -o /dev/null -w "web=%{http_code}\n" "https://${CS}-5173.app.github.dev/"
-          curl -s -o /dev/null -w "api=%{http_code}\n" "https://${CS}-8000.app.github.dev/health/ready"
+          set -o pipefail
+          curl -fsS -o /dev/null "https://${CS}-8000.app.github.dev/health/ready"
+          curl -fsS "https://${CS}-8000.app.github.dev/" | head -c 120
