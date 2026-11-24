@@ -80,6 +80,7 @@ def message_payload(message):
         "content": message.content,
         "context": message.context or {},
         "usage": message.usage or {},
+        "tool_calls": message.tool_calls or [],
         "error_code": message.error_code,
         "created_at": message.created_at.isoformat(),
         "author": message.author.username if message.author_id else None,
@@ -263,6 +264,7 @@ class AgentChatMessageListCreateView(APIView):
                 role=AgentChatMessage.Role.ASSISTANT,
                 content=reply["content"],
                 usage=reply["usage"],
+                tool_calls=reply.get("tool_calls") or [],
             )
             thread.save(update_fields=["updated_at"])
         record_audit_event(
@@ -540,20 +542,21 @@ def _generate_reply(request, thread, model_config, context):
     idempotency_key = f"agent-chat:{thread.id}:{user_message.id}"
 
     try:
-        content, usage = chat_runtime.generate(
-            thread.tenant,
+        content, usage, tool_log = chat_runtime.run_turn(
+            thread,
             model_config,
-            messages,
             user=request.user,
-            idempotency_key=idempotency_key,
+            messages=messages,
+            context=context,
             effort=thread.effort,
             execution_target=thread.execution_target,
+            idempotency_key=idempotency_key,
         )
     except chat_runtime.ChatRuntimeError as exc:
         return None, _failure(
             request, thread, model_config, exc.code, exc.message, exc.http_status
         )
-    return {"content": content, "usage": usage}, None
+    return {"content": content, "usage": usage, "tool_calls": tool_log}, None
 
 
 def _failure(request, thread, model_config, code, message, http_status):

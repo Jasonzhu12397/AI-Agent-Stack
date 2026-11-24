@@ -101,6 +101,7 @@ def run_job(job, *, trigger: str = "schedule") -> dict:
     error_code = ""
     content = ""
     usage: dict = {}
+    tool_log: list = []
     if model_config is None:
         error_code = "MODEL_NOT_CONFIGURED"
     else:
@@ -109,23 +110,25 @@ def run_job(job, *, trigger: str = "schedule") -> dict:
             {"role": "user", "content": job.prompt},
         ]
         try:
-            content, usage = chat_runtime.generate(
-                job.tenant,
+            content, usage, tool_log = chat_runtime.run_turn(
+                thread,
                 model_config,
-                messages,
                 user=job.created_by,
-                idempotency_key=f"scheduled:{job.id}:{user_message.id}",
+                messages=messages,
+                context={},
                 effort=job.effort,
                 execution_target=job.execution_target,
+                idempotency_key=f"scheduled:{job.id}:{user_message.id}",
             )
         except chat_runtime.ChatRuntimeError as exc:
-            content, usage, error_code = exc.message, {}, exc.code
+            content, usage, error_code, tool_log = exc.message, {}, exc.code, []
     with transaction.atomic():
         assistant = AgentChatMessage.objects.create(
             thread=thread,
             role=AgentChatMessage.Role.ASSISTANT,
             content=content,
             usage=usage,
+            tool_calls=tool_log,
             error_code=error_code,
         )
         assistant_id = str(assistant.id)

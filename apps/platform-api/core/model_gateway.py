@@ -249,9 +249,71 @@ class ModelGateway:
                         "INVALID_FAKE_RESPONSE",
                         "Fake provider response must be a string.",
                     )
+                # The offline model can run one tool turn: it calls the
+                # configured tool while the transcript holds no tool result
+                # yet, then answers from the tool output on the next pass.
+                fake_tool_calls = []
+                if (
+                    tools
+                    and provider.config.get("tool_call") is True
+                    and not any(message.get("role") == "tool" for message in messages)
+                ):
+                    functions = [item.get("function", {}) for item in tools]
+                    offered = [item.get("name") for item in functions]
+                    preferred = provider.config.get("tool_name")
+                    if preferred in offered:
+                        chosen = preferred
+                    else:
+                        # Prefer an installed plugin capability so the demo
+                        # exercises the connector, not just the control plane.
+                        plugin = [
+                            item.get("name")
+                            for item in functions
+                            if str(item.get("description", "")).startswith("[plugin]")
+                        ]
+                        chosen = plugin[0] if plugin else offered[0]
+                    # Fill the required arguments from the user's own turn so
+                    # schema validation runs against realistic values.
+                    parameters = next(
+                        (
+                            item.get("parameters") or {}
+                            for item in functions
+                            if item.get("name") == chosen
+                        ),
+                        {},
+                    )
+                    instruction = next(
+                        (
+                            str(message.get("content") or "")
+                            for message in reversed(messages)
+                            if message.get("role") == "user"
+                        ),
+                        "",
+                    )[:200]
+                    arguments = {}
+                    for key in parameters.get("required") or []:
+                        declared = (parameters.get("properties") or {}).get(key) or {}
+                        if declared.get("type") == "integer":
+                            arguments[key] = 1
+                        elif declared.get("type") == "boolean":
+                            arguments[key] = True
+                        else:
+                            arguments[key] = instruction or "demo"
+                    fake_tool_calls = [
+                        {
+                            "id": "call_fake_0",
+                            "type": "function",
+                            "function": {
+                                "name": chosen,
+                                "arguments": json.dumps(arguments),
+                            },
+                        }
+                    ]
+                    content = ""
                 resolved_input, resolved_output = 0, 0
                 response = ModelResponse(
                     content=content,
+                    tool_calls=fake_tool_calls,
                     input_tokens=resolved_input,
                     output_tokens=resolved_output,
                     provider=provider.name,

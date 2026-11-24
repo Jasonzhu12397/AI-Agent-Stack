@@ -19,6 +19,7 @@ import {
   type ChatContext,
   type ChatMessage,
   type ChatThread,
+  type ChatToolCall,
   type KnowledgeBase,
   type KnowledgeDocument,
 } from "../services/api";
@@ -445,6 +446,20 @@ onMounted(async () => {
               📎 {{ name }}
             </el-tag>
           </div>
+          <ul v-if="message.role === 'assistant' && message.tool_calls?.length" class="chat-tools">
+            <li v-for="(call, index) in message.tool_calls" :key="index" :class="{ failed: !call.ok }">
+              <span class="chat-tool-tag">{{ call.kind === "plugin" ? "PLUGIN" : "PLATFORM" }}</span>
+              <strong>{{ call.identifier }}</strong>
+              <span v-if="call.code" class="chat-tool-code">{{ call.code }}</span>
+              <span class="chat-tool-meta">{{ call.duration_ms }}ms</span>
+            </li>
+          </ul>
+          <p
+            v-if="message.role === 'assistant' && message.usage?.tools_note"
+            class="chat-tool-note"
+          >
+            ⚠ {{ t("This model does not support tool calls; the scope above was passed as context only.") }}
+          </p>
           <div
             v-if="message.role === 'assistant' && (message.context?.skills?.length || message.context?.plugins?.length)"
             class="chat-scope"
@@ -772,6 +787,15 @@ onMounted(async () => {
 .chat-attachments, .chat-scope { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; justify-content: flex-end; }
 .chat-scope { justify-content: flex-start; }
 .chat-status { margin: 6px 0 0; color: #8a9aa6; font-size: 10px; }
+.chat-tools { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; }
+.chat-tools li { display: flex; align-items: center; gap: 7px; padding: 4px 8px; border: 1px solid #dbe7ef; border-radius: 7px; background: #f7fafc; font-size: 10.5px; }
+.chat-tools li.failed { border-color: #f3cfcf; background: #fdeeee; }
+.chat-tool-tag { padding: 1px 5px; border-radius: 4px; background: #e3f2ec; color: #0a7f58; font-size: 9px; letter-spacing: 0.05em; }
+.chat-tools li.failed .chat-tool-tag { background: #f7dcdc; color: #a3231f; }
+.chat-tools strong { color: #16222b; font-weight: 600; }
+.chat-tool-code { color: #a3231f; font: 9.5px "DM Mono", monospace; }
+.chat-tool-meta { margin-left: auto; color: #8a9aa6; }
+.chat-tool-note { margin: 6px 0 0; color: #a9640a; font-size: 10.5px; }
 .chat-running { display: flex; align-items: center; gap: 8px; color: #0a7f58; font-size: 11.5px; }
 .chat-dots { display: inline-flex; gap: 3px; }
 .chat-dots i { width: 5px; height: 5px; border-radius: 50%; background: #0a7f58; opacity: 0.35; animation: chat-pulse 1.1s infinite; }

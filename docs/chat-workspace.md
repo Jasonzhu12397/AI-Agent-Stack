@@ -104,6 +104,43 @@ effort are expressed; `ChatRuntimeError` carries the error code the API and the
 worker both persist. Keeping one runtime means a scheduled turn behaves exactly
 like a turn the operator typed.
 
+## Tool calls
+
+The selected skills and plugins are not just prompt text. `core/chat_tools.py`
+builds an OpenAI-style tool list for every turn and `chat_runtime.run_turn`
+runs the tool loop the model drives:
+
+- Platform tools always ship: `stack_list_nodes`, `stack_list_deployments`,
+  `stack_list_commands`, `stack_list_registry_images`,
+  `stack_list_scheduled_jobs` and `stack_create_command`. The first five read
+  the control plane; `stack_create_command` writes a real `AgentCommand`
+  (version upgrades and rollbacks land in `waiting_approval`).
+- A selected skill opens exactly one capability of the installation that
+  granted it; a selected plugin opens every capability the installation was
+  granted. Capability calls go through `agent_capability_router`, so the
+  connector transport, credential resolution, risk policy and invocation
+  audit rows are the same ones the worker uses.
+- Model capabilities decide whether tools are offered at all. A model without
+  `tools` still answers, and the turn records
+  `usage.tools_note = "model does not support tool calls"` so the console can
+  say why nothing was invoked.
+- Budgets are fixed at four model steps and sixteen calls per turn; results
+  are clipped to 8,000 characters and the turn ends with
+  `usage.truncated = true` when the step budget is spent.
+
+Every call is persisted as `AgentChatMessage.tool_calls`: name, identifier,
+kind, arguments, `ok`, error `code` and `duration_ms`. The transcript renders
+one chip per call, red when the call failed, so an operator can see which
+capability ran and what the connector said. Scheduled turns store the same
+shape from their own runtime pass.
+
+The demo seed marks the offline `Local echo` model as tool-capable with
+`provider.config.tool_call`, so a fresh console can show a real tool turn
+without provisioning a provider credential. It calls one tool with arguments
+filled from the user's sentence; a plugin whose endpoint is not reachable
+reports a real error code (`CAPABILITY_INVOCATION_FAILED`) rather than a
+fabricated success.
+
 ## Local development database
 
 The single-host console runs one daphne process and one worker against the same
@@ -116,6 +153,8 @@ worker claims a job. Production runs PostgreSQL, where this does not apply.
 
 - `apps/web-studio`: `npx vue-tsc --noEmit`, `node --experimental-strip-types
   --test tests/*.test.mjs` (i18n coverage included), `npx vite build`.
+- `tests/test_chat_tools.py` covers the tool catalogue, skill/plugin
+  scoping, platform reads, command idempotency and the step budget.
 - `tests/test_chat_workspace.py` covers settings validation and storage, usage
   recording, attachment upload/download/ownership, knowledge references,
   schedule creation and dispatch, `run-now` thread creation, once-only claiming

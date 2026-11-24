@@ -39,7 +39,10 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
   left rail and a full-surface Control Agent chat column — thread-level
   execution target, reasoning effort, goal and plan-first settings, file and
   knowledge-base attachments, and scheduled turns the worker executes
-  unattended (see `docs/chat-workspace.md`). The rail and the column together
+  unattended. The chat executes what the composer selects: the control-plane
+  tools and the capability of every chosen skill or plugin are offered to the
+  model, run through the real connector transport, and recorded per call on the
+  assistant message (see `docs/chat-workspace.md`). The rail and the column together
   cover Agent Studio, Workflow Studio (visual DAG canvas with node inspector and
   edge editor), Model Manager, Integration Hub, Knowledge Base, Infrastructure
   Agents, Metal3 Fleet with Redfish firmware management, Image Registry,

@@ -86,6 +86,10 @@ class AgentChatMessage(models.Model):
     # Project, skills and plugins the member attached through the composer.
     context = models.JSONField(default=dict, blank=True)
     usage = models.JSONField(default=dict, blank=True)
+    # What the turn actually ran: each entry names the tool, its identifier,
+    # the arguments, the outcome code and the duration. The transcript renders
+    # this, so a reply that claims work cannot hide behind prose.
+    tool_calls = models.JSONField(default=list, blank=True)
     error_code = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

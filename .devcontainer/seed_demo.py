@@ -195,8 +195,8 @@ plugins = [
         "metrics-agent",
         "Metrics Agent",
         "Query the cluster metrics warehouse without credentials.",
-        "openai_compatible",
-        "https://metrics-agent.example.com/v1",
+        "http_json",
+        "https://github-agent.example.com",
         False,
         [capability("metrics.query", "Run a PromQL query")],
     ),
@@ -317,12 +317,22 @@ for index, (kind, status) in enumerate(
 # marked as the recommended default: it needs no credential and always answers.
 for name, kind, _base, _region in providers:
     provider = ModelProvider.objects.get(tenant=tenant, name=name)
+    if kind == "fake":
+        # The offline default model answers from a fixed script, and when the
+        # platform offers tools it calls one so the console can show a real
+        # tool turn without provisioning a provider credential.
+        provider.config = {
+            **provider.config,
+            "response": "Demo model: the fleet is reachable. Ask me to inspect nodes, deployments or commands.",
+            "tool_call": True,
+        }
+        provider.save(update_fields=["config"])
     ModelConfig.objects.update_or_create(
         provider=provider,
         model_name="demo-echo" if kind == "fake" else "demo-model",
         defaults={
             "display_name": "Local echo" if kind == "fake" else f"{name} default",
-            "capabilities": ["chat"],
+            "capabilities": ["chat", "tools"] if kind == "fake" else ["chat"],
             "context_window": 32768,
             "max_output_tokens": 1024,
             "enabled": True,

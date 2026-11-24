@@ -1184,4 +1184,5 @@ export const zhCN: Record<string, string> = {
   "Cloud Control Agent 正在执行": "Cloud Control Agent 正在执行",
   "never": "从未",
   "Choose a project first": "请先选择项目",
+  "This model does not support tool calls; the scope above was passed as context only.": "该模型不支持工具调用，上方选择仅作为上下文传入。",
 };

@@ -8,6 +8,13 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- Chat tool calls: the console now executes the skills and plugins selected in
+  the composer (platform control-plane tools plus connector capabilities),
+  persists every call on the assistant message and renders one status chip per
+  call. Scheduled turns use the same tool loop.
+
+### Added
+
 - **Chat workspace** — the Control Agent console is now a mainstream chat
   surface: one left rail (new task / new conversation / workbench / scheduled
   tasks / plugins · skills · partners / knowledge / more, project and

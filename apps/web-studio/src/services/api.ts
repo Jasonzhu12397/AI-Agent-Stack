@@ -2254,10 +2254,21 @@ export type ChatContext = {
   })[];
   models: ChatModelOption[];
 };
+export type ChatToolCall = {
+  name: string;
+  identifier: string;
+  kind: "platform" | "plugin" | string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  code: string | null;
+  duration_ms: number;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  tool_calls?: ChatToolCall[];
   context: {
     skills?: string[];
     plugins?: string[];
