@@ -1,5 +1,10 @@
 from django.urls import path
 
+from core.notification_views import (
+    NotificationEndpointDetailView,
+    NotificationEndpointListCreateView,
+    NotificationEndpointTestView,
+)
 from core.settings_views import (
     AboutView,
     AccountIdentitiesView,
@@ -63,5 +68,20 @@ urlpatterns = [
         "api/v1/users/me/sessions/<str:session_key>/revoke/",
         AccountSessionRevokeView.as_view(),
         name="account-session-revoke",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/settings/notifications/endpoints/",
+        NotificationEndpointListCreateView.as_view(),
+        name="notification-endpoints",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/settings/notifications/endpoints/<uuid:endpoint_id>/",
+        NotificationEndpointDetailView.as_view(),
+        name="notification-endpoint-detail",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/settings/notifications/endpoints/<uuid:endpoint_id>/test/",
+        NotificationEndpointTestView.as_view(),
+        name="notification-endpoint-test",
     ),
 ]

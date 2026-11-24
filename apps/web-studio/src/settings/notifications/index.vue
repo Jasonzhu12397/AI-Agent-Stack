@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { t } from "../../i18n";
 import { ApiError } from "../../services/http";
 import SettingsPageShell from "../shared/SettingsPageShell.vue";
+import RobotEndpointsPanel from "./RobotEndpointsPanel.vue";
 import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
 import { fetchDeliveryPreferences, fetchTenantNotifications, saveTenantNotifications } from "./api";
@@ -142,5 +143,6 @@ void pageLabels;
       <el-alert v-if="saveError" type="error" show-icon :closable="false" :title="saveError" />
       <p v-if="effective" class="muted">{{ t("Delivery channels") }}: {{ CHANNELS.join(", ") }}</p>
     </template>
+    <RobotEndpointsPanel v-if="activeTenantId" :tenant-id="activeTenantId" />
   </SettingsPageShell>
 </template>

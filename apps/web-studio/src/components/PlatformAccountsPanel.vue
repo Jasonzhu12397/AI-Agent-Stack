@@ -117,6 +117,7 @@ async function disconnect(providerId: string): Promise<void> {
 
 onMounted(refresh);
 watch(() => props.tenantId, refresh);
+defineExpose({ openPreset: openDialog });
 </script>
 
 <template>

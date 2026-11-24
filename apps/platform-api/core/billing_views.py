@@ -225,6 +225,73 @@ class BillingCapabilitiesView(TenantScopedView):
         )
 
 
+class PaymentChannelCredentialsView(TenantScopedView):
+    """Read and write the merchant credentials of one payment channel.
+
+    Slot values are write-only: a read reports which slots are filled, never a
+    value or a reference. Tenant admins are the operators of a self-hosted
+    deployment, so this is the console path that finishes a channel without
+    touching the environment file.
+    """
+
+    def _provider(self, channel):
+        if channel not in SUPPORTED_CHANNELS:
+            return None
+        return registry.provider_instances().get(channel)
+
+    def _report(self, channel, provider):
+        from core.payment_secrets import stored_slots
+
+        return {
+            "channel": channel,
+            "required": list(provider.REQUIRED_SLOTS),
+            "slots": list(provider.SLOTS),
+            "filled": sorted(stored_slots(channel)),
+            "missing": provider.missing_slots(),
+            "configured": provider.is_configured(),
+        }
+
+    def get(self, request, tenant_id, channel):
+        self.get_tenant()
+        provider = self._provider(channel)
+        if provider is None:
+            return _error("PAYMENT_CHANNEL_NOT_SUPPORTED", "Unsupported channel.", http_status=404)
+        return Response(self._report(channel, provider))
+
+    def put(self, request, tenant_id, channel):
+        tenant = self.get_tenant()
+        if not IsTenantAdmin().has_permission(request, self):
+            return _error(
+                "TENANT_ADMIN_REQUIRED",
+                "Tenant owner or admin role is required to change payment credentials.",
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+        provider = self._provider(channel)
+        if provider is None:
+            return _error("PAYMENT_CHANNEL_NOT_SUPPORTED", "Unsupported channel.", http_status=404)
+        values = request.data.get("values") if isinstance(request.data, dict) else None
+        if not isinstance(values, dict) or not values:
+            return _error("INVALID_CREDENTIALS", "values must be a non-empty object.")
+        unknown = [slot for slot in values if slot not in provider.SLOTS]
+        if unknown:
+            return _error(
+                "INVALID_CREDENTIALS",
+                f"Unknown slot(s) for {channel}: {', '.join(sorted(unknown))}.",
+            )
+        from core.payment_secrets import save_channel_secrets
+
+        save_channel_secrets(channel, values, user=request.user)
+        record_audit_event(
+            request,
+            tenant,
+            "billing.payment.credentials",
+            "payment_channel",
+            channel,
+            metadata={"channel": channel, "slots": sorted(values)},
+        )
+        return Response(self._report(channel, provider))
+
+
 class PlansView(TenantScopedView):
     def get(self, request, tenant_id):
         tenant = self.get_tenant()

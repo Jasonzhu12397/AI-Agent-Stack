@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import PlatformAccountsPanel from "./PlatformAccountsPanel.vue";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   catalogInstallPayload,
   catalogStatusLabel,
@@ -37,6 +38,10 @@ import {
   type AgentPluginDefinition,
   type AgentPluginInstallation,
 } from "../services/api";
+
+const route = useRoute();
+const focusedPlugin = ref("");
+const accountsPanel = ref<InstanceType<typeof PlatformAccountsPanel> | null>(null);
 
 const PROTOCOL_OPTIONS = ["http_json", "mcp", "a2a", "openai_compatible"];
 
@@ -309,7 +314,47 @@ async function changeStatus(entry: MarketplaceEntry, action: LifecycleAction): P
 }
 
 watch(() => [props.tenantId, props.projectId], () => void refresh());
-onMounted(() => void refresh());
+async function applyRouteFocus(): Promise<void> {
+  const plugin = typeof route.query.plugin === "string" ? route.query.plugin : "";
+  const provider = typeof route.query.provider === "string" ? route.query.provider : "";
+  focusedPlugin.value = plugin;
+  if (plugin) catalogQuery.value = plugin;
+  if (plugin) {
+    await nextTick();
+    document.getElementById(`plugin-${plugin}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  if (provider) {
+    await nextTick();
+    accountsPanel.value?.openPreset(provider);
+  }
+}
+
+// The catalog arrives after the first render, so a focus jump has to wait for
+// the row to exist before it can scroll to it.
+watch(
+  () => filteredCatalog.value.length,
+  (count) => {
+    if (!count || !focusedPlugin.value) return;
+    document
+      .getElementById(`plugin-${focusedPlugin.value}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  },
+);
+
+function clearFocus(): void {
+  focusedPlugin.value = "";
+  catalogQuery.value = "";
+}
+
+watch(
+  () => [route.query.plugin, route.query.provider],
+  () => void applyRouteFocus(),
+);
+
+onMounted(() => {
+  void refresh();
+  void applyRouteFocus();
+});
 </script>
 
 <template>
@@ -326,7 +371,16 @@ onMounted(() => void refresh());
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />
 
-    <PlatformAccountsPanel :tenant-id="props.tenantId" />
+    <PlatformAccountsPanel ref="accountsPanel" :tenant-id="props.tenantId" />
+    <el-alert
+      v-if="focusedPlugin"
+      :title="`Showing plugin ${focusedPlugin}`"
+      type="info"
+      show-icon
+      class="marketplace-focus"
+    >
+      <el-button size="small" text @click="clearFocus">Show whole catalog</el-button>
+    </el-alert>
 
     <section class="integration-panel marketplace-browse">
       <div class="integration-panel-title">
@@ -360,7 +414,9 @@ onMounted(() => void refresh());
         <div
           v-for="entry in filteredCatalog"
           :key="entry.plugin_key"
+          :id="`plugin-${entry.plugin_key}`"
           class="plugin-catalog-item marketplace-card"
+          :class="{ 'marketplace-card-focused': focusedPlugin === entry.plugin_key }"
         >
           <div class="plugin-catalog-top">
             <strong>{{ entry.name }}</strong>

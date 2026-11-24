@@ -162,6 +162,21 @@ function skillName(skillId: string): string {
   return context.value?.skills.find((item) => item.id === skillId)?.name ?? skillId;
 }
 
+// A plugin row opens the plugin's own window in the marketplace, the way the
+// desktop client jumps from its plugin list into the plugin page. Selecting the
+// checkbox still only attaches it to the next turn.
+function openPlugin(pluginKey: string): void {
+  void router.push({ path: "/marketplace", query: { plugin: pluginKey } });
+}
+
+function pluginKey(pluginId: string): string {
+  return context.value?.plugins.find((item) => item.id === pluginId)?.key ?? "";
+}
+
+function openProviderAccounts(): void {
+  void router.push({ path: "/marketplace", query: { provider: "openai" } });
+}
+
 function pluginName(pluginId: string): string {
   return context.value?.plugins.find((item) => item.id === pluginId)?.name ?? pluginId;
 }
@@ -203,6 +218,9 @@ watch(
             :value="model.id"
           />
         </el-select>
+        <el-button text size="small" @click="openProviderAccounts">
+          Platform accounts
+        </el-button>
         <el-button type="primary" plain @click="newThread">New conversation</el-button>
       </div>
     </header>
@@ -334,8 +352,19 @@ watch(
                   >
                     {{ plugin.name }} · {{ plugin.version }}
                   </el-checkbox>
+                  <el-button
+                    text
+                    size="small"
+                    class="popover-open"
+                    @click="openPlugin(plugin.key)"
+                  >
+                    打开 ↗
+                  </el-button>
                 </div>
                 <p v-if="!(context?.plugins ?? []).length" class="rail-empty">No plugin installed yet.</p>
+                <el-button text size="small" class="popover-browse" @click="openMarketplace">
+                  Browse the plugin marketplace ↗
+                </el-button>
               </el-popover>
             </div>
             <el-button type="primary" :loading="sending" :disabled="!canSend" @click="send">
@@ -546,6 +575,14 @@ watch(
   color: #6b7785;
 }
 .popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 2px 0;
+}
+.popover-open,
+.popover-browse {
+  padding: 0;
 }
 </style>

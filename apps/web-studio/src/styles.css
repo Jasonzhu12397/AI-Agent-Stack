@@ -63,7 +63,7 @@ a { color: inherit; text-decoration: none; }
   --el-box-shadow-light: 0 6px 18px rgba(18, 31, 40, 0.06);
 }
 
-.shell { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
+.shell { width: min(1400px, calc(100% - 40px)); margin: 0 auto; }
 .topbar { height: 84px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e3eaf2; }
 .brand { display: flex; align-items: center; gap: 12px; font-size: 16px; letter-spacing: -.3px; }
 .brand strong { color: #0a7f58; }
@@ -828,3 +828,30 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .milestone-state.partial { color: #8a4b00; }
 .milestone-state.in_progress { color: #5f6b78; }
 .milestone-evidence { display: block; margin-top: 6px; color: #6b7785; font-size: 11px; }
+
+/* A plugin opened from the chat composer gets a visible focus ring in the catalog. */
+.marketplace-card-focused {
+  border-color: #00a870;
+  box-shadow: 0 0 0 2px rgba(0, 168, 112, 0.22);
+}
+.marketplace-focus {
+  margin-bottom: 12px;
+}
+
+/* Every working dialog gets room to type: the previous sizes forced operators
+   to scroll inside a three-line box. */
+.el-dialog:not(.is-fullscreen) {
+  width: min(780px, 94vw) !important;
+}
+.el-dialog__body {
+  max-height: 66vh;
+  overflow-y: auto;
+}
+.el-textarea__inner {
+  min-height: 120px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.el-input__inner {
+  min-height: 38px;
+}

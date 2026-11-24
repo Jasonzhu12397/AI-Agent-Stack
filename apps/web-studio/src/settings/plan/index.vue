@@ -7,6 +7,7 @@ import { useSettingsResource } from "../shared/useSettingsResource";
 import { activeTenantId, ensureTenantContext, tenantContextError } from "../shared/tenantContext";
 import { createOrder, fetchBillingOverview, type OrderResponse } from "./api";
 import PaymentDialog from "./PaymentDialog.vue";
+import PaymentCredentialsDialog from "./PaymentCredentialsDialog.vue";
 import {
   canPurchase,
   channelLabel,
@@ -37,6 +38,17 @@ const orderNotice = ref("");
 const payment = computed(() => paymentAvailability(resource.data.value?.capabilities));
 const subscription = computed(() => resource.data.value?.subscription ?? null);
 const channels = computed(() => channelReadiness(resource.data.value?.capabilities));
+const credentialChannel = ref("");
+const credentialOpen = ref(false);
+
+function configureChannel(entry: ChannelReadiness): void {
+  credentialChannel.value = entry.channel;
+  credentialOpen.value = true;
+}
+
+function onCredentialsSaved(): void {
+  void resource.reload();
+}
 
 function gapSummary(entry: ChannelReadiness): string {
   return missingSlotsText(entry);
@@ -127,8 +139,24 @@ void pageLabels;
             <span class="muted">{{ row.configured ? "—" : gapSummary(row) }}</span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('Configure')" width="140">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" plain @click="configureChannel(row)">
+              {{ row.configured ? t("Update keys") : t("Finish setup") }}
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
+
+    <PaymentCredentialsDialog
+      v-if="activeTenantId"
+      :tenant-id="activeTenantId"
+      :channel="credentialChannel"
+      :open="credentialOpen"
+      @update:open="credentialOpen = $event"
+      @saved="onCredentialsSaved"
+    />
 
     <el-card v-if="subscription" class="settings-card" shadow="never">
       <template #header>{{ t("Current plan") }}</template>

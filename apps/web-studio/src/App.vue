@@ -111,6 +111,9 @@ const isSettings = computed(() => route.path.startsWith("/settings"));
 // The Control Agent spends the whole viewport on the conversation, so the
 // marketing hero stays out of its way.
 const isChat = computed(() => route.path === "/chat");
+// The hero and the platform-status block belong to the landing page; every
+// working section gets the viewport instead of a marketing banner on top.
+const isOverview = computed(() => route.path === "/");
 
 function isActive(to: string): boolean {
   if (to === "/") return route.path === "/";
@@ -202,7 +205,7 @@ onUnmounted(() => {
         </router-link>
         <router-link to="/settings/account" :class="{ active: isSettings }">Settings</router-link>
       </nav>
-      <section v-if="!isSettings && !isChat" class="hero">
+      <section v-if="isOverview" class="hero">
         <p class="eyebrow">AGENT PLATFORM</p>
         <h1>Build, orchestrate<br /><span>and govern AI agents.</span></h1>
         <p class="intro">
@@ -222,7 +225,7 @@ onUnmounted(() => {
         </div>
       </section>
       <router-view />
-      <template v-if="!isSettings && !isChat">
+      <template v-if="isOverview">
         <section class="overview">
           <div class="section-heading">
             <div><p class="eyebrow">SYSTEM OVERVIEW</p><h2>Platform status</h2></div>

@@ -102,9 +102,21 @@ class PaymentProvider(ABC):
         return {slot: self._refs[slot] for slot in self.SLOTS if slot in self._refs}
 
     def resolve_slot(self, slot: str) -> str | None:
-        """Resolve one declared slot to its plaintext, or ``None``."""
+        """Resolve one declared slot to its plaintext, or ``None``.
 
-        return resolve_credential_ref(self.references().get(slot))
+        The environment reference wins, because a deployment that injects its
+        merchant keys at boot stays authoritative. A slot the operator entered
+        in the console is the fallback, which is what lets a self-hosted
+        instance finish a channel without a redeploy.
+        """
+
+        ref = self.references().get(slot)
+        value = resolve_credential_ref(ref)
+        if value is not None:
+            return value
+        from core.payment_secrets import stored_secret
+
+        return stored_secret(self.channel, slot)
 
     def missing_slots(self) -> list[str]:
         """Required slots that do not resolve in this deployment."""

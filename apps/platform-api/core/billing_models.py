@@ -375,3 +375,31 @@ class EntitlementReclaim(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Entitlement reclaim rows cannot be deleted through the model API.")
+
+
+class PaymentChannelSecret(models.Model):
+    """A merchant credential for one payment channel slot, sealed at rest.
+
+    Rows are written from the console, never from a request body that also
+    creates an order, and the value column only ever holds an AES-GCM blob.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    channel = models.CharField(max_length=32)
+    slot = models.CharField(max_length=64)
+    sealed_value = models.TextField()
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("channel", "slot")
+        ordering = ("channel", "slot")
+
+    def __str__(self) -> str:
+        return f"{self.channel}:{self.slot}"

@@ -156,3 +156,40 @@ class FeedbackEntry(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class NotificationEndpoint(models.Model):
+    """An IM group robot a tenant forwards platform notifications to.
+
+    The webhook URL carries the bot token, so it is sealed like a credential and
+    never returned by the read API. ``secret`` is the signing key DingTalk and
+    Feishu group robots require; WeCom embeds it in the URL instead.
+    """
+
+    class Channel(models.TextChoices):
+        DINGTALK = "dingtalk", "DingTalk"
+        WECOM = "wecom", "WeCom"
+        FEISHU = "feishu", "Feishu"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="notification_endpoints",
+    )
+    channel = models.CharField(max_length=16, choices=Channel.choices)
+    name = models.CharField(max_length=120)
+    sealed_url = models.TextField()
+    sealed_secret = models.TextField(blank=True, default="")
+    enabled = models.BooleanField(default=True)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("channel", "name")
+        unique_together = ("tenant", "channel", "name")
+
+    def __str__(self) -> str:
+        return f"{self.tenant_id}:{self.channel}:{self.name}"
