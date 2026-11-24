@@ -7,6 +7,10 @@ on:
         description: Codespace name
         required: true
         default: bookish-space-computing-machine-q74qrqrgppr6f4w5v
+      probe:
+        description: "Set to 1 to print a masked credential report and stop"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -21,6 +25,13 @@ jobs:
         run: gh --version
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+      - name: Probe model credential resolution
+        if: ${{ inputs.probe == '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
+          CS: ${{ inputs.codespace }}
+        run: |
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/probe_credentials.py' 2>&1 | tail -40
       - name: Prepare and start the console inside the codespace
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
