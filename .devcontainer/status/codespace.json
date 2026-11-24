@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-24T04:54:27Z",
+  "checked_at": "2026-11-24T05:14:34Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -13,31 +13,24 @@
   },
   "ok": true,
   "api_log": [
-    "2026-11-24 12:51:57,494 INFO     Listening on TCP address 0.0.0.0:8000",
-    "127.0.0.1:49534 - - [24/Nov/2026:12:52:01] \"GET /health/ready\" 200 92",
-    "127.0.0.1:37714 - - [24/Nov/2026:12:54:01] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:37726 - - [24/Nov/2026:12:54:01] \"POST /api/v1/auth/login/\" 200 49",
-    "2026-11-24 12:54:18,834 INFO     Killed 0 pending application instances",
-    "2026-11-24 12:54:25,138 INFO     Starting server at tcp:port=8000:interface=0.0.0.0",
-    "2026-11-24 12:54:25,141 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)",
-    "2026-11-24 12:54:25,141 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0",
-    "2026-11-24 12:54:25,141 INFO     Listening on TCP address 0.0.0.0:8000",
-    "127.0.0.1:46592 - - [24/Nov/2026:12:54:26] \"GET /health/ready\" 200 92",
-    "127.0.0.1:46596 - - [24/Nov/2026:12:54:26] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:46600 - - [24/Nov/2026:12:54:27] \"POST /api/v1/auth/login/\" 200 49"
+    "127.0.0.1:57170 - - [24/Nov/2026:12:56:37] \"GET /health/ready\" 200 92",
+    "127.0.0.1:42092 - - [24/Nov/2026:12:58:37] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:42100 - - [24/Nov/2026:12:58:38] \"POST /api/v1/auth/login/\" 200 49",
+    "2026-11-24 13:14:24,993 INFO     Killed 0 pending application instances",
+    "2026-11-24 13:14:30,269 INFO     Starting server at tcp:port=8000:interface=0.0.0.0",
+    "2026-11-24 13:14:30,271 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)",
+    "2026-11-24 13:14:30,271 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0",
+    "2026-11-24 13:14:30,272 INFO     Listening on TCP address 0.0.0.0:8000",
+    "127.0.0.1:33268 - - [24/Nov/2026:13:14:33] \"GET /health/ready\" 200 92",
+    "127.0.0.1:33282 - - [24/Nov/2026:13:14:33] \"GET /\" 200 452",
+    "127.0.0.1:33284 - - [24/Nov/2026:13:14:33] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:33288 - - [24/Nov/2026:13:14:34] \"POST /api/v1/auth/login/\" 200 49"
   ],
   "web_log": [
-    "",
-    "sh: 1: vite: not found",
     "",
     "> ai-agent-studio@1.1.0 dev",
     "> vite --host 0.0.0.0 --port 5173",
     "",
-    "",
-    "  VITE v6.4.6  ready in 1740 ms",
-    "",
-    "  \u279c  Local:   http://localhost:5173/",
-    "  \u279c  Network: http://9.135.241.249:5173/",
-    "  \u279c  Network: http://169.254.112.26:5173/"
+    "sh: 1: vite: not found"
   ]
 }
