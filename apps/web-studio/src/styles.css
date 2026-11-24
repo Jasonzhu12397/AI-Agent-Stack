@@ -111,6 +111,9 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workspace-heading .eyebrow, .task-panel-heading .eyebrow { margin-bottom: 7px; }
 .workspace-heading h2 { margin: 0; }
 .workspace-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
+/* The conversation wants the room a chat app has: a slim rail and a tall
+   transcript that reaches the bottom of the viewport. */
+.workspace-grid.chat-layout { grid-template-columns: 220px minmax(0, 1fr); align-items: stretch; }
 .workspace-sidebar, .task-panel { min-width: 0; padding: 20px; background: #ffffff; border: 1px solid #e3eaf2; border-radius: 12px; }
 .workspace-section-heading h3, .task-panel-heading h3 { margin: 0; font-size: 15px; }
 .full-width { width: 100%; }
@@ -818,3 +821,10 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
   --el-empty-fill-color-8: #90a7bc;
   --el-empty-fill-color-9: #839bb2;
 }
+
+/* Roadmap states are computed from live evidence: verified reads as done,
+   partial as a working half, in progress as not started here yet. */
+.milestone-state.verified { color: #0b7a4b; }
+.milestone-state.partial { color: #8a4b00; }
+.milestone-state.in_progress { color: #5f6b78; }
+.milestone-evidence { display: block; margin-top: 6px; color: #6b7785; font-size: 11px; }

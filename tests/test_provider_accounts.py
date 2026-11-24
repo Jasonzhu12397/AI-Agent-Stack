@@ -54,7 +54,8 @@ def test_catalog_is_readable_by_a_member_without_a_purchase(member):
     response = client.get(f"/api/v1/tenants/{tenant.id}/model-providers/catalog/")
     assert response.status_code == 200
     keys = [item["key"] for item in response.data["presets"]]
-    assert keys == ["openai", "google", "deepseek", "qwen"]
+    assert keys[:3] == ["openai", "google", "deepseek"]
+    assert {"qwen", "zhipu", "moonshot", "minimax", "baichuan", "stepfun", "yi"} <= set(keys)
     assert response.data["free_daily_tokens"] == provider_accounts.free_daily_tokens()
     for item in response.data["presets"]:
         assert item["base_url"].startswith("https://")

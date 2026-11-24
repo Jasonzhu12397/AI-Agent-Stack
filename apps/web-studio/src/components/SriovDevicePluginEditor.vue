@@ -51,6 +51,17 @@ function ensureSelection(): void {
 }
 watch(poolNames, ensureSelection, { immediate: true });
 
+// Numbering starts at pool4: pools 0-3 are reserved by the network layout, so a
+// fresh configuration opens on the first assignable pool instead of an empty
+// editor that later produces a colliding name.
+watch(
+  () => poolNames.value.length,
+  (count) => {
+    if (count === 0) addPool();
+  },
+  { immediate: true },
+);
+
 function updateConfigMapName(value: string): void {
   const name = selectedPool.value;
   if (!name) return;

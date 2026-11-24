@@ -51,6 +51,50 @@ PROVIDER_PRESETS: dict[str, dict] = {
             {"model_name": "deepseek-reasoner", "display_name": "DeepSeek Reasoner"},
         ],
     },
+    "zhipu": {
+        "label": "智谱 GLM",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": [
+            {"model_name": "glm-4-plus", "display_name": "GLM-4 Plus"},
+            {"model_name": "glm-4-flash", "display_name": "GLM-4 Flash"},
+        ],
+    },
+    "moonshot": {
+        "label": "Moonshot Kimi",
+        "base_url": "https://api.moonshot.cn/v1",
+        "models": [
+            {"model_name": "moonshot-v1-8k", "display_name": "Kimi 8K"},
+            {"model_name": "moonshot-v1-32k", "display_name": "Kimi 32K"},
+        ],
+    },
+    "minimax": {
+        "label": "MiniMax",
+        "base_url": "https://api.minimax.chat/v1",
+        "models": [
+            {"model_name": "abab6.5s-chat", "display_name": "MiniMax abab6.5s"},
+        ],
+    },
+    "baichuan": {
+        "label": "百川",
+        "base_url": "https://api.baichuan-ai.com/v1",
+        "models": [
+            {"model_name": "Baichuan4", "display_name": "Baichuan4"},
+        ],
+    },
+    "stepfun": {
+        "label": "阶跃星辰",
+        "base_url": "https://api.stepfun.com/v1",
+        "models": [
+            {"model_name": "step-1-8k", "display_name": "Step-1 8K"},
+        ],
+    },
+    "yi": {
+        "label": "零一万物",
+        "base_url": "https://api.lingyiwanwu.com/v1",
+        "models": [
+            {"model_name": "yi-lightning", "display_name": "Yi Lightning"},
+        ],
+    },
     "qwen": {
         "label": "Qwen",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",

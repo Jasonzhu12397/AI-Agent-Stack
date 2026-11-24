@@ -147,8 +147,11 @@ def test_attached_skill_and_plugin_are_stored_on_the_turn(chat_workspace):
 
 
 @pytest.mark.django_db
-def test_thread_without_model_returns_configuration_error(chat_workspace):
-    user, tenant, project, _model, _installation = chat_workspace
+def test_tenant_without_any_model_returns_configuration_error(db):
+    user = get_user_model().objects.create_user(username="no-model", password="pw-no-model")
+    tenant = Tenant.objects.create(name="No model tenant", slug="no-model-tenant")
+    TenantMembership.objects.create(tenant=tenant, user=user, role="owner")
+    project = Project.objects.create(tenant=tenant, name="Bare", slug="bare")
     client = APIClient()
     client.force_authenticate(user=user)
     thread = _thread(client, tenant, project)
@@ -159,6 +162,21 @@ def test_thread_without_model_returns_configuration_error(chat_workspace):
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "MODEL_NOT_CONFIGURED"
+
+
+@pytest.mark.django_db
+def test_thread_without_a_selection_uses_the_tenant_default_model(chat_workspace):
+    user, tenant, project, model, _installation = chat_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    thread = _thread(client, tenant, project)
+    response = client.post(
+        f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
+        {"content": "hello"},
+        format="json",
+    )
+    assert response.status_code == 201, response.content
+    assert AgentChatThread.objects.get(pk=thread["id"]).model_config_id == model.id
 
 
 @pytest.mark.django_db

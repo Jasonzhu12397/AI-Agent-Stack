@@ -18,8 +18,14 @@ django.setup()
 from core.billing_models import Plan, Subscription
 from core.models import (
     AgentCapabilityInvocation,
+    AgentCommand,
+    AgentDefinition,
+    AgentNode,
     AgentPluginDefinition,
     AgentPluginInstallation,
+    AgentRun,
+    AgentVersion,
+    ModelConfig,
     ModelProvider,
     Project,
     ProjectMembership,
@@ -27,6 +33,10 @@ from core.models import (
     Tenant,
     TenantMembership,
     TenantTokenBudget,
+    WorkflowDefinition,
+    WorkflowRun,
+    WorkflowStepRun,
+    WorkflowVersion,
 )
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -297,5 +307,175 @@ for index, (kind, status) in enumerate(
         available_at=now,
         created_at=now - timedelta(minutes=index * 12),
     )
+
+
+# --- Models the console can actually talk to -------------------------------
+# Every provider gets at least one enabled model so the chat and the model
+# pickers are usable straight after bootstrap. The local echo provider is
+# marked as the recommended default: it needs no credential and always answers.
+for name, kind, _base, _region in providers:
+    provider = ModelProvider.objects.get(tenant=tenant, name=name)
+    ModelConfig.objects.update_or_create(
+        provider=provider,
+        model_name="demo-echo" if kind == "fake" else "demo-model",
+        defaults={
+            "display_name": "Local echo" if kind == "fake" else f"{name} default",
+            "capabilities": ["chat"],
+            "context_window": 32768,
+            "max_output_tokens": 1024,
+            "enabled": True,
+        },
+    )
+
+# --- M1: a published agent plus a run that actually succeeded ---------------
+agent, _ = AgentDefinition.objects.update_or_create(
+    tenant=tenant,
+    project=project,
+    slug="demo-support-agent",
+    defaults={
+        "created_by": user,
+        "name": "Demo Support Agent",
+        "description": "Answers questions about the demo fleet.",
+        "draft_config": {
+            "model_config_id": str(ModelConfig.objects.filter(provider__tenant=tenant).first().id)
+        },
+        "current_version": 1,
+    },
+)
+agent_version, _ = AgentVersion.objects.update_or_create(
+    agent=agent,
+    version=1,
+    defaults={
+        "created_by": user,
+        "config_snapshot": agent.draft_config,
+    },
+)
+agent_task, _ = Task.objects.update_or_create(
+    tenant=tenant,
+    idempotency_key="demo-agent-run",
+    defaults={
+        "project": project,
+        "created_by": user,
+        "task_type": "agent.run",
+        "payload": {"demo": True},
+        "status": Task.Status.SUCCEEDED,
+        "available_at": now,
+        "finished_at": now,
+        "attempts": 1,
+    },
+)
+AgentRun.objects.update_or_create(
+    task=agent_task,
+    defaults={
+        "agent_version": agent_version,
+        "input_text": "Which machines are waiting for enrollment?",
+        "output_text": "Three machines are queued; two already have BMC credentials.",
+        "input_tokens": 96,
+        "output_tokens": 120,
+        "provider_name": "Local echo",
+        "model_name": "demo-echo",
+        "latency_ms": 240,
+    },
+)
+
+# --- M2: a published workflow whose steps were persisted and completed ------
+workflow, _ = WorkflowDefinition.objects.update_or_create(
+    project=project,
+    slug="demo-fleet-check",
+    defaults={
+        "tenant": tenant,
+        "created_by": user,
+        "name": "Demo Fleet Check",
+        "description": "Collect inventory, ask the model to summarise it.",
+        "current_version": 1,
+        "draft_definition": {
+            "nodes": [
+                {"id": "collect", "type": "llm", "prompt": "List the fleet."},
+                {"id": "summarise", "type": "llm", "prompt": "Summarise."},
+            ],
+            "edges": [{"from": "collect", "to": "summarise"}],
+        },
+    },
+)
+workflow_version, _ = WorkflowVersion.objects.update_or_create(
+    workflow=workflow,
+    version=1,
+    defaults={"created_by": user, "definition_snapshot": workflow.draft_definition},
+)
+workflow_task, _ = Task.objects.update_or_create(
+    tenant=tenant,
+    idempotency_key="demo-workflow-run",
+    defaults={
+        "project": project,
+        "created_by": user,
+        "task_type": "workflow.run",
+        "payload": {"demo": True},
+        "status": Task.Status.SUCCEEDED,
+        "available_at": now,
+        "finished_at": now,
+        "attempts": 1,
+    },
+)
+workflow_run, _ = WorkflowRun.objects.update_or_create(
+    task=workflow_task,
+    defaults={
+        "workflow_version": workflow_version,
+        "input_data": {"demo": True},
+        "state": {"current": None},
+        "output_data": {"summary": "Two machines ready."},
+        "finished_at": now,
+    },
+)
+for node_id in ("collect", "summarise"):
+    WorkflowStepRun.objects.update_or_create(
+        workflow_run=workflow_run,
+        node_id=node_id,
+        defaults={
+            "node_type": "llm",
+            "status": WorkflowStepRun.Status.SUCCEEDED,
+            "output_data": {"text": f"{node_id} done"},
+            "started_at": now,
+            "finished_at": now,
+        },
+    )
+
+# --- M3: an enrolled node plus a command that passed the approval gate ------
+node, _ = AgentNode.objects.update_or_create(
+    project=project,
+    name="demo-eph-node",
+    defaults={
+        "tenant": tenant,
+        "created_by": user,
+        "node_type": AgentNode.NodeType.EPH_NODE,
+        "cluster_name": "prod-cluster",
+        "agent_version": "1.4.2",
+        "capabilities": ["inventory.report", "pxe.boot"],
+        "labels": {"pool": "pool4"},
+        "credential_hash": "0" * 64,
+        "status": AgentNode.Status.ONLINE,
+        "last_seen_at": now,
+        "last_seen_ip": "10.0.4.11",
+    },
+)
+AgentCommand.objects.update_or_create(
+    node=node,
+    idempotency_key="demo-inventory-command",
+    defaults={
+        "tenant": tenant,
+        "project": project,
+        "requested_by": user,
+        "command_type": "inventory.report",
+        "payload": {"refresh": True},
+        "status": AgentCommand.Status.SUCCEEDED,
+        "plan_hash": "0" * 64,
+        "approved_plan_hash": "0" * 64,
+        "approved_by": user,
+        "approved_at": now,
+        "attempts": 1,
+        "result": {"machines": 4},
+        "started_at": now,
+        "finished_at": now,
+    },
+)
 
 print("seeded", tenant.slug, project.slug)

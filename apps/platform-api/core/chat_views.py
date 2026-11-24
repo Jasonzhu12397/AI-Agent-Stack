@@ -107,7 +107,9 @@ class AgentChatThreadListCreateView(APIView):
                 http_status=status.HTTP_400_BAD_REQUEST,
                 code="INVALID_TITLE",
             )
-        model_config = _resolve_model_config(request, tenant, request.data.get("model_config_id"))
+        model_config = _resolve_model_config(
+            request, tenant, request.data.get("model_config_id")
+        ) or _default_model_config(tenant)
         thread = AgentChatThread.objects.create(
             tenant=tenant,
             project=project,
@@ -202,7 +204,12 @@ class AgentChatMessageListCreateView(APIView):
         model_config = (
             _resolve_model_config(request, thread.tenant, request.data.get("model_config_id"))
             or thread.model_config
+            or _default_model_config(thread.tenant)
         )
+        if model_config is not None and thread.model_config_id is None:
+            # Remember the model this conversation settled on so later turns
+            # keep answering with the same one.
+            thread.model_config = model_config
         with transaction.atomic():
             user_message = AgentChatMessage.objects.create(
                 thread=thread,
@@ -211,7 +218,7 @@ class AgentChatMessageListCreateView(APIView):
                 author=request.user,
                 context=context,
             )
-            thread.save(update_fields=["updated_at"])
+            thread.save(update_fields=["updated_at", "model_config"])
         reply, error = _generate_reply(request, thread, model_config, context)
         if error is not None:
             return error
@@ -314,6 +321,7 @@ def _available_models(request, tenant):
         items.append(
             {
                 "id": str(model.id),
+                "recommended": provider.provider_type == ModelProvider.ProviderType.FAKE,
                 "model_name": model.model_name,
                 "display_name": model.display_name,
                 "provider_name": provider.name,
@@ -322,6 +330,26 @@ def _available_models(request, tenant):
             }
         )
     return items
+
+
+def _default_model_config(tenant):
+    """The model a new conversation falls back to.
+
+    A tenant that configured nothing still needs a working chat: the local
+    echo provider answers without a credential, so it is preferred over a
+    remote provider whose key may not be wired yet.
+    """
+
+    queryset = (
+        ModelConfig.objects.select_related("provider")
+        .filter(
+            Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+            provider__enabled=True,
+            enabled=True,
+        )
+        .order_by("provider__provider_type", "provider__name", "model_name")
+    )
+    return queryset.first()
 
 
 def _resolve_model_config(request, tenant, model_config_id):

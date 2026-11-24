@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
+  apiErrorCode,
   createChatThread,
   deleteChatThread,
   getChatContext,
@@ -13,6 +15,7 @@ import {
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
+const router = useRouter();
 
 const context = ref<ChatContext | null>(null);
 const threads = ref<ChatThread[]>([]);
@@ -28,8 +31,18 @@ const selectedModelId = ref("");
 const activeThread = computed(() => threads.value.find((item) => item.id === activeThreadId.value) ?? null);
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value);
 
+const errorCode = ref("");
+const needsModelSetup = computed(
+  () => errorCode.value === "MODEL_NOT_CONFIGURED" || (context.value?.models.length ?? 1) === 0,
+);
+
 function reportError(cause: unknown): void {
+  errorCode.value = apiErrorCode(cause) ?? "";
   error.value = cause instanceof Error ? cause.message : "Request failed.";
+}
+
+function openMarketplace(): void {
+  void router.push("/marketplace");
 }
 
 async function loadContext(): Promise<void> {
@@ -37,7 +50,10 @@ async function loadContext(): Promise<void> {
   try {
     context.value = await getChatContext(props.tenantId, props.projectId);
     if (!selectedModelId.value && context.value.models.length > 0) {
-      selectedModelId.value = context.value.models[0].id;
+      // The local echo model needs no credential, so it is the safest default
+      // until the member authorizes a real platform account.
+      const recommended = context.value.models.find((model) => model.recommended);
+      selectedModelId.value = (recommended ?? context.value.models[0]).id;
     }
   } catch (cause) {
     reportError(cause);
@@ -106,6 +122,7 @@ async function send(): Promise<void> {
   const threadId = activeThreadId.value;
   sending.value = true;
   error.value = "";
+  errorCode.value = "";
   try {
     const result = await sendChatMessage(threadId, {
       content: text,
@@ -191,6 +208,17 @@ watch(
     </header>
 
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
+    <el-alert
+      v-if="needsModelSetup"
+      title="Chat needs a model. Authorize your own OpenAI, DeepSeek, Qwen, GLM or Kimi account and its free allowance covers the conversation."
+      type="warning"
+      show-icon
+      :closable="false"
+    >
+      <el-button size="small" type="primary" plain @click="openMarketplace">
+        Authorize a platform account
+      </el-button>
+    </el-alert>
 
     <div class="chat-body">
       <aside class="thread-rail">
@@ -325,6 +353,9 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* A chat deserves the viewport: a fixed tall column rather than a card that
+     grows with the number of messages. */
+  height: calc(100vh - 220px);
   min-height: 640px;
 }
 .chat-toolbar {
@@ -424,9 +455,11 @@ watch(
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
 }
 .transcript {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
   background: #f7f9fb;
@@ -473,6 +506,7 @@ watch(
   margin-top: 8px;
 }
 .composer {
+  flex: 0 0 auto;
   background: #fff;
   border: 1px solid #e3e8ee;
   border-top: none;

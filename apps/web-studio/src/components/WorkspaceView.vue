@@ -208,7 +208,7 @@ onUnmounted(() => {
       <el-tag type="success" effect="plain">SESSION AUTHENTICATED</el-tag>
     </div>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
-    <div class="workspace-grid">
+    <div class="workspace-grid" :class="{ 'chat-layout': props.activeSection === 'chat' }">
       <aside class="workspace-sidebar">
         <div class="workspace-section-heading">
           <h3>Organizations</h3>

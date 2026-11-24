@@ -4,7 +4,13 @@ import { useRoute, useRouter } from "vue-router";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import en from "element-plus/es/locale/lang/en";
 import { locale, setLocale } from "./i18n";
-import { apiBase, logout, type CurrentUser } from "./services/api";
+import {
+  apiBase,
+  getPlatformRoadmap,
+  logout,
+  type CurrentUser,
+  type RoadmapItem,
+} from "./services/api";
 import { currentUser, setAuthenticated, resetAuthCache } from "./router";
 
 type Health = { status: string; database?: string };
@@ -33,6 +39,61 @@ const navItems = [
 const apiStatus = ref("Checking");
 const databaseStatus = ref("Checking");
 const authError = ref("");
+// Milestone states come from the API, which derives them from rows the
+// platform actually produced, so this page cannot drift from reality.
+const roadmap = ref<RoadmapItem[]>([]);
+const ROADMAP_FALLBACK: RoadmapItem[] = [
+  {
+    code: "M0",
+    title: "Platform foundation",
+    detail: "Django API, Vue Studio, PostgreSQL, Worker and Compose",
+    status: "verified",
+    evidence: {},
+  },
+  {
+    code: "M1",
+    title: "Agent runtime",
+    detail: "Published Agent versions and asynchronous LLM runs",
+    status: "in_progress",
+    evidence: {},
+  },
+  {
+    code: "M2",
+    title: "Workflow engine",
+    detail: "Versioned DAG, LLM/Condition nodes and persisted steps",
+    status: "in_progress",
+    evidence: {},
+  },
+  {
+    code: "M3",
+    title: "Multi-agent control",
+    detail:
+      "Cloud Control, Target and EPH agents: enrollment, command leases and approval gate",
+    status: "in_progress",
+    evidence: {},
+  },
+];
+
+const statusLabels: Record<string, string> = {
+  verified: "VERIFIED",
+  partial: "PARTIAL",
+  in_progress: "IN PROGRESS",
+};
+
+async function loadRoadmap(): Promise<void> {
+  try {
+    roadmap.value = (await getPlatformRoadmap()).items;
+  } catch {
+    roadmap.value = ROADMAP_FALLBACK;
+  }
+}
+
+function evidenceText(item: RoadmapItem): string {
+  return Object.entries(item.evidence)
+    .filter(([, value]) => typeof value === "number")
+    .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`)
+    .join(" · ");
+}
 let timer: number | undefined;
 
 const isLogin = computed(() => route.path === "/login");
@@ -80,6 +141,7 @@ function onSessionExpired(): void {
 }
 
 onMounted(() => {
+  void loadRoadmap();
   void checkHealth();
   timer = window.setInterval(() => void checkHealth(), 10000);
   window.addEventListener("agent-stack:session-expired", onSessionExpired);
@@ -171,19 +233,15 @@ onUnmounted(() => {
           <p class="eyebrow">DELIVERY ROADMAP</p>
           <div class="milestone-grid">
             <article
-              v-for="(item, index) in [
-                { code: 'M0', title: 'Platform foundation', detail: 'Django API, Vue Studio, PostgreSQL, Worker and Compose' },
-                { code: 'M1', title: 'Agent runtime', detail: 'Published Agent versions and asynchronous LLM runs' },
-                { code: 'M2', title: 'Workflow engine', detail: 'Versioned DAG, LLM/Condition nodes and persisted steps' },
-                { code: 'M3', title: 'Multi-agent control', detail: 'Cloud Control, Target and EPH agents: enrollment, command leases and approval gate' }
-              ]"
+              v-for="(item, index) in roadmap.length ? roadmap : ROADMAP_FALLBACK"
               :key="item.code"
               class="milestone"
             >
               <span class="milestone-code" :class="{ current: index === 0 }">{{ item.code }}</span>
               <h3>{{ item.title }}</h3>
               <p>{{ item.detail }}</p>
-              <span class="milestone-state">{{ ["VERIFIED BASELINE", "PARTIAL", "PARTIAL", "IN PROGRESS"][index] }}</span>
+              <span class="milestone-state" :class="item.status">{{ statusLabels[item.status] }}</span>
+              <small v-if="evidenceText(item)" class="milestone-evidence">{{ evidenceText(item) }}</small>
             </article>
           </div>
         </section>

@@ -2182,6 +2182,7 @@ export function unlinkProviderAccount(
 export type ChatContextItem = { id: string; name: string; slug?: string; installation_id?: string };
 export type ChatModelOption = {
   id: string;
+  recommended?: boolean;
   model_name: string;
   display_name: string;
   provider_name: string;
@@ -2259,4 +2260,16 @@ export function sendChatMessage(
     `/api/v1/agent-chat/threads/${threadId}/messages/`,
     { method: "POST", body: JSON.stringify(payload) },
   );
+}
+
+export type RoadmapItem = {
+  code: string;
+  title: string;
+  detail: string;
+  status: "verified" | "partial" | "in_progress";
+  evidence: Record<string, number>;
+};
+
+export function getPlatformRoadmap(): Promise<{ items: RoadmapItem[] }> {
+  return request<{ items: RoadmapItem[] }>("/api/v1/platform/roadmap/");
 }

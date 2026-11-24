@@ -58,6 +58,7 @@ from core.agent_views import (
     AgentRunListCreateView,
 )
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.roadmap_views import PlatformRoadmapView
 from core.chat_views import (
     AgentChatContextView,
     AgentChatMessageListCreateView,
@@ -651,6 +652,11 @@ urlpatterns = [
         "api/v1/agent-chat/threads/<uuid:thread_id>/messages/",
         AgentChatMessageListCreateView.as_view(),
         name="agent-chat-message-list-create",
+    ),
+    path(
+        "api/v1/platform/roadmap/",
+        PlatformRoadmapView.as_view(),
+        name="platform-roadmap",
     ),
     path("", include("core.settings_urls")),
     path("", include("core.billing_urls")),
