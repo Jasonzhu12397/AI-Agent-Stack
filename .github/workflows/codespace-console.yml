@@ -40,7 +40,7 @@ jobs:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
           CS: ${{ inputs.codespace }}
         run: |
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && tail -n 40 .devdata/api.log; echo ---; grep -c "" .devdata/bootstrap.log || true; tail -n 5 .devdata/bootstrap.log || true'
+          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && grep -inE "login|csrf|forbidden|access" .devdata/api.log | tail -n 40'
 
       - name: Open a gate-free tunnel for the console
         env:
