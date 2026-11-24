@@ -43,6 +43,7 @@ from core.models import (
 )
 from core.registry_models import RegistryImage
 from core.scheduled_models import ScheduledChatJob
+from packages.agent_contracts.agent_commands import commands_for_role
 
 #: A provider rejects function names outside this alphabet, and a chat answer is
 #: not an agent run: four steps is enough to read, decide and answer.
@@ -141,6 +142,74 @@ def _list_deployments(thread: AgentChatThread, arguments: dict) -> dict:
     }
 
 
+def _get_deployment(thread: AgentChatThread, arguments: dict) -> dict:
+    """One deployment with the preflight and plan the operator would read."""
+
+    deployment_id = arguments.get("deployment_id")
+    cluster_name = arguments.get("cluster_name")
+    scope = ClusterDeployment.objects.filter(tenant=thread.tenant, project=thread.project)
+    if deployment_id:
+        deployment = (
+            scope.filter(pk=deployment_id).select_related("eph_node", "target_node").first()
+        )
+    elif cluster_name:
+        deployment = (
+            scope.filter(cluster_name=cluster_name)
+            .select_related("eph_node", "target_node")
+            .order_by("-created_at")
+            .first()
+        )
+    else:
+        deployment = None
+    if deployment is None:
+        raise ChatToolError(
+            "DEPLOYMENT_NOT_FOUND",
+            "Pass deployment_id or cluster_name of a deployment in this project.",
+        )
+    preflight = deployment.preflight_result if isinstance(deployment.preflight_result, dict) else {}
+    plan = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+    spec = deployment.spec if isinstance(deployment.spec, dict) else {}
+    readiness = preflight.get("network_readiness")
+    return {
+        "ok": True,
+        "deployment": {
+            "id": str(deployment.id),
+            "cluster_name": deployment.cluster_name,
+            "status": deployment.status,
+            "kubernetes_version": deployment.kubernetes_version,
+            "plan_hash": deployment.plan_hash,
+            "eph_node": deployment.eph_node.name,
+            "target_node": deployment.target_node.name if deployment.target_node else None,
+            "created_at": deployment.created_at.isoformat(),
+            "started_at": deployment.started_at.isoformat() if deployment.started_at else None,
+            "finished_at": (
+                deployment.finished_at.isoformat() if deployment.finished_at else None
+            ),
+            "error": deployment.error,
+            "spec": {
+                "control_plane_replicas": spec.get("control_plane_replicas"),
+                "worker_replicas": spec.get("worker_replicas"),
+                "namespace": spec.get("namespace"),
+                "networks": [
+                    item.get("name")
+                    for item in (spec.get("infra_network_profile") or {}).get("networks") or []
+                    if isinstance(item, dict)
+                ],
+            },
+            "preflight": {
+                "network_readiness": readiness,
+                "ironic_workload": preflight.get("ironic_workload"),
+                "network_defaults": preflight.get("network_defaults"),
+            },
+            "plan_phases": [
+                item.get("action") or item.get("phase")
+                for item in plan.get("steps") or []
+                if isinstance(item, dict)
+            ][:20],
+        },
+    }
+
+
 def _list_commands(thread: AgentChatThread, arguments: dict) -> dict:
     limit = int(arguments.get("limit") or 10)
     rows = AgentCommand.objects.filter(
@@ -208,6 +277,16 @@ def _list_scheduled_jobs(thread: AgentChatThread, arguments: dict) -> dict:
     }
 
 
+def _role_for_node(node: AgentNode) -> str:
+    """The agent role a node polls with, mirroring the runtime dispatch."""
+
+    if node.node_type == AgentNode.NodeType.LOCAL_RUNNER:
+        return "local"
+    if node.node_type == AgentNode.NodeType.EPH_NODE:
+        return "eph"
+    return "target"
+
+
 def _create_command(thread: AgentChatThread, arguments: dict) -> dict:
     node_id = str(arguments.get("node_id") or "").strip()
     command_type = str(arguments.get("command_type") or "").strip()
@@ -221,6 +300,15 @@ def _create_command(thread: AgentChatThread, arguments: dict) -> dict:
     ).first()
     if node is None:
         raise ChatToolError("NODE_NOT_FOUND", "No enrolled node with that id in this project.")
+    role = _role_for_node(node)
+    allowed = commands_for_role(role)
+    if command_type not in allowed:
+        # A command the node's agent never implements would stay queued forever,
+        # so the turn refuses it instead of filing dead work.
+        raise ChatToolError(
+            "COMMAND_NOT_ALLOWED_FOR_NODE",
+            f"{node.name} is a {role} agent; {command_type} is not in its command surface.",
+        )
     fingerprint = f"{thread.id}:{command_type}:{node.id}:{json.dumps(payload, sort_keys=True)}"
     idempotency_key = f"chat:{thread.id}:{uuid.uuid5(uuid.NAMESPACE_URL, fingerprint)}"
     status = (
@@ -464,6 +552,22 @@ PLATFORM_TOOLS: tuple[ChatTool, ...] = (
         handler=_list_deployments,
     ),
     ChatTool(
+        name="stack_get_deployment",
+        kind="platform",
+        identifier="platform.get_deployment",
+        description=(
+            "Read one cluster deployment by id or cluster name: status, plan hash, the "
+            "preflight (network readiness, Ironic workload warnings) and the plan phases."
+        ),
+        schema=_schema(
+            {
+                "deployment_id": {"type": "string", "description": "Deployment UUID"},
+                "cluster_name": {"type": "string", "description": "Cluster name to look up"},
+            }
+        ),
+        handler=_get_deployment,
+    ),
+    ChatTool(
         name="stack_list_commands",
         kind="platform",
         identifier="platform.list_commands",
@@ -516,9 +620,10 @@ PLATFORM_TOOLS: tuple[ChatTool, ...] = (
         kind="platform",
         identifier="platform.create_command",
         description=(
-            "File a real AgentCommand against an enrolled node. Commands that change a "
-            "cluster land in waiting_approval and need a human approval before they run; "
-            "everything else is queued for the node."
+            "File a real AgentCommand against an enrolled node. The command must belong to "
+            "that node's role (EPH, Target or local runner), otherwise it is refused. "
+            "Commands that change a cluster land in waiting_approval and need a human "
+            "approval before they run; everything else is queued for the node."
         ),
         schema=_schema(
             {

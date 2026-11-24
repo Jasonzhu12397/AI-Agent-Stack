@@ -54,7 +54,24 @@ def scope(db):
         status=AgentNode.Status.ONLINE,
         last_seen_at=timezone.now(),
     )
-    return {"user": user, "tenant": tenant, "project": project, "thread": thread, "node": node}
+    target = AgentNode.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="target-1",
+        node_type=AgentNode.NodeType.TARGET_CLUSTER,
+        credential_hash="y" * 64,
+        status=AgentNode.Status.ONLINE,
+        last_seen_at=timezone.now(),
+    )
+    return {
+        "user": user,
+        "tenant": tenant,
+        "project": project,
+        "thread": thread,
+        "node": node,
+        "target": target,
+    }
 
 
 def _plugin(scope, plugin_key, capabilities, auth_required=True, credential_ref="vault://x"):
@@ -127,9 +144,27 @@ def test_list_nodes_reads_the_control_plane(scope):
     tool = next(item for item in tools if item.name == "stack_list_nodes")
     payload = chat_tools.run_tool(tool, {})
     assert payload["ok"] is True
-    assert payload["count"] == 1
-    assert payload["nodes"][0]["name"] == "eph-1"
-    assert payload["nodes"][0]["status"] == "online"
+    assert payload["count"] == 2
+    assert {item["name"] for item in payload["nodes"]} == {"eph-1", "target-1"}
+    assert all(item["status"] == "online" for item in payload["nodes"])
+
+
+def test_create_command_rejects_a_type_the_node_cannot_run(scope):
+    tool = next(
+        item
+        for item in chat_tools.build_tools(scope["thread"], {})
+        if item.name == "stack_create_command"
+    )
+    payload = chat_tools.run_tool(
+        tool,
+        {
+            "node_id": str(scope["node"].id),
+            "command_type": "cluster.kubernetes.version.upgrade",
+            "payload": {"version": "v1.31.4"},
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["code"] == "COMMAND_NOT_ALLOWED_FOR_NODE"
 
 
 def test_create_command_files_a_real_command_and_gates_cluster_changes(scope):
@@ -141,7 +176,7 @@ def test_create_command_files_a_real_command_and_gates_cluster_changes(scope):
     payload = chat_tools.run_tool(
         tool,
         {
-            "node_id": str(scope["node"].id),
+            "node_id": str(scope["target"].id),
             "command_type": "cluster.kubernetes.version.upgrade",
             "payload": {"version": "v1.31.4"},
         },
@@ -157,7 +192,7 @@ def test_create_command_files_a_real_command_and_gates_cluster_changes(scope):
     again = chat_tools.run_tool(
         tool,
         {
-            "node_id": str(scope["node"].id),
+            "node_id": str(scope["target"].id),
             "command_type": "cluster.kubernetes.version.upgrade",
             "payload": {"version": "v1.31.4"},
         },
@@ -359,3 +394,30 @@ def test_plan_deployment_files_the_preflight(scope):
     assert deployment.preflight_result["ironic_workload"]["warnings"] == [
         "IRONIC_WORKLOAD_CR_REQUIRED"
     ]
+
+
+def test_get_deployment_reads_the_preflight(scope):
+    tools = chat_tools.build_tools(scope["thread"], {})
+    plan_tool = next(item for item in tools if item.name == "stack_plan_deployment")
+    created = chat_tools.run_tool(
+        plan_tool,
+        {
+            "eph_node_id": str(scope["node"].id),
+            "cluster_spec": {
+                "cluster_name": "detail-demo",
+                "kubernetes_version": "v1.30.2",
+                "control_plane_replicas": 1,
+                "worker_replicas": 1,
+            },
+        },
+    )
+    detail_tool = next(item for item in tools if item.name == "stack_get_deployment")
+    detail = chat_tools.run_tool(detail_tool, {"cluster_name": "detail-demo"})
+    assert detail["ok"] is True
+    assert detail["deployment"]["id"] == created["deployment"]["id"]
+    assert detail["deployment"]["preflight"]["ironic_workload"]["configured"] is False
+
+    missing = chat_tools.run_tool(
+        detail_tool, {"deployment_id": "00000000-0000-0000-0000-000000000000"}
+    )
+    assert missing["code"] == "DEPLOYMENT_NOT_FOUND"

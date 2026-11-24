@@ -8,6 +8,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- `stack_get_deployment`: read one deployment's status, plan hash, preflight
+  (network readiness, Ironic warnings) and plan phases from a chat turn.
+- `stack_create_command` now validates the command against the node's role
+  (EPH, Target, local runner) instead of queueing work its agent cannot poll.
 - `stack_plan_deployment`: a chat turn can file a bare-metal cluster deployment
   for an online EPH node, validated by the same spec validator and network
   readiness gate the deployment form uses, with the preflight stored on the

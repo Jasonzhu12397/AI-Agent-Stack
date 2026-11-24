@@ -111,13 +111,16 @@ builds an OpenAI-style tool list for every turn and `chat_runtime.run_turn`
 runs the tool loop the model drives:
 
 - Platform tools always ship: `stack_list_nodes`, `stack_plan_deployment`,
+  `stack_get_deployment`,
   `stack_list_deployments`,
   `stack_list_commands`, `stack_list_registry_images`,
   `stack_list_scheduled_jobs` and `stack_create_command`. The read tools query
-  the control plane; `stack_plan_deployment` files the same preflight the
+  the control plane; `stack_get_deployment` returns one deployment with its
+  preflight and plan phases; `stack_plan_deployment` files the same preflight the
   deployment form files (spec validation, network readiness gate and stored
   `preflight_result`) for an online EPH node; `stack_create_command` writes a
-  real `AgentCommand`
+  real `AgentCommand`, refusing a command the node's role never implements so a
+  queued row cannot sit undeliverable;
   (version upgrades and rollbacks land in `waiting_approval`).
 - A selected skill opens exactly one capability of the installation that
   granted it; a selected plugin opens every capability the installation was
