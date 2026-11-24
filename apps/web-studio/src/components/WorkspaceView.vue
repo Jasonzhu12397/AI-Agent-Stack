@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref, watch } from "vue";
 import WorkflowStudioView from "./WorkflowStudioView.vue";
 import AgentStudioView from "./AgentStudioView.vue";
+import ControlAgentChatView from "./ControlAgentChatView.vue";
 import AgentTeamStudioView from "./AgentTeamStudioView.vue";
 import ModelManagerView from "./ModelManagerView.vue";
 import DashboardView from "./DashboardView.vue";
@@ -27,7 +28,7 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    activeSection?: "overview" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "governance" | "audit" | "organization" | "docs";
+    activeSection?: "overview" | "chat" | "models" | "agents" | "teams" | "workflows" | "integrations" | "marketplace" | "knowledge" | "governance" | "audit" | "organization" | "docs";
   }>(),
   { activeSection: "overview" },
 );
@@ -178,7 +179,9 @@ onUnmounted(() => {
           {{
             props.activeSection === "overview"
               ? "Overview"
-              : props.activeSection === "models"
+              : props.activeSection === "chat"
+                ? "Control Agent"
+                : props.activeSection === "models"
                 ? "Model Manager"
                 : props.activeSection === "agents"
                   ? "Agent Studio"
@@ -277,6 +280,11 @@ onUnmounted(() => {
           </el-table>
           <p class="task-note">PostgreSQL-backed tasks support lease-based Worker execution, single-turn LLM Agent runs and the current basic Workflow DAG runner.</p>
         </div>
+        <ControlAgentChatView
+          v-if="props.activeSection === 'chat'"
+          :tenant-id="selectedTenantId"
+          :project-id="selectedProjectId"
+        />
         <ModelManagerView v-if="props.activeSection === 'models'" :tenant-id="selectedTenantId" />
         <AgentStudioView
           v-if="props.activeSection === 'agents'"

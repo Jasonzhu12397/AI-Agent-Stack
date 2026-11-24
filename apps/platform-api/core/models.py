@@ -1530,4 +1530,5 @@ class AuditEvent(models.Model):
 
 
 from core import billing_models, data_controls_models, settings_models  # noqa: E402,F401
+from core.chat_models import AgentChatMessage, AgentChatThread  # noqa: E402,F401
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401

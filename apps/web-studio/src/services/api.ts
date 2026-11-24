@@ -193,14 +193,35 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   }
   if (response.status === 204) return undefined as T;
-  const payload = (await response.json()) as T & { detail?: string };
-  if (!response.ok) {
-    throw new ApiError(
-      payload.detail ?? `Request failed with HTTP ${response.status}`,
-      payload as Record<string, unknown>,
-    );
+  // An access proxy in front of this origin answers with HTML, not the API
+  // envelope. Parsing it as JSON would bury the real reason in a syntax error,
+  // so read the body once as text and only then try to decode it.
+  const raw = await response.text();
+  let payload: (T & { detail?: string }) | null = null;
+  try {
+    payload = raw ? (JSON.parse(raw) as T & { detail?: string }) : null;
+  } catch {
+    payload = null;
   }
-  return payload;
+  if (!response.ok) {
+    const body = (payload ?? {}) as Record<string, unknown>;
+    const detail =
+      (payload && typeof payload.detail === "string" && payload.detail) ||
+      (typeof body.error === "object" &&
+        body.error !== null &&
+        typeof (body.error as { message?: unknown }).message === "string" &&
+        (body.error as { message: string }).message) ||
+      null;
+    if (detail) throw new ApiError(detail, body);
+    if (response.status === 403 && payload === null) {
+      throw new ApiError(
+        "This origin is behind an access proxy and rejected the request. Reload the page and sign in to the proxy, then try again.",
+        { status: response.status },
+      );
+    }
+    throw new ApiError(`Request failed with HTTP ${response.status}`, body);
+  }
+  return (payload ?? ({} as T)) as T;
 }
 
 export function getCurrentUser(): Promise<CurrentUser> {
@@ -2141,5 +2162,87 @@ export function unlinkProviderAccount(
   return request<ProviderAccount>(
     `/api/v1/tenants/${tenantId}/model-providers/${providerId}/account/`,
     { method: "DELETE" },
+  );
+}
+
+export type ChatContextItem = { id: string; name: string; slug?: string; installation_id?: string };
+export type ChatModelOption = {
+  id: string;
+  model_name: string;
+  display_name: string;
+  provider_name: string;
+  auth_mode: "tenant_secret" | "user_account";
+  account: { linked: boolean; remaining_today: number } | null;
+};
+export type ChatContext = {
+  project: ChatContextItem;
+  projects: ChatContextItem[];
+  skills: ChatContextItem[];
+  plugins: (ChatContextItem & { key: string; version: string; protocol: string })[];
+  models: ChatModelOption[];
+};
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  context: { skills?: string[]; plugins?: string[] };
+  usage: Record<string, unknown>;
+  error_code?: string;
+  created_at: string;
+  author?: string | null;
+};
+export type ChatThread = {
+  id: string;
+  title: string;
+  project_id: string;
+  model_config_id: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  last_message?: { role: string; content: string; created_at: string };
+};
+
+export function getChatContext(tenantId: string, projectId: string): Promise<ChatContext> {
+  return request<ChatContext>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-chat/context/`,
+  );
+}
+
+export function getChatThreads(tenantId: string, projectId: string): Promise<{ items: ChatThread[] }> {
+  return request<{ items: ChatThread[] }>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-chat/threads/`,
+  );
+}
+
+export function createChatThread(
+  tenantId: string,
+  projectId: string,
+  payload: { title?: string; model_config_id?: string | null } = {},
+): Promise<ChatThread> {
+  return request<ChatThread>(
+    `/api/v1/tenants/${tenantId}/projects/${projectId}/agent-chat/threads/`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function getChatThread(threadId: string): Promise<ChatThread & { messages: ChatMessage[] }> {
+  return request<ChatThread & { messages: ChatMessage[] }>(`/api/v1/agent-chat/threads/${threadId}/`);
+}
+
+export function deleteChatThread(threadId: string): Promise<void> {
+  return request<void>(`/api/v1/agent-chat/threads/${threadId}/`, { method: "DELETE" });
+}
+
+export function sendChatMessage(
+  threadId: string,
+  payload: {
+    content: string;
+    model_config_id?: string | null;
+    context?: { skills?: string[]; plugins?: string[] };
+  },
+): Promise<{ user: ChatMessage; assistant: ChatMessage }> {
+  return request<{ user: ChatMessage; assistant: ChatMessage }>(
+    `/api/v1/agent-chat/threads/${threadId}/messages/`,
+    { method: "POST", body: JSON.stringify(payload) },
   );
 }

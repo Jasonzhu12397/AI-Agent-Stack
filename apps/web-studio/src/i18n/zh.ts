@@ -4,6 +4,7 @@ export const zhCN: Record<string, string> = {
   ...settingsMessages,
   // Navigation and shell
   "Overview": "概览",
+  "Control Agent": "控制智能体",
   "Model Manager": "模型管理",
   "Agent Studio": "智能体工作室",
   "Workflow DAG": "工作流 DAG",

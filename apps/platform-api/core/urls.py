@@ -58,6 +58,12 @@ from core.agent_views import (
     AgentRunListCreateView,
 )
 from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.chat_views import (
+    AgentChatContextView,
+    AgentChatMessageListCreateView,
+    AgentChatThreadDetailView,
+    AgentChatThreadListCreateView,
+)
 from core.console_views import console_asset, console_index
 from core.cluster_deployment_views import (
     ClusterDeploymentDetailView,
@@ -625,6 +631,26 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/agent-plugins/<uuid:plugin_id>/discover/",
         AgentPluginDiscoverView.as_view(),
         name="agent-plugin-discover",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-chat/threads/",
+        AgentChatThreadListCreateView.as_view(),
+        name="agent-chat-thread-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-chat/context/",
+        AgentChatContextView.as_view(),
+        name="agent-chat-context",
+    ),
+    path(
+        "api/v1/agent-chat/threads/<uuid:thread_id>/",
+        AgentChatThreadDetailView.as_view(),
+        name="agent-chat-thread-detail",
+    ),
+    path(
+        "api/v1/agent-chat/threads/<uuid:thread_id>/messages/",
+        AgentChatMessageListCreateView.as_view(),
+        name="agent-chat-message-list-create",
     ),
     path("", include("core.settings_urls")),
     path("", include("core.billing_urls")),

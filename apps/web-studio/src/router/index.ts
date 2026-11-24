@@ -15,6 +15,7 @@ export const currentUser: Ref<CurrentUser | null> = ref(null);
 
 type WorkspaceSection =
   | "overview"
+  | "chat"
   | "models"
   | "agents"
   | "teams"
@@ -29,6 +30,7 @@ type WorkspaceSection =
 
 const WORKSPACE_SECTIONS: { path: string; section: WorkspaceSection }[] = [
   { path: "/", section: "overview" },
+  { path: "/chat", section: "chat" },
   { path: "/models", section: "models" },
   { path: "/agents", section: "agents" },
   { path: "/teams", section: "teams" },

@@ -16,6 +16,7 @@ const appVersion = __APP_VERSION__;
 
 const navItems = [
   { to: "/", label: "Overview" },
+  { to: "/chat", label: "Control Agent" },
   { to: "/models", label: "Model Manager" },
   { to: "/agents", label: "Agent Studio" },
   { to: "/workflows", label: "Workflow DAG" },
