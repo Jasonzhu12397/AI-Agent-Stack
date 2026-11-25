@@ -72,15 +72,22 @@ jobs:
           set -o pipefail
           base="https://${CS}-8000.app.github.dev"
           # GitHub publishes the forwarded port asynchronously. The tunnel can
-          # already answer while the public host still serves a front-door 404,
-          # and that propagation has been observed to take a couple of minutes.
-          for attempt in $(seq 1 24); do
+          # already answer while the public host still serves a front-door 404.
+          # Propagation has been observed to take several minutes and to lag
+          # behind the origin health check, so poll for up to ten minutes and
+          # fail only when the public route never becomes ready.
+          ready=0
+          for attempt in $(seq 1 60); do
             if curl -fsS -o /dev/null "${base}/health/ready"; then
               echo "health ready after ${attempt} attempt(s)"
+              ready=1
               break
             fi
             echo "health not ready yet (attempt ${attempt})"
             sleep 10
           done
-          curl -fsS -o /dev/null "${base}/health/ready"
+          if [ "$ready" -ne 1 ]; then
+            echo "public console health never became ready" >&2
+            exit 1
+          fi
           curl -fsS "${base}/" | head -c 120
