@@ -409,11 +409,18 @@ def _probe_chat_completion(provider, credential):
     from urllib.request import Request, build_opener
 
     preset = PROVIDER_PRESETS.get(provider.preset_key) or {}
-    models = preset.get("models") or []
-    if not models:
-        return {"verified": False, "reason": "chat_unprobed"}
+    model_config = (
+        provider.models.filter(enabled=True).order_by("model_name").first()
+    )
+    if model_config is not None:
+        probe_model = model_config.model_name
+    else:
+        models = preset.get("models") or []
+        if not models:
+            return {"verified": False, "reason": "chat_unprobed"}
+        probe_model = models[0]["model_name"]
     body = {
-        "model": models[0]["model_name"],
+        "model": probe_model,
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 16,
     }

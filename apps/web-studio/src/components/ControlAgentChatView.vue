@@ -101,7 +101,19 @@ onUnmounted(() => {
 // Assistant replies that failed keep the raw backend message plus its code, so
 // the transcript can re-render the failure in the reader's language.
 function bubbleText(message: ChatMessage): string {
-  return message.error_code ? tServerError(message.error_code, message.content) : message.content;
+  if (message.error_code) return tServerError(message.error_code, message.content);
+  const usage = message.usage as Record<string, unknown>;
+  // A credential rejection can fall back to the local echo provider, whose
+  // transcript-only reply is the raw "Tool result: {...}" line. The notice
+  // above already names the rejected key, so show a plain status instead of
+  // presenting that debugging string as the assistant's answer.
+  if (
+    usage.fallback_reason === "MODEL_CREDENTIAL_REJECTED" &&
+    message.content.startsWith("Tool result:")
+  ) {
+    return t("The tool ran, but no model answer could be generated.");
+  }
+  return message.content;
 }
 
 // Assistant replies come back as markdown; failures are plain prose. The renderer

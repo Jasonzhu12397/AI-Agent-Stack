@@ -1360,4 +1360,6 @@ export const zhCN: Record<string, string> = {
     "所选提供方调用失败，本次回答已自动改用 {provider}（原提供方：{from}）。",
   "{from} rejected your API key. Replace it in the integration center; this answer temporarily uses {provider}.":
     "{from} 拒绝了你的 API Key，请到集成中心替换密钥；本次回答已临时改用 {provider}。",
+  "The tool ran, but no model answer could be generated.":
+    "工具已执行完成，但模型没能生成回答。",
 };
