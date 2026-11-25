@@ -8,6 +8,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- The Target Agent now verifies a CAPI pivot after the move, not just after
+  `clusterctl move` returns. `apps/target_agent/capi_post_move.py` re-reads the
+  moved Machines, Metal3Machines, BareMetalHosts and Nodes and fails closed
+  unless every machine keeps its controller owner reference, a canonical
+  `metal3://<namespace>/<bmh>/<m3m>` provider ID, a `provisioned`/`OK` BMH,
+  a `Running` Machine and a Ready Node advertising the same provider ID.
 - The SR-IOV device-plugin editor now exposes an editable pool name. Pool keys
   are validated as Kubernetes-style lowercase names instead of being restricted
   to `pool<number>`, and a new configuration no longer opens on a reserved

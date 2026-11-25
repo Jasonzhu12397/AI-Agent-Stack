@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from .capi_post_move import CapiPostMoveError, verify_post_move
 from .cleanup_scope import CleanupScopeError, attest_cleanup_scope
 
 
@@ -560,6 +561,41 @@ def _validate_pivot_inputs(command: dict[str, Any]) -> tuple[dict[str, Any], str
     return payload, source, target
 
 
+def _observe_post_move(target: str, namespace: str) -> dict[str, Any]:
+    """Read the moved CAPI objects and verify their Metal3 identity chain."""
+
+    machines = _kubectl(
+        target,
+        ["get", "machines.cluster.x-k8s.io", "--namespace", namespace, "-o", "json"],
+    )
+    metal3machines = _kubectl(
+        target,
+        [
+            "get",
+            "metal3machines.infrastructure.cluster.x-k8s.io",
+            "--namespace",
+            namespace,
+            "-o",
+            "json",
+        ],
+    )
+    baremetalhosts = _kubectl(
+        target,
+        ["get", "baremetalhosts.metal3.io", "--namespace", namespace, "-o", "json"],
+    )
+    nodes = _kubectl(target, ["get", "nodes", "-o", "json"])
+    try:
+        return verify_post_move(
+            namespace,
+            machines,
+            metal3machines,
+            baremetalhosts,
+            nodes,
+        )
+    except CapiPostMoveError as exc:
+        raise CapiPivotError(exc.code) from exc
+
+
 def _provider_preflight(
     payload: dict[str, Any],
     source: str,
@@ -625,6 +661,7 @@ def execute_capi_pivot(
                 and annotations.get(STABLE_ID_ANNOTATION) == stable_identity
             ):
                 target_bmhs = _bmh_inventory(target, namespace)
+                post_move = _observe_post_move(target, namespace)
                 expected_set = {
                     (item["namespace"], item["name"], item["hardware_identity"])
                     for item in payload["expected_source_bmh_identities"]
@@ -667,6 +704,7 @@ def execute_capi_pivot(
                             payload["expected_source_bmh_identities"]
                         ),
                         "target_bmh_digest": _inventory_digest(target_bmhs),
+                        "post_move_verification": post_move,
                         "target_controllers_ready": preflight["target_controllers"]["ready"],
                         "provider_preflight": preflight,
                         "cleanup_scope_attested": cleanup_scope["cleanup_scope_attested"],
@@ -802,6 +840,7 @@ def execute_capi_pivot(
             source_bmhs,
             lease_lost_event,
         )
+        post_move = _observe_post_move(target, namespace)
         source_set = {
             (item["namespace"], item["name"], item["hardware_identity"])
             for item in source_bmhs
@@ -844,6 +883,7 @@ def execute_capi_pivot(
                 "target_bmh_identities": target_bmhs,
                 "source_bmh_digest": _inventory_digest(source_bmhs),
                 "target_bmh_digest": _inventory_digest(target_bmhs),
+                "post_move_verification": post_move,
                 "provider_preflight": preflight,
                 "clusterctl_output": moved["stdout"][-8000:],
                 "cleanup_scope_attested": cleanup_scope["cleanup_scope_attested"],

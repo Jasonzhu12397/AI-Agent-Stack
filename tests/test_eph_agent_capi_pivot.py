@@ -222,6 +222,11 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
         commands.append(command)
         return {"ok": True, "stdout": "completed", "returncode": 0}
     monkeypatch.setattr(capi_pivot, "_run", run)
+    monkeypatch.setattr(
+        capi_pivot,
+        "_observe_post_move",
+        lambda *_args: {"post_move_verified": True, "machine_count": 3},
+    )
     result = capi_pivot.execute_capi_pivot({
         "action": "target.capi.pivot",
         "payload": {
@@ -241,6 +246,7 @@ def test_approved_capi_pivot_verifies_new_target_uid_and_bmh_inventory(
     assert result["output"]["source_cluster_uid"] == "source-cluster-uid"
     assert result["output"]["target_cluster_uid"] == "target-cluster-uid"
     assert result["output"]["source_bmh_identities"] == result["output"]["target_bmh_identities"]
+    assert result["output"]["post_move_verification"]["post_move_verified"] is True
     assert commands[0][0] == "kubectl"
     assert commands[1][0] == "clusterctl"
 
@@ -298,6 +304,11 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
             "mutated_resource_count": 0,
         },
     )
+    monkeypatch.setattr(
+        capi_pivot,
+        "_observe_post_move",
+        lambda *_args: {"post_move_verified": True, "machine_count": 3},
+    )
     result = capi_pivot.execute_capi_pivot({
         "action": "target.capi.pivot",
         "payload": {
@@ -315,6 +326,7 @@ def test_capi_pivot_replay_emits_complete_hardware_attestation(monkeypatch, tmp_
     assert result["output"]["capi_pivot_succeeded"] is True
     assert result["output"]["target_cluster_ownership_verified"] is True
     assert result["output"]["source_bmh_digest"] == result["output"]["target_bmh_digest"]
+    assert result["output"]["post_move_verification"]["machine_count"] == 3
 
 
 def test_failed_capi_move_reports_possible_side_effects(monkeypatch, tmp_path):
