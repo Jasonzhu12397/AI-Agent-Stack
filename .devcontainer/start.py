@@ -171,8 +171,30 @@ def main() -> None:
             log_name="local-agent.log",
             env=env,
         )
+    # The launcher is one-shot, so a watchdog owns the API process after this
+    # script exits. Without it a Daphne crash leaves the public tunnel serving
+    # 502 forever even though the deployment reported success.
+    watchdog = spawn(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("watch_api.py")),
+            "--api-pid",
+            str(api),
+            "--pid-file",
+            str(PID_FILE),
+            "--log",
+            str(DATA_DIR / "api.log"),
+            "--port",
+            str(API_PORT),
+        ],
+        cwd=REPO_ROOT,
+        log_name="watchdog.log",
+        env=env,
+    )
     # The API serves the built console bundle, so there is no second runtime.
-    PID_FILE.write_text(json.dumps([api, worker] + ([local] if local else [])))
+    PID_FILE.write_text(
+        json.dumps([api, worker] + ([local] if local else []) + [watchdog])
+    )
     print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
     subprocess.run(
