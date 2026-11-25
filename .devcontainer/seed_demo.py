@@ -55,9 +55,14 @@ TenantMembership.objects.get_or_create(
     tenant=tenant, user=user, defaults={"role": TenantMembership.Role.OWNER}
 )
 
+# The demo workspace is the AI-Agent-Stack project itself; "Prod Cluster" is
+# one of the clusters it manages, never the project label shown in chat.
 project, _ = Project.objects.get_or_create(
-    tenant=tenant, slug="prod-cluster", defaults={"name": "Prod Cluster"}
+    tenant=tenant, slug="prod-cluster", defaults={"name": "AI-Agent-Stack"}
 )
+if project.name != "AI-Agent-Stack":
+    project.name = "AI-Agent-Stack"
+    project.save(update_fields=["name"])
 ProjectMembership.objects.get_or_create(
     project=project, user=user, defaults={"role": ProjectMembership.Role.ADMIN}
 )
