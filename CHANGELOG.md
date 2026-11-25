@@ -10,7 +10,8 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 - Self-service registration accepts an email address or a phone number. A new
   member receives an owner tenant and a default project in the same
-  transaction, and the console exposes `/register` beside the sign-in form.
+  transaction, together with the connector catalogue and enabled built-in
+  connectors, and the console exposes `/register` beside the sign-in form.
   `PLATFORM_ALLOW_SELF_REGISTRATION=0` closes the endpoint for managed
   deployments.
 - Doubao is a first-class model provider preset (Ark OpenAI-compatible

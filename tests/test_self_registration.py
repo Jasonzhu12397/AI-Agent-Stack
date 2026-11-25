@@ -1,5 +1,12 @@
 import pytest
-from core.models import Project, ProjectMembership, Tenant, TenantMembership
+from core.models import (
+    AgentPluginDefinition,
+    AgentPluginInstallation,
+    Project,
+    ProjectMembership,
+    Tenant,
+    TenantMembership,
+)
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from rest_framework.test import APIClient
@@ -34,6 +41,10 @@ def test_email_registration_creates_owner_tenant_and_project():
     assert ProjectMembership.objects.get(user=user, project=project).role == (
         ProjectMembership.Role.ADMIN
     )
+    assert AgentPluginDefinition.objects.filter(tenant=membership.tenant).count() >= 34
+    assert AgentPluginInstallation.objects.filter(
+        project=project, plugin__plugin_key="map"
+    ).exists()
     assert client.get("/api/v1/auth/me/").status_code == 200
 
 

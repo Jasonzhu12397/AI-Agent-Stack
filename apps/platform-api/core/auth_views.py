@@ -22,6 +22,8 @@ from core.models import (
     Tenant,
     TenantMembership,
 )
+from core.plugin_catalog import install_builtin_connectors as install_connectors
+from core.plugin_catalog import sync_tenant_catalog
 
 
 @require_GET
@@ -188,6 +190,8 @@ class RegisterView(APIView):
             user=user,
             role=ProjectMembership.Role.ADMIN,
         )
+        sync_tenant_catalog(tenant, owner_id=user.pk)
+        install_connectors(tenant, owner_id=user.pk)
         record_auth_event(
             request,
             "auth.register.succeeded",
