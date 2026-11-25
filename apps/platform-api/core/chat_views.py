@@ -285,6 +285,7 @@ class AgentChatMessageListCreateView(APIView):
         reply, error = _generate_reply(request, thread, model_config, context)
         if error is not None:
             return error
+        fallback_model_id = (reply.get("usage") or {}).get("fallback_model")
         with transaction.atomic():
             assistant = AgentChatMessage.objects.create(
                 thread=thread,
@@ -293,7 +294,14 @@ class AgentChatMessageListCreateView(APIView):
                 usage=reply["usage"],
                 tool_calls=reply.get("tool_calls") or [],
             )
-            thread.save(update_fields=["updated_at"])
+            update_fields = ["updated_at"]
+            if isinstance(fallback_model_id, str) and fallback_model_id:
+                # The selected model was stale and another one answered. Keep
+                # the thread on the working model so every later turn does not
+                # pay for the same 404 and fallback.
+                thread.model_config_id = fallback_model_id
+                update_fields.append("model_config")
+            thread.save(update_fields=update_fields)
         record_audit_event(
             request,
             thread.tenant,

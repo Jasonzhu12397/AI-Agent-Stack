@@ -292,6 +292,10 @@ def test_turn_falls_back_to_another_real_model_when_selected_key_is_rejected(
     assert body["assistant"]["content"] == "Fallback answered."
     assert body["assistant"]["usage"]["fallback_provider"] == "Backup OpenAI"
     assert body["assistant"]["usage"]["fallback_reason"] == "MODEL_CREDENTIAL_REJECTED"
+    from core.models import AgentChatThread
+
+    saved = AgentChatThread.objects.get(pk=thread["id"])
+    assert str(saved.model_config_id) == body["assistant"]["usage"]["fallback_model"]
 
 
 @pytest.mark.django_db
