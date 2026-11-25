@@ -31,7 +31,16 @@ jobs:
           CS: ${{ inputs.codespace }}
         run: |
           set -o pipefail
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -80
+          # The Codespaces REST API intermittently returns 500. Retry the SSH
+          # handshake instead of failing the whole deployment on one blip.
+          for attempt in 1 2 3 4; do
+            if gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/ensure_console.py' 2>&1 | tail -80; then
+              exit 0
+            fi
+            echo "codespace SSH failed (attempt ${attempt})" >&2
+            sleep 15
+          done
+          exit 1
       - name: Probe model credential resolution
         if: ${{ inputs.probe == '1' }}
         env:
@@ -44,14 +53,27 @@ jobs:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
           CS: ${{ inputs.codespace }}
         run: |
-          gh codespace ports visibility 8000:public -c "$CS"
-          gh codespace ports -c "$CS"
+          for attempt in 1 2 3 4; do
+            if gh codespace ports visibility 8000:public -c "$CS" && gh codespace ports -c "$CS"; then
+              exit 0
+            fi
+            echo "port publishing failed (attempt ${attempt})" >&2
+            sleep 15
+          done
+          exit 1
       - name: Report the API log
         env:
           GH_TOKEN: ${{ secrets.CODESPACE_PAT }}
           CS: ${{ inputs.codespace }}
         run: |
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/log_report.py'
+          for attempt in 1 2 3 4; do
+            if gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/log_report.py'; then
+              exit 0
+            fi
+            echo "log report failed (attempt ${attempt})" >&2
+            sleep 15
+          done
+          exit 1
 
       - name: Open a gate-free tunnel for the console
         env:
@@ -59,8 +81,18 @@ jobs:
           CS: ${{ inputs.codespace }}
         run: |
           set -o pipefail
-          gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/tunnel.py' | tee /tmp/tunnel.txt
+          for attempt in 1 2 3 4; do
+            if gh codespace ssh -c "$CS" -- 'cd /workspaces/AI-Agent-Stack && python3 .devcontainer/tunnel.py' | tee /tmp/tunnel.txt; then
+              break
+            fi
+            echo "tunnel start failed (attempt ${attempt})" >&2
+            sleep 15
+          done
           URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" /tmp/tunnel.txt | head -1)
+          if [ -z "$URL" ]; then
+            echo "tunnel URL was not published" >&2
+            exit 1
+          fi
           echo "console=$URL" >> "$GITHUB_STEP_SUMMARY"
           curl -sS -o /dev/null -w "tunnel=%{http_code}\n" "$URL/health/ready" || true
           curl -fsS "$URL/" | grep -o "<title>[^<]*" || true
