@@ -32,6 +32,7 @@ from core.models import (
     AgentPluginInstallation,
 )
 from core.tool_router import (
+    FAULT_AUTH_REJECTED,
     FAULT_CLIENT_ERROR,
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
@@ -53,6 +54,7 @@ CAPABILITY_UNINSTALLED_IN_FLIGHT = "CAPABILITY_UNINSTALLED_IN_FLIGHT"
 CAPABILITY_INVOCATION_FAILED = "CAPABILITY_INVOCATION_FAILED"
 CAPABILITY_TIMEOUT = "CAPABILITY_TIMEOUT"
 CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
+CAPABILITY_UPSTREAM_AUTH_REJECTED = "CAPABILITY_UPSTREAM_AUTH_REJECTED"
 CAPABILITY_UPSTREAM_CLIENT_ERROR = "CAPABILITY_UPSTREAM_CLIENT_ERROR"
 CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
 CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
@@ -62,6 +64,7 @@ CAPABILITY_UPSTREAM_UNREACHABLE = "CAPABILITY_UPSTREAM_UNREACHABLE"
 # adapter. Categories without an entry fall back to the generic invocation
 # failure token, preserving the previous behavior for unclassified faults.
 _HTTP_FAULT_CODES: dict[str, str] = {
+    FAULT_AUTH_REJECTED: CAPABILITY_UPSTREAM_AUTH_REJECTED,
     FAULT_CLIENT_ERROR: CAPABILITY_UPSTREAM_CLIENT_ERROR,
     FAULT_SERVER_ERROR: CAPABILITY_UPSTREAM_SERVER_ERROR,
     FAULT_TIMEOUT: CAPABILITY_TIMEOUT,
@@ -299,8 +302,8 @@ def _http_adapter(
 ) -> dict[str, Any]:
     plugin = installation.plugin
     capability_name = definition["name"]
-    operation = ((plugin.manifest or {}).get("http") or {}).get("operations", {}).get(
-        capability_name, {}
+    operation = (
+        ((plugin.manifest or {}).get("http") or {}).get("operations", {}).get(capability_name, {})
     )
     side_effect = isinstance(operation, dict) and operation.get("read_only") is False
     tool = SimpleNamespace(

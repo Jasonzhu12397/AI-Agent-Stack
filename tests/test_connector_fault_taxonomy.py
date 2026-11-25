@@ -19,6 +19,7 @@ from django.test import override_settings
 from core.http_connector import execute_http_operation
 from core.mcp_connector import execute_mcp_operation
 from core.tool_router import (
+    FAULT_AUTH_REJECTED,
     FAULT_CLIENT_ERROR,
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
@@ -117,15 +118,22 @@ def test_http_4xx_maps_to_client_error(monkeypatch):
     assert error.code == FAULT_CLIENT_ERROR
 
 
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_http_credential_rejection_is_not_a_generic_client_error(monkeypatch, status_code):
+    error = _run_http(
+        monkeypatch,
+        response=_HttpResponse(status_code, b'{"error":"credential rejected"}'),
+    )
+    assert error.code == FAULT_AUTH_REJECTED
+
+
 def test_http_5xx_maps_to_server_error(monkeypatch):
     error = _run_http(monkeypatch, response=_HttpResponse(500, b'{"error":"boom"}'))
     assert error.code == FAULT_SERVER_ERROR
 
 
 def test_http_timeout_maps_to_timeout(monkeypatch):
-    error = _run_http(
-        monkeypatch, side_effect=httpx.TimeoutException("timed out")
-    )
+    error = _run_http(monkeypatch, side_effect=httpx.TimeoutException("timed out"))
     assert error.code == FAULT_TIMEOUT
 
 
@@ -138,23 +146,17 @@ def test_http_non_json_content_type_maps_to_invalid_response(monkeypatch):
 
 
 def test_http_malformed_json_maps_to_invalid_response(monkeypatch):
-    error = _run_http(
-        monkeypatch, response=_HttpResponse(200, b"not-json")
-    )
+    error = _run_http(monkeypatch, response=_HttpResponse(200, b"not-json"))
     assert error.code == FAULT_INVALID_RESPONSE
 
 
 def test_http_connect_error_maps_to_unreachable(monkeypatch):
-    error = _run_http(
-        monkeypatch, side_effect=httpx.ConnectError("connection refused")
-    )
+    error = _run_http(monkeypatch, side_effect=httpx.ConnectError("connection refused"))
     assert error.code == FAULT_UNREACHABLE
 
 
 def test_http_too_many_redirects_maps_to_unreachable(monkeypatch):
-    error = _run_http(
-        monkeypatch, side_effect=httpx.TooManyRedirects("redirect loop")
-    )
+    error = _run_http(monkeypatch, side_effect=httpx.TooManyRedirects("redirect loop"))
     assert error.code == FAULT_UNREACHABLE
 
 
@@ -231,9 +233,7 @@ def _mcp_tool():
 
 
 def _rpc_result(request_id, result):
-    return json.dumps(
-        {"jsonrpc": "2.0", "id": request_id, "result": result}
-    ).encode("utf-8")
+    return json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}).encode("utf-8")
 
 
 def _initialize_response():
@@ -314,14 +314,10 @@ def test_mcp_malformed_json_maps_to_invalid_response(monkeypatch):
 
 
 def test_mcp_connect_error_maps_to_unreachable(monkeypatch):
-    error = _run_mcp(
-        monkeypatch, [], side_effect=httpx.ConnectError("connection refused")
-    )
+    error = _run_mcp(monkeypatch, [], side_effect=httpx.ConnectError("connection refused"))
     assert error.code == FAULT_UNREACHABLE
 
 
 def test_mcp_too_many_redirects_maps_to_unreachable(monkeypatch):
-    error = _run_mcp(
-        monkeypatch, [], side_effect=httpx.TooManyRedirects("redirect loop")
-    )
+    error = _run_mcp(monkeypatch, [], side_effect=httpx.TooManyRedirects("redirect loop"))
     assert error.code == FAULT_UNREACHABLE

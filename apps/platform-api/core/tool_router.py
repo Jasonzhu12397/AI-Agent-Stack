@@ -10,6 +10,7 @@ from typing import Any
 # ``ToolExecutionError`` so protocol adapters can map one shared transport
 # failure class onto a capability error code. Categories are connector-layer
 # vocabulary; capability code tokens live in the adapters and router.
+FAULT_AUTH_REJECTED = "upstream_auth_rejected"
 FAULT_CLIENT_ERROR = "upstream_client_error"
 FAULT_SERVER_ERROR = "upstream_server_error"
 FAULT_TIMEOUT = "upstream_timeout"

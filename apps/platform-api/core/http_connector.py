@@ -15,6 +15,7 @@ from core.plugin_credentials import (
     CredentialResolverNotConfiguredError,
 )
 from core.tool_router import (
+    FAULT_AUTH_REJECTED,
     FAULT_CLIENT_ERROR,
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
@@ -404,6 +405,11 @@ def execute_http_operation(arguments, context: ToolContext, tool):
                     raise ToolExecutionError(
                         "Connector redirects are not allowed.",
                         code=FAULT_UNREACHABLE,
+                    )
+                if status in {401, 403}:
+                    raise ToolExecutionError(
+                        "Connector rejected the configured credential.",
+                        code=FAULT_AUTH_REJECTED,
                     )
                 if 400 <= status < 500:
                     raise ToolExecutionError(

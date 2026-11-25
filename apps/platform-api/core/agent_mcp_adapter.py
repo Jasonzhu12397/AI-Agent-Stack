@@ -34,6 +34,7 @@ from core.agent_capability_router import (
 from core.mcp_connector import McpClient, _validate_endpoint
 from core.plugin_credentials import CredentialInvalidShapeError
 from core.tool_router import (
+    FAULT_AUTH_REJECTED,
     FAULT_CLIENT_ERROR,
     FAULT_INVALID_RESPONSE,
     FAULT_SERVER_ERROR,
@@ -50,6 +51,7 @@ PROTOCOL = "mcp"
 CAPABILITY_INVOCATION_FAILED = "CAPABILITY_INVOCATION_FAILED"
 CAPABILITY_TIMEOUT = "CAPABILITY_TIMEOUT"
 CAPABILITY_UPSTREAM_ERROR = "CAPABILITY_UPSTREAM_ERROR"
+CAPABILITY_UPSTREAM_AUTH_REJECTED = "CAPABILITY_UPSTREAM_AUTH_REJECTED"
 CAPABILITY_UPSTREAM_CLIENT_ERROR = "CAPABILITY_UPSTREAM_CLIENT_ERROR"
 CAPABILITY_UPSTREAM_SERVER_ERROR = "CAPABILITY_UPSTREAM_SERVER_ERROR"
 CAPABILITY_UPSTREAM_INVALID_RESPONSE = "CAPABILITY_UPSTREAM_INVALID_RESPONSE"
@@ -59,6 +61,7 @@ CAPABILITY_CONFIG_INVALID = "CAPABILITY_CONFIG_INVALID"
 # Connector taxonomy category -> capability raised code. Categories without an
 # entry keep the generic invocation failure token.
 _FAULT_CODES: dict[str, str] = {
+    FAULT_AUTH_REJECTED: CAPABILITY_UPSTREAM_AUTH_REJECTED,
     FAULT_CLIENT_ERROR: CAPABILITY_UPSTREAM_CLIENT_ERROR,
     FAULT_SERVER_ERROR: CAPABILITY_UPSTREAM_SERVER_ERROR,
     FAULT_TIMEOUT: CAPABILITY_TIMEOUT,
@@ -166,9 +169,7 @@ def _auth_headers(installation: Any) -> tuple[dict[str, str], tuple[str, str] | 
     ref = getattr(installation, "credential_ref", "") or ""
     if not ref:
         return headers, query
-    credential = plugin_credentials.resolve(
-        ref, tenant_id=getattr(installation, "tenant_id", None)
-    )
+    credential = plugin_credentials.resolve(ref, tenant_id=getattr(installation, "tenant_id", None))
     if not isinstance(credential, dict):
         raise CredentialInvalidShapeError("Credential resolver returned an invalid credential.")
     kind = credential.get("type")
