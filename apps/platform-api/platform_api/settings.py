@@ -56,6 +56,9 @@ INSTALLED_APPS = [
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Outermost API response boundary: turns HTML 404/403/500 pages and legacy
+    # ``{"detail": ...}`` payloads into the shared error contract.
+    "core.api_contract_middleware.APIContractMiddleware",
     # Before CSRF so an overridden verb is validated as the real verb.
     "core.http_method_override.MethodOverrideMiddleware",
     "corsheaders.middleware.CorsMiddleware",

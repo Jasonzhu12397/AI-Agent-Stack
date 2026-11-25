@@ -31,9 +31,12 @@ def test_global_chain_requires_platform_administrator():
     client = _member_client()
     assert client.get(GLOBAL_LIST).status_code == 403
     assert client.get(GLOBAL_VERIFY).status_code == 403
-    assert client.get(GLOBAL_LIST).json() == {
-        "detail": "Platform administrator permission required to view the global audit chain."
-    }
+    body = client.get(GLOBAL_LIST).json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert body["error"]["message"] == (
+        "Platform administrator permission required to view the global audit chain."
+    )
+    assert "detail" not in body
 
 
 @pytest.mark.django_db

@@ -136,7 +136,10 @@ def test_test_endpoint_records_a_failed_delivery(tenant_admin, monkeypatch):
         f"/api/v1/tenants/{tenant.id}/settings/notifications/endpoints/{endpoint_id}/test/"
     )
     assert response.status_code == 502
-    assert "sign match fail" in response.json()["message"]
+    body = response.json()
+    assert body["error"]["code"] == "UPSTREAM_ERROR"
+    assert "sign match fail" in body["error"]["message"]
+    assert "message" not in body
     assert NotificationEndpoint.objects.get(pk=endpoint_id).last_error == "sign match fail"
     assert NotificationEndpointTestView is not None
 
