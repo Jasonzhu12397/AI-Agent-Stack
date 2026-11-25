@@ -2393,6 +2393,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             """
                             UPDATE agent_control_tasks
                             SET status = 'queued', iteration = iteration + 1,
+                                attempts = 0,
                                 lease_token_hash = NULL, lease_expires_at = NULL,
                                 updated_at = NOW()
                             WHERE task_id = %s
