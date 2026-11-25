@@ -1505,3 +1505,101 @@ def test_exhausted_expired_work_lease_is_failed_instead_of_reclaimed(control_ser
         assert work["max_attempts"] == 1
     finally:
         platform_client.close()
+
+
+def test_exhausted_expired_task_lease_fails_without_hanging(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        task_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/tasks",
+            {
+                "task_id": str(task_id),
+                "name": "Retry budget",
+                "payload": {"max_attempts": 1, "hosts": ["10.0.0.9"]},
+                "required_role": "eph",
+                "idempotency_key": f"task-{task_id}",
+            },
+        )
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            claimed = _claim(agent_client, identity)
+            assert claimed["task"]["task_id"] == str(task_id)
+            assert claimed["task"]["max_attempts"] == 1
+
+            with psycopg.connect(_database_url()) as connection:
+                connection.execute(
+                    """
+                    UPDATE agent_control_tasks
+                    SET lease_expires_at = NOW() - INTERVAL '1 second'
+                    WHERE task_id = %s
+                    """,
+                    (task_id,),
+                )
+            next_claim = _post(agent_client, "/api/v1/agent-control/tasks/claim", identity)
+            assert next_claim["task"] is None
+        finally:
+            agent_client.close()
+
+        task = _get(platform_client, f"/api/v1/control/tasks/{task_id}")
+        assert task["status"] == "failed"
+        assert task["result"] == {"error": "TASK_ATTEMPTS_EXHAUSTED"}
+        assert task["attempts"] == 1
+        assert task["max_attempts"] == 1
+    finally:
+        platform_client.close()
+
+
+def test_standalone_task_retries_a_failed_result_within_budget(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        task_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/tasks",
+            {
+                "task_id": str(task_id),
+                "name": "Retry standalone",
+                "payload": {"max_attempts": 2, "hosts": ["10.0.0.10"]},
+                "required_role": "eph",
+                "idempotency_key": f"task-{task_id}",
+            },
+        )
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            first = _claim(agent_client, identity)
+            failed = _post(
+                agent_client,
+                "/api/v1/agent-control/tasks/result",
+                {
+                    **identity,
+                    "task_id": str(task_id),
+                    "lease_token": first["lease_token"],
+                    "status": "failed",
+                    "result": {"error": "transient"},
+                },
+            )
+            assert failed["retrying"] is True
+            assert failed["status"] == "queued"
+            second = _claim(agent_client, identity)
+            assert second["task"]["task_id"] == str(task_id)
+            assert second["task"]["max_attempts"] == 2
+        finally:
+            agent_client.close()
+    finally:
+        platform_client.close()

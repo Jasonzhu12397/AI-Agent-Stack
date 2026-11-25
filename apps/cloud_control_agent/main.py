@@ -351,6 +351,7 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             lease_token_hash TEXT,
             lease_expires_at TIMESTAMPTZ,
             attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (workflow_run_id, step_id)
@@ -359,6 +360,28 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
     connection.execute("""
         ALTER TABLE agent_control_tasks
         ADD COLUMN IF NOT EXISTS step_type TEXT NOT NULL DEFAULT 'task'
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_tasks
+        ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 1
+    """)
+    # Existing tasks encoded their retry budget in the JSON payload. Backfill
+    # the column so queued work keeps the budget it was created with, without
+    # ever narrowing a budget that is already stored.
+    connection.execute("""
+        UPDATE agent_control_tasks
+        SET max_attempts = LEAST(
+            5,
+            GREATEST(
+                max_attempts,
+                CASE WHEN payload->>'max_attempts' ~ '^[1-9][0-9]*$'
+                    THEN (payload->>'max_attempts')::int ELSE 0 END,
+                CASE WHEN payload #>> '{step,max_attempts}' ~ '^[1-9][0-9]*$'
+                    THEN (payload #>> '{step,max_attempts}')::int ELSE 0 END
+            )
+        )
+        WHERE payload ? 'max_attempts'
+           OR payload #> '{step,max_attempts}' IS NOT NULL
     """)
     connection.execute("""
         ALTER TABLE agent_control_tasks

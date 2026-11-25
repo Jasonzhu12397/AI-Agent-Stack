@@ -1916,16 +1916,22 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         raise ControlApiError("WORKFLOW_RUN_IDEMPOTENCY_CONFLICT") from exc
                     if inserted is not None:
                         for step in definition_row["definition"]["steps"]:
+                            payload = {
+                                "workflow_input": run["input"],
+                                "step": step["payload"],
+                                "condition": step.get("condition"),
+                                "max_attempts": step.get("max_attempts", 1),
+                            }
                             connection.execute(
                                 """
                                 INSERT INTO agent_control_tasks (
                                     task_id, project_id, workflow_run_id, step_id,
                                     step_type, join_policy, name, status,
                                     required_role, payload, depends_on, when_policy,
-                                    idempotency_key, loop_max_iterations
+                                    idempotency_key, loop_max_iterations, max_attempts
                                 ) VALUES (
                                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                    %s, %s
+                                    %s, %s, %s
                                 )
                                 """,
                                 (
@@ -1938,18 +1944,12 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                     step["name"],
                                     self._initial_step_status(step),
                                     step["required_role"],
-                                    Jsonb(
-                                        {
-                                            "workflow_input": run["input"],
-                                            "step": step["payload"],
-                                            "condition": step.get("condition"),
-                                            "max_attempts": step.get("max_attempts", 1),
-                                        }
-                                    ),
+                                    Jsonb(payload),
                                     Jsonb(step["depends_on"]),
                                     Jsonb(step["when"]),
                                     f"workflow:{run_id}:{step['id']}",
                                     step.get("max_iterations", 1),
+                                    _task_max_attempts(payload),
                                 ),
                             )
                         self._advance_workflow_run(connection, run_id)
@@ -2070,8 +2070,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         INSERT INTO agent_control_tasks (
                             task_id, project_id, name, priority, required_role,
-                            payload, idempotency_key
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            payload, idempotency_key, max_attempts
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (idempotency_key) DO NOTHING
                         """,
                         (
@@ -2082,6 +2082,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             task["required_role"],
                             Jsonb(task["payload"]),
                             task["idempotency_key"],
+                            _task_max_attempts(task["payload"]),
                         ),
                     )
                 except psycopg.errors.UniqueViolation as exc:
@@ -2089,7 +2090,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT task_id, project_id, name, status, priority, required_role,
-                           payload, result, idempotency_key, attempts, created_at
+                           payload, result, idempotency_key, attempts,
+                           max_attempts, created_at
                     FROM agent_control_tasks WHERE task_id = %s
                     """,
                     (task_id,),
@@ -2098,7 +2100,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     row = connection.execute(
                         """
                         SELECT task_id, project_id, name, status, priority, required_role,
-                               payload, result, idempotency_key, attempts, created_at
+                               payload, result, idempotency_key, attempts,
+                               max_attempts, created_at
                         FROM agent_control_tasks WHERE idempotency_key = %s
                         """,
                         (task["idempotency_key"],),
@@ -2116,7 +2119,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     SELECT task_id, workflow_run_id, step_id, step_type,
                            join_policy, when_policy, name, status, priority, required_role,
                            payload, depends_on, result, assigned_agent_id,
-                           attempts, created_at, updated_at
+                           attempts, max_attempts, created_at, updated_at
                     FROM agent_control_tasks WHERE project_id = %s
                     ORDER BY created_at DESC
                     """,
@@ -2133,8 +2136,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     SELECT task_id, project_id, workflow_run_id, step_id, step_type,
                            join_policy, when_policy, name, status, priority,
                            required_role, payload, depends_on, result,
-                           assigned_agent_id, attempts, lease_expires_at,
-                           created_at, updated_at
+                           assigned_agent_id, attempts, max_attempts,
+                           lease_expires_at, created_at, updated_at
                     FROM agent_control_tasks WHERE task_id = %s
                     """,
                     (task_id,),
@@ -2154,12 +2157,71 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 database_url, row_factory=dict_row, autocommit=False
             ) as connection:
                 with connection.transaction():
+                    # A crashed worker leaves a leased task behind. Reclaim it
+                    # while the retry budget allows, then fail it so a workflow
+                    # run cannot stay "running" on an unreachable step forever.
+                    exhausted = connection.execute(
+                        """
+                        SELECT t.task_id, t.workflow_run_id, t.step_id
+                        FROM agent_control_tasks AS t
+                        JOIN agent_control_projects AS p ON p.project_id = t.project_id
+                        WHERE p.installation_id = %s AND p.status = 'active'
+                          AND t.status = 'leased' AND t.lease_expires_at < NOW()
+                          AND t.attempts >= t.max_attempts
+                        """,
+                        (agent["installation_id"],),
+                    ).fetchall()
+                    for stale in exhausted:
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'failed',
+                                result = jsonb_build_object(
+                                    'error', 'TASK_ATTEMPTS_EXHAUSTED'
+                                ),
+                                lease_token_hash = NULL, lease_expires_at = NULL,
+                                updated_at = NOW()
+                            WHERE task_id = %s
+                            """,
+                            (stale["task_id"],),
+                        )
+                        if stale["workflow_run_id"] is None:
+                            continue
+                        connection.execute(
+                            """
+                            UPDATE agent_control_workflow_runs
+                            SET status = 'failed',
+                                output = jsonb_build_object(
+                                    'failed_step', %s,
+                                    'error', jsonb_build_object(
+                                        'error', 'TASK_ATTEMPTS_EXHAUSTED'
+                                    )
+                                ),
+                                finished_at = NOW(), updated_at = NOW()
+                            WHERE run_id = %s AND status = 'running'
+                            """,
+                            (stale["step_id"], stale["workflow_run_id"]),
+                        )
+                        connection.execute(
+                            """
+                            UPDATE agent_control_tasks
+                            SET status = 'cancelled', lease_token_hash = NULL,
+                                lease_expires_at = NULL, updated_at = NOW()
+                            WHERE workflow_run_id = %s
+                              AND task_id <> %s
+                              AND status IN (
+                                  'blocked', 'queued', 'leased', 'awaiting_approval'
+                              )
+                            """,
+                            (stale["workflow_run_id"], stale["task_id"]),
+                        )
                     row = connection.execute(
                         """
                         SELECT t.task_id, t.project_id, t.workflow_run_id, t.step_id,
                                t.step_type, t.join_policy, t.when_policy,
                                t.iteration, t.loop_max_iterations,
                                t.name, t.priority, t.required_role, t.payload,
+                               t.max_attempts,
                                p.name AS project_name, r.workflow_id, r.status AS run_status,
                                w.name AS workflow_name
                         FROM agent_control_tasks t
@@ -2173,6 +2235,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND t.step_type <> 'condition' 
                           AND (t.workflow_run_id IS NULL OR r.status = 'running')
                           AND (t.required_role IS NULL OR t.required_role = %(role)s)
+                          AND t.attempts < t.max_attempts
                         ORDER BY t.priority DESC, t.created_at
                         FOR UPDATE OF t SKIP LOCKED
                         LIMIT 1
@@ -2229,6 +2292,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         "loop_max_iterations": row["loop_max_iterations"],
                         "name": row["name"],
                         "priority": row["priority"],
+                        "max_attempts": row["max_attempts"],
                         "payload": row["payload"],
                     },
                     "skills": skills,
@@ -2287,7 +2351,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                           AND status = 'leased' AND lease_token_hash = %s
                         RETURNING task_id, workflow_run_id, step_id, step_type,
                                   iteration, loop_max_iterations, status, result,
-                                  payload, attempts
+                                  payload, attempts, max_attempts
                         """,
                         (
                             outcome["status"],
@@ -2303,9 +2367,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     retrying = False
                     looping = False
                     if (
-                        run_id is not None
-                        and task["status"] == "failed"
-                        and task["attempts"] < _task_max_attempts(task["payload"])
+                        task["status"] == "failed"
+                        and task["attempts"] < task["max_attempts"]
                     ):
                         connection.execute(
                             """
