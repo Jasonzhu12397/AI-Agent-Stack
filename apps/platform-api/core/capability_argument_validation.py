@@ -223,6 +223,26 @@ def validate_arguments(
     if "$ref" in schema:
         schema = _resolve_reference(schema["$ref"], root_schema)
 
+    union_key = "oneOf" if "oneOf" in schema else "anyOf" if "anyOf" in schema else None
+    if union_key is not None:
+        choices = schema.get(union_key)
+        if not isinstance(choices, list) or not choices:
+            raise ArgumentValidationError(
+                CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed."
+            )
+        matched = 0
+        for choice in choices:
+            try:
+                validate_arguments(value, choice, path, root_schema, depth + 1)
+            except ArgumentValidationError:
+                continue
+            matched += 1
+        if matched == 0 or (union_key == "oneOf" and matched != 1):
+            raise ArgumentValidationError(
+                CAPABILITY_ARGUMENTS_INVALID, f"{path} does not match the allowed schema variant."
+            )
+        return
+
     expected = schema.get("type")
     if not isinstance(expected, str):
         raise ArgumentValidationError(CAPABILITY_ARGUMENTS_INVALID, f"{path} schema is malformed.")

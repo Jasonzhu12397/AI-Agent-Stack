@@ -257,9 +257,7 @@ def _credential_reference_error(reference: str, tenant=None) -> tuple[str, str] 
         # authorization to bind it into another tenant's installation.
         credential_id = reference[len(plugin_studio.CREDENTIAL_PREFIX) :]
         try:
-            owned = AgentPluginCredential.objects.filter(
-                pk=credential_id, tenant=tenant
-            ).exists()
+            owned = AgentPluginCredential.objects.filter(pk=credential_id, tenant=tenant).exists()
         except (ValidationError, ValueError):
             owned = False
         if not owned:
@@ -605,8 +603,8 @@ class AgentPluginStudioPublishView(APIView):
         credential_rotated = False
         if unchanged:
             plugin = latest
-            previous_credential = (latest.manifest or {}).get("studio", {}).get(
-                "credential_fingerprint"
+            previous_credential = (
+                (latest.manifest or {}).get("studio", {}).get("credential_fingerprint")
             )
             if previous_credential != credential_fingerprint:
                 # Schema is stable but the member supplied a new secret or auth
@@ -625,9 +623,7 @@ class AgentPluginStudioPublishView(APIView):
                         latest.credential_ref = credential_ref
                         latest.auth_required = bool(credential_ref)
                         latest.manifest = updated_manifest
-                        latest.save(
-                            update_fields=["credential_ref", "auth_required", "manifest"]
-                        )
+                        latest.save(update_fields=["credential_ref", "auth_required", "manifest"])
                         # Every live installation of this plugin reads its own
                         # credential_ref. Rotating only the definition would
                         # leave other projects pinned to the stale secret.
@@ -640,9 +636,7 @@ class AgentPluginStudioPublishView(APIView):
                         for bound in rotating:
                             bound.credential_ref = credential_ref
                             bound.save(update_fields=["credential_ref", "updated_at"])
-                            transaction.on_commit(
-                                lambda item=bound: invalidate_installation(item)
-                            )
+                            transaction.on_commit(lambda item=bound: invalidate_installation(item))
                 except IntegrityError:
                     return legacy_error_response(
                         "The credential could not be rotated.", http_status=409
@@ -712,9 +706,20 @@ class AgentPluginStudioPublishView(APIView):
 
         installation = None
         if project is not None:
+            # A project keeps one active installation per plugin key. Looking
+            # only at the exact version row created a second installation for
+            # every publish and made later version rollback impossible.
             installation = AgentPluginInstallation.objects.filter(
                 tenant=tenant, project=project, plugin=plugin
             ).first()
+            if installation is None:
+                installation = (
+                    AgentPluginInstallation.objects.select_related("plugin")
+                    .filter(tenant=tenant, project=project, plugin__plugin_key=plugin_key)
+                    .exclude(status=AgentPluginInstallation.Status.UNINSTALLED)
+                    .order_by("-updated_at")
+                    .first()
+                )
             if installation is None:
                 installation = AgentPluginInstallation.objects.create(
                     tenant=tenant,
@@ -726,11 +731,13 @@ class AgentPluginStudioPublishView(APIView):
                     installed_by=request.user,
                 )
             else:
+                installation.plugin = plugin
                 installation.status = AgentPluginInstallation.Status.INSTALLED
                 installation.plugin_version = plugin.version
                 installation.granted_capabilities = selected
                 installation.credential_ref = plugin.credential_ref
                 installation.save()
+                transaction.on_commit(lambda item=installation: invalidate_installation(item))
 
         return Response(
             {
@@ -787,10 +794,9 @@ class AgentPluginVersionListView(APIView):
             return legacy_error_response(
                 "plugin_key must be a lowercase hyphenated identifier.", http_status=400
             )
-        versions = (
-            AgentPluginDefinition.objects.filter(tenant=tenant, plugin_key=plugin_key)
-            .order_by("-created_at")
-        )
+        versions = AgentPluginDefinition.objects.filter(
+            tenant=tenant, plugin_key=plugin_key
+        ).order_by("-created_at")
         active = next((plugin for plugin in versions if plugin.enabled), None)
         return Response(
             [
@@ -799,9 +805,9 @@ class AgentPluginVersionListView(APIView):
                     "version": plugin.version,
                     "enabled": plugin.enabled,
                     "is_active": active is not None and plugin.id == active.id,
-                    "schema_fingerprint": (plugin.manifest or {}).get("studio", {}).get(
-                        "schema_fingerprint", ""
-                    ),
+                    "schema_fingerprint": (plugin.manifest or {})
+                    .get("studio", {})
+                    .get("schema_fingerprint", ""),
                     "capabilities": len(_capability_names(plugin.capabilities)),
                     "created_at": plugin.created_at,
                 }
@@ -824,21 +830,110 @@ class AgentPluginVersionActivateView(APIView):
             return legacy_error_response(
                 "Tenant administrator permission required.", http_status=403
             )
+        target_capabilities = set(_capability_names(plugin.capabilities))
+        migrated = 0
+        dropped: dict[str, list[str]] = {}
         with transaction.atomic():
             AgentPluginDefinition.objects.filter(
                 tenant=plugin.tenant, plugin_key=plugin.plugin_key
             ).exclude(pk=plugin.pk).update(enabled=False)
             plugin.enabled = True
             plugin.save(update_fields=["enabled", "updated_at"])
+            # Rollback is a schema migration, not only an ``enabled`` flag.
+            # Installations still pointed at the retired definition would keep
+            # invoking that version's capabilities. Rebind them atomically and
+            # drop grants the activated schema no longer declares.
+            installations = list(
+                AgentPluginInstallation.objects.select_related("plugin").filter(
+                    tenant=plugin.tenant,
+                    plugin__plugin_key=plugin.plugin_key,
+                )
+            )
+            by_project = {}
+            for installation in installations:
+                by_project.setdefault(installation.project_id, []).append(installation)
+
+            for rows in by_project.values():
+                if all(item.status == AgentPluginInstallation.Status.UNINSTALLED for item in rows):
+                    continue
+                target = next(
+                    (item for item in rows if item.plugin_id == plugin.id),
+                    None,
+                )
+                if target is None:
+                    # Older releases created one installation row per schema
+                    # version. Rebind the newest row instead of creating a
+                    # second active installation for the same project.
+                    target = max(
+                        rows,
+                        key=lambda item: (
+                            item.status == AgentPluginInstallation.Status.INSTALLED,
+                            item.updated_at or item.created_at,
+                        ),
+                    )
+                    target.plugin = plugin
+                    target.plugin_version = plugin.version
+
+                grants = list(
+                    dict.fromkeys(
+                        name
+                        for item in rows
+                        for name in _capability_names(item.granted_capabilities)
+                        if name in target_capabilities
+                    )
+                )
+                removed = list(
+                    dict.fromkeys(
+                        name
+                        for item in rows
+                        for name in _capability_names(item.granted_capabilities)
+                        if name not in target_capabilities
+                    )
+                )
+                if removed:
+                    dropped[str(target.id)] = removed
+                target.status = (
+                    AgentPluginInstallation.Status.INSTALLED
+                    if any(item.status == AgentPluginInstallation.Status.INSTALLED for item in rows)
+                    else AgentPluginInstallation.Status.DISABLED
+                )
+                target.granted_capabilities = grants
+                target.save(
+                    update_fields=[
+                        "plugin",
+                        "plugin_version",
+                        "status",
+                        "granted_capabilities",
+                    ]
+                )
+                migrated += 1
+                transaction.on_commit(lambda item=target: invalidate_installation(item))
+                for stale in rows:
+                    if stale.pk == target.pk:
+                        continue
+                    if stale.status == AgentPluginInstallation.Status.INSTALLED:
+                        stale.status = AgentPluginInstallation.Status.DISABLED
+                        stale.save(update_fields=["status"])
+                    transaction.on_commit(lambda item=stale: invalidate_installation(item))
         record_audit_event(
             request,
             plugin.tenant,
             "agent_plugin.version_activated",
             "agent_plugin_definition",
             plugin.id,
-            metadata={"plugin_key": plugin.plugin_key, "version": plugin.version},
+            metadata={
+                "plugin_key": plugin.plugin_key,
+                "version": plugin.version,
+                "migrated_installations": migrated,
+                "dropped_capabilities": dropped,
+            },
         )
-        return Response(_definition_data(plugin))
+        data = _definition_data(plugin)
+        data["migration"] = {
+            "installations": migrated,
+            "dropped_capabilities": dropped,
+        }
+        return Response(data)
 
 
 class AgentPluginDetailView(APIView):
@@ -1076,9 +1171,7 @@ class AgentPluginCapabilityInvokeView(APIView):
                 code=exc.code,
             )
         except ToolApprovalRequired as exc:
-            return legacy_error_response(
-                str(exc), http_status=409, code="APPROVAL_REQUIRED"
-            )
+            return legacy_error_response(str(exc), http_status=409, code="APPROVAL_REQUIRED")
         latency_ms = int((time.monotonic() - started) * 1000)
         record_audit_event(
             request,

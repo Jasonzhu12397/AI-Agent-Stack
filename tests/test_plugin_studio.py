@@ -62,9 +62,7 @@ def studio_workspace(db):
     tenant = Tenant.objects.create(name="Studio tenant", slug="studio-tenant")
     TenantMembership.objects.create(tenant=tenant, user=user, role=TenantMembership.Role.OWNER)
     project = Project.objects.create(tenant=tenant, name="Studio project", slug="studio-project")
-    ProjectMembership.objects.create(
-        project=project, user=user, role=ProjectMembership.Role.ADMIN
-    )
+    ProjectMembership.objects.create(project=project, user=user, role=ProjectMembership.Role.ADMIN)
     client = APIClient()
     client.force_authenticate(user=user)
     return user, tenant, project, client
@@ -212,9 +210,12 @@ def test_publish_seals_credential_and_auto_installs(studio_workspace, monkeypatc
     assert second.status_code == 201, second.data
     assert second.data["version"] == "1.0.1"
     assert second.data["changed"] is True
-    assert _studio_fingerprint(
-        AgentPluginDefinition.objects.get(tenant=tenant, version="1.0.1").manifest
-    ) == second.data["schema_fingerprint"]
+    assert (
+        _studio_fingerprint(
+            AgentPluginDefinition.objects.get(tenant=tenant, version="1.0.1").manifest
+        )
+        == second.data["schema_fingerprint"]
+    )
 
 
 def test_discover_endpoint_rejects_non_admin(studio_workspace, monkeypatch):
@@ -232,9 +233,7 @@ def test_discover_endpoint_rejects_non_admin(studio_workspace, monkeypatch):
 
 
 def test_oauth_refresh_token_contract_keeps_secrets_out_of_manifest(monkeypatch):
-    monkeypatch.setattr(
-        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
-    )
+    monkeypatch.setattr(plugin_studio, "validate_public_url", lambda value, field="url": str(value))
     contract = plugin_studio._auth_from_request(
         {
             "auth_type": "oauth2",
@@ -305,6 +304,16 @@ def test_version_history_lists_and_activates_earlier_versions(studio_workspace, 
     definition = AgentPluginDefinition.objects.get(pk=old_id)
     assert definition.enabled is True
     assert AgentPluginDefinition.objects.get(tenant=tenant, version="1.0.1").enabled is False
+    assert AgentPluginInstallation.objects.filter(tenant=tenant).count() == 1
+    installation = AgentPluginInstallation.objects.get(tenant=tenant)
+    assert installation.plugin_id == definition.id
+    assert installation.plugin_version == "1.0.0"
+    assert installation.status == AgentPluginInstallation.Status.INSTALLED
+    assert installation.granted_capabilities == []
+    assert activated.data["migration"] == {
+        "installations": 1,
+        "dropped_capabilities": {str(installation.id): ["list_pets"]},
+    }
 
 
 def test_pasted_openapi_document_generates_capabilities_without_fetch(
@@ -316,9 +325,7 @@ def test_pasted_openapi_document_generates_capabilities_without_fetch(
         raise AssertionError("A pasted document must not trigger a document fetch")
 
     monkeypatch.setattr(plugin_studio, "_fetch_document", fail_fetch)
-    monkeypatch.setattr(
-        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
-    )
+    monkeypatch.setattr(plugin_studio, "validate_public_url", lambda value, field="url": str(value))
     response = client.post(
         f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/discover/",
         {
@@ -455,3 +462,145 @@ def test_mcp_discovery_grants_no_execution_authority(monkeypatch):
     assert result["manifest"]["permission_policy"]["default"] == "deny"
     assert result["manifest"]["permission_policy"]["approval_required"] == ["delete_cluster"]
     assert result["manifest"]["permission_policy"]["max_risk"] == "unclassified"
+
+
+def test_openapi_keeps_path_parameters_variants_and_response_schema(monkeypatch):
+    document = {
+        "openapi": "3.0.3",
+        "info": {"title": "Variant API", "version": "1"},
+        "paths": {
+            "/pets/{petId}": {
+                "parameters": [
+                    {
+                        "name": "petId",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {"type": "string"},
+                    },
+                ],
+                "get": {
+                    "operationId": "readPet",
+                    "parameters": [
+                        {
+                            "name": "limit",
+                            "in": "query",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string"},
+                                            "name": {"type": "string"},
+                                        },
+                                        "required": ["id"],
+                                    }
+                                }
+                            },
+                        }
+                    },
+                },
+            },
+            "/pets": {
+                "post": {
+                    "operationId": "createPet",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "pet": {
+                                            "oneOf": [
+                                                {
+                                                    "type": "object",
+                                                    "properties": {"name": {"type": "string"}},
+                                                    "required": ["name"],
+                                                },
+                                                {
+                                                    "type": "object",
+                                                    "properties": {"tag": {"type": "string"}},
+                                                },
+                                            ]
+                                        }
+                                    },
+                                    "required": ["pet"],
+                                }
+                            }
+                        },
+                    },
+                    "responses": {"201": {"description": "created"}},
+                }
+            },
+        },
+    }
+    monkeypatch.setattr(plugin_studio, "validate_public_url", lambda value, field="url": value)
+
+    result = plugin_studio.discover_openapi(
+        base_url="https://pets.example.com",
+        document_url="https://pets.example.com/openapi.json",
+        headers={},
+        document=document,
+    )
+
+    read_pet = next(item for item in result["capabilities"] if item["name"] == "readpet")
+    assert read_pet["input_schema"]["properties"]["petid"] == {
+        "type": "string",
+        "maxLength": 65536,
+    }
+    assert read_pet["input_schema"]["properties"]["limit"]["type"] == "integer"
+    assert read_pet["output_schema"]["properties"]["name"]["type"] == "string"
+    assert read_pet["output_schema"]["required"] == ["id"]
+
+    create_pet = next(item for item in result["capabilities"] if item["name"] == "createpet")
+    variant = create_pet["input_schema"]["properties"]["body"]["properties"]["pet"]
+    assert variant["type"] == "object"
+    assert set(variant["properties"]) == {"name", "tag"}
+    assert variant["required"] == []
+
+
+def test_openapi_rejects_unbounded_variant_unions(monkeypatch):
+    document = {
+        "openapi": "3.0.3",
+        "info": {"title": "Union API", "version": "1"},
+        "paths": {
+            "/items": {
+                "post": {
+                    "operationId": "createItem",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"value": {"oneOf": [{"type": "string"}] * 9}},
+                                }
+                            }
+                        }
+                    },
+                    "responses": {"200": {"description": "ok"}},
+                }
+            }
+        },
+    }
+    monkeypatch.setattr(plugin_studio, "validate_public_url", lambda value, field="url": value)
+
+    with pytest.raises(plugin_studio.PluginStudioError) as exc:
+        plugin_studio.discover_openapi(
+            base_url="https://pets.example.com",
+            document_url="https://pets.example.com/openapi.json",
+            headers={},
+            document=document,
+        )
+    assert exc.value.code == "PLUGIN_SCHEMA_UNSUPPORTED"

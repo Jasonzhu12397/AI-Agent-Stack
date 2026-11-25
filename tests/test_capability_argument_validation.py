@@ -225,3 +225,41 @@ def test_unresolvable_local_ref_rejected_with_stable_code():
 
 def test_non_object_schema_root_rejected():
     _expect_invalid({"type": "array"}, {"not": "an array"})
+
+
+def test_any_of_accepts_each_bounded_variant():
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "anyOf": [
+                    {"type": "string", "maxLength": 32},
+                    {"type": "integer"},
+                ]
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    validate_arguments({"value": "ok"}, schema)
+    validate_arguments({"value": 7}, schema)
+    _expect_invalid(schema, {"value": True})
+
+
+def test_one_of_requires_exactly_one_matching_variant():
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 1},
+                    {"type": "integer", "minimum": 10},
+                ]
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    validate_arguments({"value": 3}, schema)
+    _expect_invalid(schema, {"value": 11})
+    _expect_invalid(schema, {"value": "no"})

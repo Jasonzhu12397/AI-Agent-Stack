@@ -104,6 +104,21 @@ def validate_schema(value: Any, schema: dict[str, Any], path: str = "$", _depth:
         raise ToolExecutionError("Tool arguments exceed the maximum schema nesting depth.")
     if not isinstance(schema, dict):
         raise ToolExecutionError("Tool schema is malformed.")
+    union_key = "oneOf" if "oneOf" in schema else "anyOf" if "anyOf" in schema else None
+    if union_key is not None:
+        choices = schema.get(union_key)
+        if not isinstance(choices, list) or not choices:
+            raise ToolExecutionError("Tool schema is malformed.")
+        matched = 0
+        for choice in choices:
+            try:
+                validate_schema(value, choice, path, _depth + 1)
+            except ToolExecutionError:
+                continue
+            matched += 1
+        if matched == 0 or (union_key == "oneOf" and matched != 1):
+            raise ToolExecutionError(f"{path} does not match the allowed schema variant.")
+        return
     expected = schema.get("type")
     if not isinstance(expected, str):
         raise ToolExecutionError("Tool schema is malformed.")

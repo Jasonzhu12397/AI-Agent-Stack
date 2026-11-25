@@ -32,6 +32,7 @@ MAX_DOCUMENT_BYTES = 1024 * 1024
 MAX_TOOLS = 32
 MAX_SCHEMA_DEPTH = 8
 MAX_PROPERTIES = 64
+MAX_UNION_BRANCHES = 8
 DEFAULT_TIMEOUT_SECONDS = 15
 VERIFIED_PUBLIC_HOSTS: set[str] = set()
 CREDENTIAL_SCOPE = "agent-plugin-credential"
@@ -182,9 +183,7 @@ def _auth_from_request(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(client_id, str) or not isinstance(scope, str) or not isinstance(grant, str):
         raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 client_id and scope are invalid.")
     if grant not in {"client_credentials", "refresh_token"}:
-        raise PluginStudioError(
-            "PLUGIN_AUTH_UNSUPPORTED", "Unsupported OAuth 2.0 grant type."
-        )
+        raise PluginStudioError("PLUGIN_AUTH_UNSUPPORTED", "Unsupported OAuth 2.0 grant type.")
     contract: dict[str, Any] = {
         "type": "oauth2",
         "grant": grant,
@@ -342,6 +341,75 @@ def _merge_all_of(schema: dict[str, Any], document: dict[str, Any], depth: int) 
     return merged
 
 
+def _combine_variant_schemas(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Keep both alternatives instead of silently dropping one branch."""
+
+    if left == right:
+        return left
+    if left.get("type") == right.get("type") == "object":
+        merged = _merge_object_variants([left, right], depth=0)
+        if merged.get("type") == "object":
+            return merged
+    if {left.get("type"), right.get("type")} <= {"integer", "number"}:
+        return {"type": "number"}
+    return {"anyOf": [left, right]}
+
+
+def _merge_object_variants(choices: list[dict[str, Any]], depth: int) -> dict[str, Any]:
+    """Merge object branches into one bounded schema without losing fields.
+
+    Object variants are common in OpenAPI ``oneOf``/``anyOf`` responses. Their
+    property sets can be unioned, while only keys required by every branch stay
+    required. Non-object alternatives are preserved as ``anyOf`` and validated
+    recursively by the shared bounded validator.
+    """
+
+    branch_count = len(choices)
+    if branch_count > MAX_UNION_BRANCHES:
+        raise PluginStudioError(
+            "PLUGIN_SCHEMA_UNSUPPORTED",
+            "A schema union has more branches than the platform accepts.",
+        )
+    if not choices:
+        return {"type": "string", "maxLength": 65536}
+    if branch_count == 1:
+        return choices[0]
+    if any(choice.get("type") != "object" for choice in choices):
+        if len({json.dumps(choice, sort_keys=True) for choice in choices}) == 1:
+            return choices[0]
+        return {"anyOf": choices}
+
+    properties: dict[str, Any] = {}
+    required_sets: list[set[str]] = []
+    for choice in choices:
+        for name, child in (choice.get("properties") or {}).items():
+            if name not in properties:
+                properties[name] = child
+            else:
+                properties[name] = _combine_variant_schemas(properties[name], child)
+        required_sets.append(
+            {name for name in (choice.get("required") or []) if name in properties}
+        )
+    required = set.intersection(*required_sets) if required_sets else set()
+    result: dict[str, Any] = {
+        "type": "object",
+        "properties": dict(list(properties.items())[:MAX_PROPERTIES]),
+        "required": sorted(name for name in required if name in properties),
+        "additionalProperties": False,
+    }
+    description = next(
+        (
+            choice["description"]
+            for choice in choices
+            if isinstance(choice.get("description"), str) and choice["description"]
+        ),
+        None,
+    )
+    if description:
+        result["description"] = description[:1000]
+    return result
+
+
 def _normalize_schema(schema: Any, document: dict[str, Any], depth: int = 0) -> dict[str, Any]:
     """Reduce OpenAPI schema constructs to the bounded closed-object contract."""
 
@@ -359,9 +427,16 @@ def _normalize_schema(schema: Any, document: dict[str, Any], depth: int = 0) -> 
     if "allOf" in schema:
         schema = _merge_all_of(schema, document, depth)
     if "oneOf" in schema or "anyOf" in schema:
-        choices = schema.get("oneOf") or schema.get("anyOf") or []
-        if choices:
-            return _normalize_schema(choices[0], document, depth + 1)
+        raw_choices = schema.get("oneOf") or schema.get("anyOf") or []
+        if not isinstance(raw_choices, list):
+            raise PluginStudioError("PLUGIN_SCHEMA_UNSUPPORTED", "A schema union is malformed.")
+        if len(raw_choices) > MAX_UNION_BRANCHES:
+            raise PluginStudioError(
+                "PLUGIN_SCHEMA_UNSUPPORTED",
+                "A schema union has more branches than the platform accepts.",
+            )
+        choices = [_normalize_schema(choice, document, depth + 1) for choice in raw_choices]
+        return _merge_object_variants(choices, depth)
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
         candidates = [item for item in schema_type if item != "null"]
@@ -444,19 +519,56 @@ def _risk_for(method: str, path: str, operation: dict[str, Any]) -> str:
     return "low" if method == "get" else "medium"
 
 
+def _resolve_parameter(parameter: Any, document: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a parameter ``$ref`` (including chained local references)."""
+
+    depth = 0
+    while isinstance(parameter, dict) and "$ref" in parameter:
+        if depth > MAX_SCHEMA_DEPTH:
+            raise PluginStudioError(
+                "PLUGIN_SCHEMA_UNSUPPORTED", "A parameter $ref chain is too deep."
+            )
+        parameter = _resolve_pointer(document, str(parameter["$ref"]))
+        depth += 1
+    return parameter if isinstance(parameter, dict) else None
+
+
+def _operation_parameters(
+    path_item: dict[str, Any], operation: dict[str, Any], document: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Merge path-item parameters with operation parameters.
+
+    OpenAPI applies path-item parameters to every operation and lets the
+    operation override a path-item entry with the same ``(name, in)`` pair.
+    Dropping the path-item list silently removed required path variables.
+    """
+
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for source in (path_item.get("parameters"), operation.get("parameters")):
+        if not isinstance(source, list):
+            continue
+        for raw in source:
+            parameter = _resolve_parameter(raw, document)
+            if parameter is None:
+                continue
+            name, location = parameter.get("name"), parameter.get("in")
+            if isinstance(name, str) and isinstance(location, str):
+                merged[(name, location)] = parameter
+    return list(merged.values())
+
+
 def _parameter_schemas(
-    operation: dict[str, Any], document: dict[str, Any], path_names: list[str]
+    operation: dict[str, Any],
+    document: dict[str, Any],
+    path_names: list[str],
+    path_item: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], list[str]]:
     properties: dict[str, Any] = {}
     required: list[str] = []
     path_params: dict[str, str] = {}
     query_params: dict[str, str] = {}
     skipped_headers: list[str] = []
-    for parameter in operation.get("parameters") or []:
-        if not isinstance(parameter, dict):
-            continue
-        if "$ref" in parameter:
-            parameter = _resolve_pointer(document, str(parameter["$ref"]))
+    for parameter in _operation_parameters(path_item or {}, operation, document):
         name = parameter.get("name")
         location = parameter.get("in")
         if not isinstance(name, str) or location not in {"path", "query", "header"}:
@@ -467,9 +579,7 @@ def _parameter_schemas(
         argument = _safe_identifier(name, location)
         if argument in properties:
             continue
-        schema = _normalize_schema(
-            parameter.get("schema") or {"type": "string"}, document
-        )
+        schema = _normalize_schema(parameter.get("schema") or {"type": "string"}, document)
         if location == "path" and schema.get("type") not in {"string", "integer"}:
             schema = {"type": "string", "maxLength": 65536}
         if location == "query" and schema.get("type") == "object":
@@ -515,6 +625,36 @@ def _request_body(
             }
         return schema, body.get("required") is True
     return None, False
+
+
+def _response_schema(operation: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """Use the declared 2xx JSON object schema instead of a generic text blob."""
+
+    responses = operation.get("responses")
+    if not isinstance(responses, dict):
+        return _response_text_schema()
+    for status, response in sorted(responses.items(), key=lambda item: str(item[0])):
+        if not (str(status).startswith("2") and isinstance(response, dict)):
+            continue
+        if "$ref" in response:
+            try:
+                response = _resolve_pointer(document, str(response["$ref"]))
+            except PluginStudioError:
+                continue
+        if not isinstance(response, dict):
+            continue
+        content = response.get("content")
+        if not isinstance(content, dict):
+            continue
+        for media_type, media in content.items():
+            if not (media_type == "application/json" or str(media_type).endswith("+json")):
+                continue
+            if not isinstance(media, dict):
+                continue
+            schema = _normalize_schema(media.get("schema") or {}, document)
+            if schema.get("type") == "object":
+                return schema
+    return _response_text_schema()
 
 
 def _response_text_schema() -> dict[str, Any]:
@@ -573,6 +713,11 @@ def discover_openapi(
         if not isinstance(path_item, dict):
             continue
         if "$ref" in path_item:
+            try:
+                path_item = _resolve_pointer(document, str(path_item["$ref"]))
+            except PluginStudioError:
+                continue
+        if not isinstance(path_item, dict):
             continue
         path, path_names = _normalize_path(raw_path)
         for raw_method, operation in path_item.items():
@@ -607,7 +752,7 @@ def discover_openapi(
                 suffix += 1
             names.add(name)
             query_properties, query_required, path_params, query_params = _parameter_schemas(
-                operation, document, path_names
+                operation, document, path_names, path_item
             )
             body_schema, body_required = _request_body(operation, document)
             properties = dict(query_properties)
@@ -630,7 +775,7 @@ def discover_openapi(
                     :1000
                 ],
                 "input_schema": input_schema,
-                "output_schema": _response_text_schema(),
+                "output_schema": _response_schema(operation, document),
                 "risk_level": risk,
                 "timeout_seconds": 30,
                 "source": "declared",
