@@ -351,6 +351,11 @@ function fallbackNotice(message: ChatMessage): string {
   const usage = message.usage as Record<string, unknown>;
   if (typeof usage.fallback_provider !== "string") return "";
   const from = typeof usage.fallback_from_provider === "string" ? usage.fallback_from_provider : t("the selected model");
+  if (usage.fallback_reason === "MODEL_CREDENTIAL_REJECTED") {
+    return t("{from} rejected your API key. Replace it in the integration center; this answer temporarily uses {provider}.")
+      .replace("{provider}", usage.fallback_provider)
+      .replace("{from}", from);
+  }
   return t("The selected provider failed, so this answer uses {provider} instead (source: {from}).")
     .replace("{provider}", usage.fallback_provider)
     .replace("{from}", from);
