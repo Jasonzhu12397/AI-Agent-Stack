@@ -187,12 +187,12 @@ def test_first_question_names_an_untitled_thread(chat_workspace):
     thread = _thread(client, tenant, project, model, title=None)
     response = client.post(
         f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
-        {"content": "Which plugins are installed in Prod Cluster?"},
+        {"content": "Which plugins are installed in AI-Agent-Stack?"},
         format="json",
     )
     assert response.status_code == 201, response.content
     assert AgentChatThread.objects.get(pk=thread["id"]).title == (
-        "Which plugins are installed in Prod Cluster?"
+        "Which plugins are installed in AI-Agent-Stack?"
     )
 
 
