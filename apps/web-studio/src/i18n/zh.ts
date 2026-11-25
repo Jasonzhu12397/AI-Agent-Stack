@@ -1355,4 +1355,7 @@ export const zhCN: Record<string, string> = {
   "Paste the OpenAPI JSON document": "粘贴 OpenAPI JSON 文档",
   "The pasted OpenAPI document must be a JSON object.": "粘贴的 OpenAPI 文档必须是 JSON 对象。",
   "The pasted OpenAPI document is not valid JSON.": "粘贴的 OpenAPI 文档不是合法 JSON。",
+  "the selected model": "所选模型",
+  "The selected provider failed, so this answer uses {provider} instead (source: {from}).":
+    "所选提供方调用失败，本次回答已自动改用 {provider}（原提供方：{from}）。",
 };

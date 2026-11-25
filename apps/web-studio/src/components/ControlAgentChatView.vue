@@ -346,6 +346,15 @@ watch(
   },
   { immediate: true },
 );
+function fallbackNotice(message: ChatMessage): string {
+  const usage = message.usage as Record<string, unknown>;
+  if (typeof usage.fallback_provider !== "string") return "";
+  const from = typeof usage.fallback_from_provider === "string" ? usage.fallback_from_provider : t("the selected model");
+  return t("The selected provider failed, so this answer uses {provider} instead (source: {from}).")
+    .replace("{provider}", usage.fallback_provider)
+    .replace("{from}", from);
+}
+
 </script>
 
 <template>
@@ -421,6 +430,9 @@ watch(
             <span v-if="message.role !== 'user'" class="msg-avatar">CA</span>
             <div class="msg-card">
               <div class="bubble-body" v-html="bubbleHtml(message)" />
+              <p v-if="fallbackNotice(message)" class="bubble-fallback">
+                {{ fallbackNotice(message) }}
+              </p>
               <div
                 v-if="message.context.skills?.length || message.context.plugins?.length"
                 class="bubble-context"
@@ -781,6 +793,15 @@ watch(
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
+}
+.bubble-fallback {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.4;
 }
 .msg-card {
   padding: 10px 14px;

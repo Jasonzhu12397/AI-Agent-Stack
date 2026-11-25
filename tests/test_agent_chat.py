@@ -227,3 +227,52 @@ def test_context_reports_whether_a_plugin_still_needs_authorization(chat_workspa
     installation.save(update_fields=["credential_ref"])
     authorized = client.get(url).json()["plugins"][0]
     assert authorized["credential_configured"] is True
+
+
+@pytest.mark.django_db
+def test_turn_falls_back_to_ready_model_when_selected_provider_rejects_key(
+    chat_workspace, monkeypatch
+):
+    user, tenant, project, fake_model, _installation = chat_workspace
+    bad_provider = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="OpenAI (my account)",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        auth_mode=ModelProvider.AuthMode.TENANT_SECRET,
+        base_url="https://api.openai.com/v1",
+        credential_ref="env:OPENAI_API_KEY",
+    )
+    bad_model = ModelConfig.objects.create(
+        provider=bad_provider,
+        model_name="gpt-5.6",
+        display_name="GPT-5.6",
+        capabilities=["chat"],
+        max_output_tokens=1024,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    thread = _thread(client, tenant, project, bad_model)
+    from core import chat_runtime
+    from core.chat_views import _failure  # noqa: F401
+
+    def fake_run(thread_arg, model_arg, **kwargs):
+        if model_arg.id == bad_model.id:
+            raise chat_runtime.ChatRuntimeError(
+                "MODEL_CREDENTIAL_REJECTED",
+                "OpenAI rejected the account credential (HTTP 401).",
+                403,
+            )
+        return ("Fallback answered.", {"input_tokens": 3, "output_tokens": 4}, [])
+
+    monkeypatch.setattr(chat_runtime, "run_turn", fake_run)
+    response = client.post(
+        f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
+        {"content": "hello"},
+        format="json",
+    )
+    assert response.status_code == 201, response.content
+    body = response.json()
+    assert body["assistant"]["content"] == "Fallback answered."
+    assert body["assistant"]["usage"]["fallback_provider"] == "Chat fake provider"
+    assert body["assistant"]["usage"]["fallback_reason"] == "MODEL_CREDENTIAL_REJECTED"

@@ -589,10 +589,91 @@ def _generate_reply(request, thread, model_config, context):
             idempotency_key=idempotency_key,
         )
     except chat_runtime.ChatRuntimeError as exc:
+        # A linked personal account can fail with a rejected key after the
+        # member already authorized it (restricted key, retired model, or a
+        # project-level permission). The conversation must still answer, so try
+        # the member's other ready models before surfacing the provider error.
+        fallback = _fallback_after_failure(
+            request, thread, model_config, exc, messages, context, idempotency_key
+        )
+        if fallback is not None:
+            return fallback, None
         return None, _failure(
             request, thread, model_config, exc.code, exc.message, exc.http_status
         )
     return {"content": content, "usage": usage, "tool_calls": tool_log}, None
+
+
+def _fallback_candidates(tenant, user, exclude_model_id):
+    """Ready models other than the one that just failed.
+
+    Personal account models require a live link for this member; shared-pool
+    models require the operator key; the local echo model is always ready and
+    is tried last so a real provider still wins when one works.
+    """
+
+    queryset = (
+        ModelConfig.objects.select_related("provider")
+        .filter(
+            provider_accounts.model_config_scope_q(tenant, user),
+            provider__enabled=True,
+            enabled=True,
+        )
+        .exclude(pk=exclude_model_id)
+        .order_by("provider__name", "model_name")
+    )
+    ranked = []
+    for model in queryset:
+        provider = model.provider
+        if provider.provider_type == ModelProvider.ProviderType.FAKE:
+            rank = 2
+        elif provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
+            if provider_accounts.active_link(user, provider) is None:
+                continue
+            rank = 0
+        elif provider.auth_mode == ModelProvider.AuthMode.PLATFORM_POOL:
+            if not provider_accounts.platform_env_configured(provider.preset_key):
+                continue
+            rank = 1
+        else:
+            continue
+        ranked.append((rank, model))
+    ranked.sort(key=lambda item: (item[0], item[1].provider.name, item[1].model_name))
+    return [model for _rank, model in ranked]
+
+
+def _fallback_after_failure(
+    request, thread, failed_model, exc, messages, context, idempotency_key
+):
+    """Run the turn on another ready model after a non-retryable provider fault."""
+
+    if exc.code not in {
+        "MODEL_CREDENTIAL_REJECTED",
+        "MODEL_PROVIDER_HTTP_ERROR",
+        "MODEL_PROVIDER_INVALID_RESPONSE",
+    }:
+        return None
+    for model in _fallback_candidates(thread.tenant, request.user, failed_model.id):
+        try:
+            content, usage, tool_log = chat_runtime.run_turn(
+                thread,
+                model,
+                user=request.user,
+                messages=messages,
+                context=context,
+                effort=thread.effort,
+                execution_target=thread.execution_target,
+                idempotency_key=f"{idempotency_key}:fallback:{model.id}",
+            )
+        except chat_runtime.ChatRuntimeError:
+            continue
+        usage["fallback_from_model"] = str(failed_model.id)
+        usage["fallback_from_provider"] = failed_model.provider.name
+        usage["fallback_reason"] = exc.code
+        usage["fallback_model"] = str(model.id)
+        usage["fallback_provider"] = model.provider.name
+        return {"content": content, "usage": usage, "tool_calls": tool_log}
+    return None
 
 
 def _failure(request, thread, model_config, code, message, http_status):
