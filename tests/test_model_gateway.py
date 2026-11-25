@@ -1,8 +1,8 @@
 import json
 from io import BytesIO
-from urllib.error import HTTPError
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pytest
 from core.model_gateway import ModelGateway, ModelGatewayError
@@ -268,7 +268,15 @@ def test_model_gateway_classifies_provider_rate_limit_and_releases_reservation(m
                 BytesIO(b'{"error":{"message":"rate limit exceeded"}}'),
             )
 
-    guard = _StubGuard()
+    class TrackingGuard(_StubGuard):
+        def __init__(self):
+            self.release_calls = 0
+
+        def release(self, *, reservation):
+            self.release_calls += 1
+            super().release(reservation=reservation)
+
+    guard = TrackingGuard()
     with patch("core.model_gateway.build_opener", return_value=FakeOpener()):
         with pytest.raises(ModelGatewayError) as error:
             ModelGateway(guard=guard).complete(
