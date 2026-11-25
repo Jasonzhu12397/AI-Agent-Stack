@@ -440,3 +440,43 @@ def test_fake_model_does_not_pick_a_tool_for_a_greeting(model_tenant):
 
     assert result.tool_calls == []
     assert result.content == "fake model ready"
+
+
+@override_settings(MODEL_PROVIDER_ALLOWED_HOSTS=["api.example.test"])
+def test_gateway_names_the_model_and_provider_reason_on_404(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+
+    provider = ModelProvider(
+        name="Mock OpenAI",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="gpt-5.6-luna",
+        display_name="GPT-5.6 Luna",
+        max_output_tokens=200,
+    )
+    monkeypatch.setenv("MODEL_API_KEY", "test-secret")
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"error":{"message":"The model does not exist"}}'),
+            )
+
+    with patch("core.model_gateway.build_opener", return_value=FakeOpener()):
+        with pytest.raises(ModelGatewayError) as raised:
+            ModelGateway(guard=_StubGuard()).complete(
+                model, [{"role": "user", "content": "hello"}]
+            )
+
+    assert raised.value.code == "MODEL_NOT_FOUND"
+    assert "gpt-5.6-luna" in str(raised.value)
+    assert "The model does not exist" in str(raised.value)

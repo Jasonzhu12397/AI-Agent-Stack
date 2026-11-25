@@ -282,8 +282,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     if ([502, 503, 504].includes(response.status) && payload === null) {
       throw new ApiError(
-        `The platform gateway returned HTTP ${response.status} before the API answered. ` +
-          "The upstream model service may be unavailable; retry in a moment or check the provider status.",
+        `An edge proxy (Cloudflare Tunnel or reverse proxy) returned HTTP ${response.status} ` +
+          "before the API answered. This is a platform availability issue, not a model provider " +
+          "error: check that the API container is running and the tunnel origin is reachable, then retry.",
         { status: response.status },
         response.status,
       );

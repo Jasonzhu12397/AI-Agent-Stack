@@ -707,10 +707,16 @@ def _fallback_after_failure(
 
     if exc.code not in {
         "MODEL_CREDENTIAL_REJECTED",
+        "MODEL_NOT_FOUND",
         "MODEL_PROVIDER_HTTP_ERROR",
         "MODEL_PROVIDER_INVALID_RESPONSE",
     }:
         return None
+    if exc.code == "MODEL_NOT_FOUND":
+        # The preset id was stale or unknown to this account. Re-read the
+        # account's real /models list before choosing a fallback, otherwise
+        # every candidate is the same stale catalogue and the turn dies on 404.
+        provider_accounts.refresh_account_models(failed_model.provider, request.user)
     for model in _fallback_candidates(thread.tenant, request.user, failed_model.id):
         try:
             content, usage, tool_log = chat_runtime.run_turn(

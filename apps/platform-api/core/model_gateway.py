@@ -542,6 +542,45 @@ class ModelGateway:
             latency_ms=int((time.monotonic() - started) * 1000),
         )
 
+    @staticmethod
+    def _provider_error_detail(exc) -> str:
+        """A bounded, readable piece of the provider's own error body.
+
+        A bare "HTTP 404" cannot tell a wrong model id from a wrong base URL.
+        OpenAI-compatible providers put the reason in the JSON body, so keep
+        that text (bounded) for the operator and the audit record. Credentials
+        are never in this body, and HTML proxy pages are not useful here.
+        """
+
+        try:
+            raw = exc.read(4096)
+        except Exception:
+            return ""
+        try:
+            text = raw.decode("utf-8", "replace").strip()
+        except Exception:
+            return ""
+        if not text:
+            return ""
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            candidates = [payload.get("message")]
+            error = payload.get("error")
+            if isinstance(error, dict):
+                candidates.extend([error.get("message"), error.get("code"), error.get("type")])
+            elif isinstance(error, str):
+                candidates.append(error)
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate.strip():
+                    text = candidate.strip()
+                    break
+        if "<html" in text[:200].lower():
+            return ""
+        return " ".join(text.split())[:500]
+
     def _post_json(self, provider, endpoint, body, timeout_seconds, credential_ref=None):
         parsed = urlsplit(provider.base_url)
         is_local_http = parsed.scheme == "http" and _is_local_http_provider(provider)
@@ -578,6 +617,8 @@ class ModelGateway:
                 )
             payload = json.loads(raw_payload.decode("utf-8"))
         except HTTPError as exc:
+            detail = self._provider_error_detail(exc)
+            suffix = f" Provider said: {detail}" if detail else ""
             if exc.code in (401, 403):
                 # The platform answered, so the transport and URL are fine:
                 # only the member's own credential is wrong, and the fix is to
@@ -585,12 +626,23 @@ class ModelGateway:
                 raise ModelGatewayError(
                     "MODEL_CREDENTIAL_REJECTED",
                     f"{provider.name} rejected the account credential (HTTP {exc.code}). "
-                    "Paste a new key from the platform's API page.",
+                    "Paste a new key from the platform's API page." + suffix,
+                    retryable=False,
+                ) from exc
+            if exc.code == 404:
+                model_name = body.get("model") if isinstance(body, dict) else None
+                raise ModelGatewayError(
+                    "MODEL_NOT_FOUND",
+                    f"{provider.name} returned HTTP 404 for model "
+                    f"'{model_name or 'unknown'}'. The model id or endpoint path is not "
+                    "available to this account; pick another model or add the exact "
+                    "model/endpoint id from the provider console." + suffix,
                     retryable=False,
                 ) from exc
             raise ModelGatewayError(
                 "MODEL_PROVIDER_HTTP_ERROR",
-                f"The model provider returned HTTP {exc.code}.",
+                f"The model provider returned HTTP {exc.code}."
+                + (f" {detail}" if detail else ""),
                 retryable=exc.code >= 500 or exc.code == 429,
             ) from exc
         except (URLError, TimeoutError, OSError) as exc:

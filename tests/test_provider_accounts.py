@@ -452,3 +452,70 @@ def test_concurrent_reservations_cannot_overdraw_the_daily_allowance(member):
     for thread in threads:
         thread.join(timeout=20)
     assert sorted(results) == ["PROVIDER_FREE_QUOTA_EXCEEDED", "reserved"]
+
+
+@pytest.mark.django_db
+def test_verification_rejects_a_key_whose_models_all_404(member, monkeypatch):
+    """Listing a model is not proof the project may call it.
+
+    A stale preset or a project-scoped key can return 404 on every completion.
+    Saving it as "unverified" made the card green and failed every chat with
+    "The model provider returned HTTP 404", so the link is refused instead.
+    """
+
+    import io
+    import urllib.request
+    from urllib.error import HTTPError
+
+    user, tenant, _client = member
+    provider = _account_provider(tenant, user, preset_key="doubao")
+
+    class ModelsResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Opener:
+        def open(self, request, timeout=None):
+            if request.full_url.endswith("/models"):
+                return ModelsResponse(
+                    b'{"data": [{"id": "doubao-seed-2-1-pro-260915"}]}'
+                )
+            raise HTTPError(
+                request.full_url,
+                404,
+                "Not Found",
+                {},
+                io.BytesIO(b'{"error":{"message":"model endpoint not found"}}'),
+            )
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: Opener())
+    with pytest.raises(ProviderAccountError) as raised:
+        provider_accounts.verify_account_credential(provider, "ark-key")
+    assert raised.value.code == "PROVIDER_ACCOUNT_NO_CHAT_MODEL"
+    assert "none of the configured models" in str(raised.value)
+    assert "model endpoint not found" in str(raised.value)
+
+
+@pytest.mark.django_db
+def test_account_model_sync_adds_advertised_and_retires_stale_presets(member):
+    user, tenant, _client = member
+    provider = _account_provider(tenant, user)
+    provider_accounts.seed_preset_models(provider)
+    stale = ModelConfig.objects.get(provider=provider, model_name="gpt-5.6-luna")
+    assert stale.enabled is True
+
+    result = provider_accounts.sync_account_models(
+        provider, ["gpt-5.6", "gpt-5.6-terra", "gpt-5.7-preview"]
+    )
+
+    assert result == {"added": 1, "retired": 1}
+    names = set(
+        ModelConfig.objects.filter(provider=provider, enabled=True).values_list(
+            "model_name", flat=True
+        )
+    )
+    assert names == {"gpt-5.6", "gpt-5.6-terra", "gpt-5.7-preview"}
+    assert ModelConfig.objects.get(provider=provider, model_name="gpt-5.6-luna").enabled is False

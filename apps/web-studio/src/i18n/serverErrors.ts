@@ -7,6 +7,7 @@ import { locale } from "../i18n";
 const SERVER_ERROR_ZH: Record<string, string> = {
   MODEL_CREDENTIAL_REJECTED: "{provider} 拒绝了该账号凭据（HTTP {status}）。请在平台的 API 页面粘贴新的密钥。",
   MODEL_CREDENTIAL_MISSING: "该模型缺少凭据。请先授权一个平台账号，或粘贴自己的密钥。",
+  MODEL_NOT_FOUND: "所选模型在提供方不可用（HTTP 404）。请在模型管理中选择该账号实际可调用的模型，或粘贴准确的模型/端点 ID。",
   MODEL_PROVIDER_HTTP_ERROR: "模型服务返回 HTTP {status}。",
   MODEL_PROVIDER_UNAVAILABLE: "无法连接到模型服务，请稍后重试。",
   MODEL_PROVIDER_INVALID_RESPONSE: "模型服务返回了无法解析的内容。",

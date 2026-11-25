@@ -337,17 +337,181 @@ def active_link(user, provider) -> ProviderAccountLink | None:
 
 
 @transaction.atomic
+def _provider_model_ids(payload) -> list[str]:
+    """Extract chat-capable model ids from an OpenAI-compatible /models body."""
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        data = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    skip = (
+        "embedding",
+        "embed-",
+        "image",
+        "audio",
+        "speech",
+        "transcribe",
+        "tts",
+        "moderation",
+        "rerank",
+        "realtime",
+        "realtime",
+        "search",
+        "davinci",
+        "babbage",
+        "ada-",
+        "curie",
+    )
+    result = []
+    for item in data:
+        name = item.get("id") or item.get("name") if isinstance(item, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            continue
+        normalized = name.strip()
+        lowered = normalized.lower()
+        if any(part in lowered for part in skip):
+            continue
+        if normalized not in result:
+            result.append(normalized)
+    return result[:60]
+
+
+def _probe_candidates(provider, available_models: list[str]) -> list[str]:
+    """Models worth a one-token completion before we trust the credential.
+
+    Prefer the preset names the provider actually advertises, then any other
+    advertised chat model. When a platform hides /models, fall back to the
+    preset catalogue; if all of those 404, the key is linked to a stale catalogue
+    and the operator must add the real model id instead of discovering it later.
+    """
+
+    preset = PROVIDER_PRESETS.get(provider.preset_key) or {"models": []}
+    preset_names = [item["model_name"] for item in preset.get("models") or []]
+    if available_models:
+        preferred = [name for name in preset_names if name in available_models]
+        extra = [name for name in available_models if name not in preferred]
+        return (preferred + extra)[:8]
+    return preset_names[:8]
+
+
+def _probe_chat_completion(provider, credential, available_models=None):
+    """Verify the key can actually run inference, not merely list models.
+
+    Restricted project keys can pass ``GET /models`` and still be denied on
+    ``POST /chat/completions``; linking such a key produced a green "connected"
+    card and a 401 on the first chat turn. A key can also list models that its
+    project cannot call (HTTP 404), which used to be saved as "unverified" and
+    then failed every chat turn. The probe therefore tries the advertised
+    models and refuses the link when every candidate is rejected.
+    """
+
+    import json
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, build_opener
+
+    candidates = _probe_candidates(provider, available_models or [])
+    if not candidates:
+        return {
+            "verified": False,
+            "reason": "chat_unprobed",
+            "available_models": available_models or [],
+        }
+    body_base = {
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 16,
+    }
+    last_status = None
+    last_detail = ""
+    for probe_model in candidates:
+        body = {"model": probe_model, **body_base}
+        request = Request(
+            provider.base_url.rstrip("/") + "/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {credential}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            from core.model_gateway import NoRedirectHandler
+
+            with build_opener(NoRedirectHandler()).open(request, timeout=10) as response:
+                response.read(1024 * 1024)
+        except HTTPError as exc:
+            last_status = exc.code
+            try:
+                raw = exc.read(2048).decode("utf-8", "replace")
+            except Exception:
+                raw = ""
+            last_detail = " ".join(raw.split())[:300]
+            if exc.code in {401, 403}:
+                raise ProviderAccountError(
+                    "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
+                    f"{provider.name} rejected this API key for chat completion "
+                    f"(HTTP {exc.code}). The key may be restricted to model listing; "
+                    "create a key with chat permission and paste it again.",
+                    http_status=400,
+                ) from exc
+            if exc.code in {404, 400}:
+                continue
+            if exc.code == 429 or exc.code >= 500:
+                return {
+                    "verified": False,
+                    "reason": f"chat_{exc.code}",
+                    "available_models": available_models or [],
+                    "model": probe_model,
+                }
+            return {
+                "verified": False,
+                "reason": f"chat_{exc.code}",
+                "available_models": available_models or [],
+                "model": probe_model,
+            }
+        except (URLError, TimeoutError, OSError):
+            return {
+                "verified": False,
+                "reason": "chat_unreachable",
+                "available_models": available_models or [],
+                "model": probe_model,
+            }
+        return {
+            "verified": True,
+            "reason": "chat_completion",
+            "model": probe_model,
+            "available_models": available_models or [],
+        }
+    if last_status in {400, 404}:
+        suffix = f" Provider said: {last_detail}" if last_detail else ""
+        raise ProviderAccountError(
+            "PROVIDER_ACCOUNT_NO_CHAT_MODEL",
+            f"{provider.name} accepted the API key, but none of the configured models "
+            f"could run a completion (last HTTP {last_status}). The model id or endpoint "
+            "id is not available to this account. Add the exact id from the provider "
+            "console in Model Manager, then link the account again." + suffix,
+            http_status=400,
+        )
+    return {
+        "verified": False,
+        "reason": f"chat_{last_status}",
+        "available_models": available_models or [],
+    }
+
+
 def verify_account_credential(provider, credential: str) -> dict:
     """Check a pasted key against the platform before storing it.
 
     A linked account that can never authenticate is worse than no link: the
-    console says "connected" and every chat then fails with HTTP 401. The
-    OpenAI-compatible transport every preset uses exposes ``GET /models``,
-    then confirms the key may actually run inference with a one-word
-    completion. A rejection is final; a platform that hides an endpoint
-    (404/405) is reported as unverified rather than blocked.
+    console says "connected" and every chat then fails. The OpenAI-compatible
+    transport every preset uses exposes ``GET /models``; the body is also the
+    authoritative model list for that key, so it is returned to the caller to
+    seed the picker. A platform that hides the endpoint (404/405) is still
+    probed with the preset catalogue rather than accepted blindly.
     """
 
+    import json
     from urllib.error import HTTPError, URLError
     from urllib.request import Request, build_opener
 
@@ -365,17 +529,23 @@ def verify_account_credential(provider, credential: str) -> dict:
     if "://" in value or value.startswith("env:"):
         # Operator-injected references are resolved at call time; validating
         # here would turn a missing process variable into a link-time outage.
-        return {"verified": None, "reason": "reference"}
+        return {"verified": None, "reason": "reference", "available_models": []}
     url = provider.base_url.rstrip("/") + "/models"
     request = Request(
         url,
         headers={"Authorization": f"Bearer {value}", "Accept": "application/json"},
     )
+    available_models: list[str] = []
     try:
         from core.model_gateway import NoRedirectHandler
 
         with build_opener(NoRedirectHandler()).open(request, timeout=8) as response:
-            response.read(1024 * 1024)
+            raw = response.read(1024 * 1024)
+        try:
+            listed = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            listed = None
+        available_models = _provider_model_ids(listed)
     except HTTPError as exc:
         if exc.code in {401, 403}:
             raise ProviderAccountError(
@@ -384,74 +554,112 @@ def verify_account_credential(provider, credential: str) -> dict:
                 "Copy a fresh key from the platform's API page and paste it again.",
                 http_status=400,
             ) from exc
-        if exc.code in {404, 405}:
-            return {"verified": False, "reason": f"endpoint_{exc.code}"}
-        return {"verified": False, "reason": f"http_{exc.code}"}
+        # 404/405 means this platform hides /models; the completion probe still
+        # decides whether the key is usable, so do not return early.
+        if exc.code not in {404, 405}:
+            return {
+                "verified": False,
+                "reason": f"http_{exc.code}",
+                "available_models": [],
+            }
     except (URLError, TimeoutError, OSError):
         # A network hiccup should not prevent a member from saving a key that
         # they can verify later from the model test.
-        return {"verified": False, "reason": "unreachable"}
-    return _probe_chat_completion(provider, value)
+        return {"verified": False, "reason": "unreachable", "available_models": []}
+    return _probe_chat_completion(provider, value, available_models)
 
 
-def _probe_chat_completion(provider, credential):
-    """Verify the key can actually run inference, not merely list models.
+def refresh_account_models(provider, user) -> dict:
+    """Re-read the provider's model list with the member's own key.
 
-    Restricted project keys can pass ``GET /models`` and still be denied on
-    ``POST /chat/completions``; linking such a key produced a green "connected"
-    card and a 401 on the first chat turn. The probe uses the preset's first
-    model with one output token, so a chat-permission failure is caught before
-    the credential is stored.
+    Called when a chat turn hits HTTP 404 on a preset model. The preset was a
+    guess; this replaces it with the models the account can really call so the
+    current turn can fall back to a working one and later turns see the truth.
     """
 
     import json
     from urllib.error import HTTPError, URLError
     from urllib.request import Request, build_opener
 
-    preset = PROVIDER_PRESETS.get(provider.preset_key) or {}
-    model_config = (
-        provider.models.filter(enabled=True).order_by("model_name").first()
-    )
-    if model_config is not None:
-        probe_model = model_config.model_name
-    else:
-        models = preset.get("models") or []
-        if not models:
-            return {"verified": False, "reason": "chat_unprobed"}
-        probe_model = models[0]["model_name"]
-    body = {
-        "model": probe_model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 16,
-    }
+    link = active_link(user, provider)
+    if link is None:
+        return {"added": 0, "retired": 0, "models": []}
+    from core.model_gateway import NoRedirectHandler, resolve_credential
+
+    try:
+        credential = resolve_credential(link.credential_ref, user)
+    except Exception:
+        return {"added": 0, "retired": 0, "models": []}
     request = Request(
-        provider.base_url.rstrip("/") + "/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {credential}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
+        provider.base_url.rstrip("/") + "/models",
+        headers={"Authorization": f"Bearer {credential}", "Accept": "application/json"},
     )
     try:
-        from core.model_gateway import NoRedirectHandler
+        with build_opener(NoRedirectHandler()).open(request, timeout=8) as response:
+            raw = response.read(1024 * 1024)
+        listed = json.loads(raw.decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, TypeError):
+        return {"added": 0, "retired": 0, "models": []}
+    models = _provider_model_ids(listed)
+    if not models:
+        return {"added": 0, "retired": 0, "models": []}
+    result = sync_account_models(provider, models)
+    result["models"] = models
+    return result
 
-        with build_opener(NoRedirectHandler()).open(request, timeout=10) as response:
-            response.read(1024 * 1024)
-    except HTTPError as exc:
-        if exc.code in {401, 403}:
-            raise ProviderAccountError(
-                "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
-                f"{provider.name} rejected this API key for chat completion "
-                f"(HTTP {exc.code}). The key may be restricted to model listing; "
-                "create a key with chat permission and paste it again.",
-                http_status=400,
-            ) from exc
-        return {"verified": False, "reason": f"chat_{exc.code}"}
-    except (URLError, TimeoutError, OSError):
-        return {"verified": False, "reason": "chat_unreachable"}
-    return {"verified": True, "reason": "chat_completion"}
+
+def sync_account_models(provider, model_names: list[str]) -> dict:
+    """Make the picker match the models the member's key can really call.
+
+    The preset catalogue is a guess; ``GET /models`` is the account's truth.
+    Models the account advertises are added, and preset-seeded rows it no longer
+    advertises are disabled so a stale id cannot stay selectable and fail with
+    404 on the next turn.
+    """
+
+    from core.models import ModelConfig
+
+    if provider.auth_mode != ModelProvider.AuthMode.USER_ACCOUNT:
+        return {"added": 0, "retired": 0}
+    wanted = []
+    for name in model_names or []:
+        if isinstance(name, str) and name.strip() and name.strip() not in wanted:
+            wanted.append(name.strip())
+    wanted = wanted[:60]
+    if not wanted:
+        return {"added": 0, "retired": 0}
+    preset_names = {
+        item["model_name"]
+        for item in (PROVIDER_PRESETS.get(provider.preset_key) or {}).get("models", [])
+    }
+    added = 0
+    for name in wanted:
+        _, made = ModelConfig.objects.get_or_create(
+            provider=provider,
+            model_name=name,
+            version=1,
+            defaults={
+                "display_name": name,
+                "capabilities": ["chat", "tools"],
+                "input_cost_per_million": 0,
+                "output_cost_per_million": 0,
+            },
+        )
+        added += int(made)
+    retired = 0
+    for model in provider.models.all():
+        if model.model_name in wanted or not model.enabled:
+            continue
+        if model.model_name not in preset_names:
+            continue
+        if list(model.capabilities or []) != ["chat", "tools"]:
+            continue
+        if model.input_cost_per_million or model.output_cost_per_million:
+            continue
+        model.enabled = False
+        model.save(update_fields=["enabled"])
+        retired += 1
+    return {"added": added, "retired": retired}
 
 
 def link_account(

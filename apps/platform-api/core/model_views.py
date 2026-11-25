@@ -325,6 +325,10 @@ class ModelProviderAccountView(APIView):
                 credential_ref=credential_ref,
                 account_label=account_label,
             )
+            if verification.get("available_models"):
+                provider_accounts.sync_account_models(
+                    provider, verification["available_models"]
+                )
         except ProviderAccountError as exc:
             return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
         record_audit_event(
