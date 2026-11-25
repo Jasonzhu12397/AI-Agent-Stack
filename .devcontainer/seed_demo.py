@@ -493,7 +493,7 @@ node, _ = AgentNode.objects.update_or_create(
         "tenant": tenant,
         "created_by": user,
         "node_type": AgentNode.NodeType.EPH_NODE,
-        "cluster_name": "prod-cluster",
+        "cluster_name": "AI-Agent-Stack",
         "agent_version": "1.4.2",
         "capabilities": ["inventory.report", "pxe.boot"],
         "labels": {"pool": "pool4"},
