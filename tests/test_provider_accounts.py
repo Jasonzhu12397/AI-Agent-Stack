@@ -357,3 +357,45 @@ def test_account_provider_calls_the_openai_compatible_transport(member):
     assert ProviderAccountUsage.objects.get(idempotency_key="account-call").status == (
         ProviderAccountUsage.Status.SETTLED
     )
+
+
+@pytest.mark.django_db
+def test_verification_rejects_a_key_that_can_list_models_but_not_chat(member, monkeypatch):
+    """A models-only key must not be stored as a working account.
+
+    OpenAI project keys can be restricted to ``GET /models`` while every
+    completion returns 401. Accepting that key produced a green "connected"
+    card and then a 401 on the first chat turn, so verification now exercises
+    the completion endpoint too.
+    """
+
+    import io
+    import urllib.request
+    from urllib.error import HTTPError
+
+    user, tenant, _client = member
+    provider = _account_provider(tenant, user)
+
+    class ModelsResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Opener:
+        def __init__(self):
+            self.calls = 0
+
+        def open(self, request, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelsResponse(b'{"data": []}')
+            raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    opener = Opener()
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: opener)
+    with pytest.raises(ProviderAccountError) as raised:
+        provider_accounts.verify_account_credential(provider, "sk-restricted")
+    assert raised.value.code == "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED"
+    assert "chat completion" in str(raised.value)

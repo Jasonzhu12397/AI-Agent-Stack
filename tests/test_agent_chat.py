@@ -276,3 +276,42 @@ def test_turn_falls_back_to_ready_model_when_selected_provider_rejects_key(
     assert body["assistant"]["content"] == "Fallback answered."
     assert body["assistant"]["usage"]["fallback_provider"] == "Chat fake provider"
     assert body["assistant"]["usage"]["fallback_reason"] == "MODEL_CREDENTIAL_REJECTED"
+
+
+@pytest.mark.django_db
+def test_linked_personal_model_is_recommended_over_the_local_echo(chat_workspace):
+    user, tenant, project, fake_model, _installation = chat_workspace
+    from core.models import ProviderAccountLink
+
+    personal = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="OpenAI (my account)",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        auth_mode=ModelProvider.AuthMode.USER_ACCOUNT,
+        preset_key="openai",
+        base_url="https://api.openai.com/v1",
+    )
+    personal_model = ModelConfig.objects.create(
+        provider=personal,
+        model_name="gpt-5.6",
+        display_name="GPT-5.6",
+        capabilities=["chat", "tools"],
+    )
+    ProviderAccountLink.objects.create(
+        user=user,
+        provider=personal,
+        credential_ref="env:OPENAI_API_KEY",
+        status=ProviderAccountLink.Status.LINKED,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    context = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-chat/context/"
+    ).json()
+    by_id = {row["id"]: row for row in context["models"]}
+    assert by_id[str(personal_model.id)]["recommended"] is True
+    assert by_id[str(fake_model.id)]["recommended"] is False
+
+    thread = _thread(client, tenant, project)
+    assert thread["model_config_id"] == str(personal_model.id)

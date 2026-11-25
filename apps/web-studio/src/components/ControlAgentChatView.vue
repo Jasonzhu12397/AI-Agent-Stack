@@ -143,8 +143,9 @@ async function loadContext(): Promise<void> {
   try {
     context.value = await getChatContext(props.tenantId, props.projectId);
     if (!selectedModelId.value && context.value.models.length > 0) {
-      // The local echo model needs no credential, so it is the safest default
-      // until the member authorizes a real platform account.
+      // The API recommends the member's linked account first, a configured
+      // shared pool next, and the local echo model last, so a pasted key is
+      // used by the next conversation instead of being shadowed by the demo.
       const recommended = context.value.models.find(
         (model) => model.recommended && model.ready !== false,
       );

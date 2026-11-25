@@ -398,7 +398,7 @@ def _available_models(request, tenant):
         items.append(
             {
                 "id": str(model.id),
-                "recommended": provider.provider_type == ModelProvider.ProviderType.FAKE,
+                "recommended": False,
                 "model_name": model.model_name,
                 "display_name": model.display_name,
                 "provider_name": provider.name,
@@ -413,7 +413,29 @@ def _available_models(request, tenant):
                 ),
             }
         )
+    preferred = _default_model_config(tenant, request.user)
+    if preferred is not None:
+        for item in items:
+            item["recommended"] = item["id"] == str(preferred.id)
     return items
+
+
+def _model_rank(provider, user):
+    """Preference order for a member's own models.
+
+    A linked personal account is the most intentional choice, then a
+    configured shared pool, then a tenant-owned remote provider, and the local
+    echo model last. The demo model must never shadow a provider the member
+    just connected, otherwise the console answers with canned tool output.
+    """
+
+    if provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
+        return 0 if provider_accounts.active_link(user, provider) else None
+    if provider.auth_mode == ModelProvider.AuthMode.PLATFORM_POOL:
+        return 1 if provider_accounts.platform_env_configured(provider.preset_key) else None
+    if provider.provider_type == ModelProvider.ProviderType.FAKE:
+        return 3
+    return 2
 
 
 def _default_model_config(tenant, user):
@@ -432,9 +454,15 @@ def _default_model_config(tenant, user):
             provider__enabled=True,
             enabled=True,
         )
-        .order_by("provider__provider_type", "provider__name", "model_name")
+        .order_by("provider__name", "model_name")
     )
-    return queryset.first()
+    ranked = []
+    for model in queryset:
+        rank = _model_rank(model.provider, user)
+        if rank is not None:
+            ranked.append((rank, model))
+    ranked.sort(key=lambda item: (item[0], item[1].provider.name, item[1].model_name))
+    return ranked[0][1] if ranked else None
 
 
 def _resolve_model_config(request, tenant, model_config_id):

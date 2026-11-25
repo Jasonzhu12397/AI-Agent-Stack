@@ -343,9 +343,9 @@ def verify_account_credential(provider, credential: str) -> dict:
     A linked account that can never authenticate is worse than no link: the
     console says "connected" and every chat then fails with HTTP 401. The
     OpenAI-compatible transport every preset uses exposes ``GET /models``,
-    which validates the credential without spending a completion. A rejection
-    is final; a platform that hides that endpoint (404/405) is reported as
-    unverified rather than blocked.
+    then confirms the key may actually run inference with a one-word
+    completion. A rejection is final; a platform that hides an endpoint
+    (404/405) is reported as unverified rather than blocked.
     """
 
     from urllib.error import HTTPError, URLError
@@ -391,7 +391,60 @@ def verify_account_credential(provider, credential: str) -> dict:
         # A network hiccup should not prevent a member from saving a key that
         # they can verify later from the model test.
         return {"verified": False, "reason": "unreachable"}
-    return {"verified": True, "reason": "models_endpoint"}
+    return _probe_chat_completion(provider, value)
+
+
+def _probe_chat_completion(provider, credential):
+    """Verify the key can actually run inference, not merely list models.
+
+    Restricted project keys can pass ``GET /models`` and still be denied on
+    ``POST /chat/completions``; linking such a key produced a green "connected"
+    card and a 401 on the first chat turn. The probe uses the preset's first
+    model with one output token, so a chat-permission failure is caught before
+    the credential is stored.
+    """
+
+    import json
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, build_opener
+
+    preset = PROVIDER_PRESETS.get(provider.preset_key) or {}
+    models = preset.get("models") or []
+    if not models:
+        return {"verified": False, "reason": "chat_unprobed"}
+    body = {
+        "model": models[0]["model_name"],
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 16,
+    }
+    request = Request(
+        provider.base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {credential}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        from core.model_gateway import NoRedirectHandler
+
+        with build_opener(NoRedirectHandler()).open(request, timeout=10) as response:
+            response.read(1024 * 1024)
+    except HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise ProviderAccountError(
+                "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
+                f"{provider.name} rejected this API key for chat completion "
+                f"(HTTP {exc.code}). The key may be restricted to model listing; "
+                "create a key with chat permission and paste it again.",
+                http_status=400,
+            ) from exc
+        return {"verified": False, "reason": f"chat_{exc.code}"}
+    except (URLError, TimeoutError, OSError):
+        return {"verified": False, "reason": "chat_unreachable"}
+    return {"verified": True, "reason": "chat_completion"}
 
 
 def link_account(
