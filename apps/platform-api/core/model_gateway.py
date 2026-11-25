@@ -19,10 +19,11 @@ class NoRedirectHandler(HTTPRedirectHandler):
 
 
 class ModelGatewayError(Exception):
-    def __init__(self, code, message, retryable=False):
+    def __init__(self, code, message, retryable=False, http_status=None):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.http_status = http_status
 
 
 @dataclass(frozen=True)
@@ -588,10 +589,20 @@ class ModelGateway:
                     "Paste a new key from the platform's API page.",
                     retryable=False,
                 ) from exc
+            if exc.code == 429:
+                raise ModelGatewayError(
+                    "MODEL_PROVIDER_RATE_LIMITED",
+                    f"{provider.name} reached its provider rate limit or account quota "
+                    "(HTTP 429). Check the provider's usage limits and billing, then wait "
+                    "before retrying.",
+                    retryable=True,
+                    http_status=429,
+                ) from exc
             raise ModelGatewayError(
                 "MODEL_PROVIDER_HTTP_ERROR",
                 f"The model provider returned HTTP {exc.code}.",
-                retryable=exc.code >= 500 or exc.code == 429,
+                retryable=exc.code >= 500,
+                http_status=exc.code,
             ) from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise ModelGatewayError(
