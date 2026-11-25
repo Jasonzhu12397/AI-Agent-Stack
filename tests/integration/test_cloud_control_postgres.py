@@ -1142,6 +1142,7 @@ def test_work_claim_filters_by_kind_for_software_tasks(control_server, tls_mater
                 {
                     **identity,
                     "work_id": str(software_id),
+                    "lease_token": claimed["lease_token"],
                     "status": "succeeded",
                     "result": {"count": 0},
                 },
