@@ -628,6 +628,21 @@ class AgentPluginStudioPublishView(APIView):
                         latest.save(
                             update_fields=["credential_ref", "auth_required", "manifest"]
                         )
+                        # Every live installation of this plugin reads its own
+                        # credential_ref. Rotating only the definition would
+                        # leave other projects pinned to the stale secret.
+                        rotating = AgentPluginInstallation.objects.select_for_update().filter(
+                            tenant=tenant, plugin=latest
+                        )
+                        rotating = rotating.exclude(
+                            status=AgentPluginInstallation.Status.UNINSTALLED
+                        )
+                        for bound in rotating:
+                            bound.credential_ref = credential_ref
+                            bound.save(update_fields=["credential_ref", "updated_at"])
+                            transaction.on_commit(
+                                lambda item=bound: invalidate_installation(item)
+                            )
                 except IntegrityError:
                     return legacy_error_response(
                         "The credential could not be rotated.", http_status=409
@@ -677,22 +692,23 @@ class AgentPluginStudioPublishView(APIView):
                 return legacy_error_response(
                     "An agent plugin with this key and version already exists.", http_status=409
                 )
-            record_audit_event(
-                request,
-                tenant,
-                "agent_plugin.published",
-                "agent_plugin_definition",
-                plugin.id,
-                project=project,
-                metadata={
-                    "plugin_key": plugin.plugin_key,
-                    "version": plugin.version,
-                    "protocol": plugin.protocol,
-                    "capabilities": len(selected),
-                    "fingerprint": fingerprint,
-                    "credential_rotated": credential_rotated,
-                },
-            )
+
+        record_audit_event(
+            request,
+            tenant,
+            "agent_plugin.credential_rotated" if credential_rotated else "agent_plugin.published",
+            "agent_plugin_definition",
+            plugin.id,
+            project=project,
+            metadata={
+                "plugin_key": plugin.plugin_key,
+                "version": plugin.version,
+                "protocol": plugin.protocol,
+                "capabilities": len(selected),
+                "fingerprint": fingerprint,
+                "credential_rotated": credential_rotated,
+            },
+        )
 
         installation = None
         if project is not None:

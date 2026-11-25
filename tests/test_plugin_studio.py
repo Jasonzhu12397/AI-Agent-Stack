@@ -355,6 +355,21 @@ def test_credential_rotation_does_not_fork_the_schema_version(studio_workspace, 
     assert first.status_code == 201, first.data
     definition = AgentPluginDefinition.objects.get(tenant=tenant, plugin_key="rotate-tools")
     old_ref = definition.credential_ref
+    other_project = Project.objects.create(
+        tenant=tenant, name="Second project", slug="second-project"
+    )
+    ProjectMembership.objects.create(
+        project=other_project, user=_user, role=ProjectMembership.Role.ADMIN
+    )
+    other_installation = AgentPluginInstallation.objects.create(
+        tenant=tenant,
+        project=other_project,
+        plugin=definition,
+        plugin_version=definition.version,
+        granted_capabilities=["get_pets"],
+        credential_ref=old_ref,
+        installed_by=_user,
+    )
 
     rotated = copy.deepcopy(discovered)
     rotated["contract"] = {"type": "bearer", "token": "new-token"}
@@ -367,6 +382,8 @@ def test_credential_rotation_does_not_fork_the_schema_version(studio_workspace, 
     assert second.data["version"] == "1.0.0"
     definition.refresh_from_db()
     assert definition.credential_ref != old_ref
+    other_installation.refresh_from_db()
+    assert other_installation.credential_ref == definition.credential_ref
     assert resolve(definition.credential_ref, tenant_id=tenant.id) == {
         "type": "bearer",
         "token": "new-token",
