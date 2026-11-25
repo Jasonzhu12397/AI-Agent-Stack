@@ -129,6 +129,9 @@ function projectSlug(name: string): string {
 export async function createWorkspaceProject(name: string): Promise<Project> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Project name is required");
+  if (!activeTenantId.value) {
+    activeTenantId.value = tenants.value[0]?.id ?? "";
+  }
   if (!activeTenantId.value) throw new Error("Choose a tenant first");
   const existing = new Set(projects.value.map((project) => project.slug));
   let slug = projectSlug(trimmed);
