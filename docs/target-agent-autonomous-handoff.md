@@ -145,17 +145,30 @@ These distinctions are intentional: a positive configuration assertion must not 
 as a live runtime observation.
 
 
-## Explicitly blocked execution phases
+## Executable phases and their guards
 
-The current Target Agent does not yet contain a production Worker MachineDeployment mutation
-adapter. Therefore `worker_provisioning` is intentionally blocked with
-`WORKER_PROVISIONING_EXECUTOR_NOT_REGISTERED`; it must not persist a successful checkpoint
-based only on NTP reachability or caller-supplied readiness evidence. The next implementation
-must add a versioned CAPI/Metal3 resource adapter, narrowly scoped write RBAC, preflight and
-postflight observation, command-lease cancellation, and idempotent recovery before this phase
-can be enabled.
+Worker provisioning is now an executable Target Agent action. It server-side
+applies the KubeadmConfigTemplate, Metal3DataTemplate, Metal3MachineTemplate and
+MachineDeployment, refuses to scale down without a drain executor, verifies BMH
+capacity before admitting new replicas, and waits for the MachineDeployment to
+report the requested replicas. EPH cleanup is executable through the attested
+source-cluster observer credential and deletes only resources carrying the
+cleanup annotation, the managed-by label and the exact deployment-id label. The
+`completed` phase is accepted only after Target postflight and Worker network
+postflight observe the live target cluster; caller-supplied success booleans are
+never accepted.
 
-EPH cleanup remains similarly blocked until its credential-revocation and workload-removal
-adapter exists. The `completed` phase is also blocked until Target postflight and Worker
-network postflight have a live observation adapter; command-supplied success booleans are not
-accepted. Blocking is a correctness guarantee, not a completed implementation.
+Before the first write of `target.worker.provision` or `target.network.apply`,
+the Target Agent runs `kubectl auth can-i` for every permission those actions
+need. A missing rule returns `TARGET_RBAC_INSUFFICIENT:<verb>:<resource>` with
+zero side effects, and a kubectl transport failure fails closed instead of being
+treated as an allow. The required namespaced rules are in the
+`target-agent-metal3-operator` Role and the cluster-scoped StorageClass rule is
+in `target-agent-storageclass-writer`. The agent never receives wildcard verbs
+or resources.
+
+Operator bundles (Rook-Ceph and the SR-IOV Network Operator) remain a platform
+preinstall step. Their upstream manifests create cluster-scoped RBAC and CRDs,
+which are deliberately outside the Target Agent ServiceAccount's authority; the
+agent only creates the namespaced custom resources and StorageClasses after the
+operators are present.

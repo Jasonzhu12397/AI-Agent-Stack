@@ -141,6 +141,46 @@ rules:
   - apiGroups: ["ipam.metal3.io"]
     resources: ["ippools"]
     verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["sriovnetwork.openshift.io"]
+    resources: ["sriovnetworknodepolicies"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["ceph.rook.io"]
+    resources: ["cephclusters", "cephblockpools", "cephfilesystems"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: target-agent-storageclass-writer
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: target-agent-storageclass-writer
+subjects:
+  - kind: ServiceAccount
+    name: target-agent
+    namespace: ai-agent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: target-agent-storageclass-writer
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

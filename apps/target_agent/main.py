@@ -110,6 +110,7 @@ from .sriov_operator import SriovOperatorError, execute_sriov_operator
 from .storage_addon import StorageAddonInstallError, execute_storage_addon
 from .worker_attestation import WorkerAttestationError, verify_worker_readiness
 from .worker_provisioning import WorkerProvisioningError, execute_worker_provisioning
+from .write_permissions import WritePermissionError, verify_write_permissions
 
 LOG = logging.getLogger("target-agent")
 CAPABILITIES = [
@@ -1191,6 +1192,12 @@ def execute(
             spec = payload.get("spec", payload)
             manifests = payload.get("manifests")
             plan = plan_network_stack(spec)
+            verify_write_permissions(
+                "target.network.apply",
+                runner=_kubectl,
+                namespace=namespace,
+                lease_lost_event=lease_lost_event,
+            )
             applied = apply_network_stack(
                 plan,
                 namespace,
@@ -1249,6 +1256,7 @@ def execute(
             NetworkStackError,
             StorageAddonInstallError,
             SriovOperatorError,
+            WritePermissionError,
             TypeError,
             AttributeError,
         ) as exc:
@@ -1269,8 +1277,15 @@ def execute(
     if action == "target.worker.provision":
         try:
             _require_worker_provisioning_checkpoint(command)
+            payload = _command_payload(command)
+            verify_write_permissions(
+                "target.worker.provision",
+                runner=_kubectl,
+                namespace=payload.get("target_namespace"),
+                lease_lost_event=lease_lost_event,
+            )
             evidence = _execute_worker_provisioning(
-                _command_payload(command),
+                payload,
                 command.get("deployment_context"),
                 lease_lost_event,
             )
@@ -1285,6 +1300,7 @@ def execute(
             HandoffError,
             Metal3OwnershipError,
             NtpPolicyError,
+            WritePermissionError,
             TypeError,
             AttributeError,
         ) as exc:

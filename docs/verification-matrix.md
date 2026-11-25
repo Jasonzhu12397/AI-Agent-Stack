@@ -51,7 +51,7 @@ The version reported by `/api/v1/`, `pyproject.toml`, `apps/web-studio/package.j
 | Plugin isolation / SSRF | Sandboxed executor and network egress controls | Not implemented |
 | RAG / Memory | ACL-filtered ingestion, retrieval and deletion | Not implemented |
 | Vendor connectors | GitHub/Jira/Graph/Maps/Weather and others | Not implemented / no live API verification |
-| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Partial: node-agent enrollment, heartbeat, command leasing and read-only Kubernetes API inspection are implemented in this branch; CAPI/Metal3 API group discovery is available. Actual Cluster/MachineDeployment/BareMetalHost writes, Ironic/IPA/BMC operations, target-agent bootstrap and end-to-end cluster postconditions are disabled and not verified |
+| Kubernetes/CAPI/Metal3/Ironic | Target CRD/API versions and test-cluster operations | Partial: node-agent enrollment, heartbeat, command leasing, read-only inspection, EPH CAPI/Metal3 apply and Target Worker/network/storage apply are implemented with fail-closed RBAC preflight before writes. No live management or Target cluster has executed the full sequence, Ironic/IPA/BMC lifecycle remains unverified and end-to-end postconditions have no production evidence |
 | Production readiness | OIDC, secret manager, backup/restore, HA, SLO and security scans | Not implemented / not verified |
 
 ## Evidence policy
