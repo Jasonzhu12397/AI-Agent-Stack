@@ -302,6 +302,7 @@ footer { display: flex; justify-content: space-between; padding: 22px 0 30px; bo
 .workflow-canvas-node code { overflow: hidden; color: #0a7f58; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-canvas-node small { overflow: hidden; color: #566976; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-canvas-node.selected { border-color: #e3eaf2; box-shadow: 0 0 0 2px #5070ff55, 0 8px 24px #05080faa; }
+.workflow-empty-state { display: grid; justify-items: center; gap: 8px; padding: 24px; }
 .workflow-canvas-node.connection-target { border-color: #3f8cff; box-shadow: 0 0 0 2px #3f8cff66, 0 8px 24px #05080faa; }
 .workflow-node-port { position: absolute; top: 50%; right: -9px; width: 16px; height: 16px; padding: 0; background: #3f8cff; border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 0 0 1px #3f8cff; cursor: crosshair; transform: translateY(-50%); }
 .workflow-node-port:hover { background: #1d6fe8; box-shadow: 0 0 0 3px #3f8cff44; }

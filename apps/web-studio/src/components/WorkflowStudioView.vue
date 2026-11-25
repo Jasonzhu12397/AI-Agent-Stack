@@ -1281,7 +1281,12 @@ onUnmounted(() => {
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="notice" :title="notice" type="success" :closable="true" @close="notice = ''" />
     <el-empty v-if="!props.projectId" description="Select a project to manage workflows" :image-size="72" />
-    <el-empty v-else-if="!loading && workflows.length === 0" description="Create a workflow draft to get started" :image-size="72" />
+    <div v-else-if="!loading && workflows.length === 0" class="workflow-empty-state">
+      <el-empty description="Create a workflow draft to get started" :image-size="72" />
+      <el-button type="primary" plain size="small" :loading="saving" @click="createDraft">
+        ＋ {{ t("New workflow") }}
+      </el-button>
+    </div>
     <template v-else-if="selectedWorkflow">
       <div class="workflow-selector">
         <el-select :model-value="selectedWorkflowId" placeholder="Select workflow" class="full-width" @change="selectWorkflow">

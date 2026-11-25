@@ -41,3 +41,9 @@ test("node references come from the scoped catalog, not hand-typed ids", () => {
   assert.match(view, /catalog\.agents/);
   assert.doesNotMatch(view, /Paste the tool_id/);
 });
+
+test("an empty project can still create its first workflow draft", () => {
+  assert.match(view, /workflow-empty-state/);
+  assert.match(view, /v-else-if="!loading && workflows\.length === 0"/);
+  assert.match(view, /class="workflow-empty-state"[\s\S]*@click="createDraft"/);
+});
