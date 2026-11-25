@@ -513,3 +513,22 @@ def test_workflow_run_deadline_defaults_and_bounds():
                 idempotency_key=f"run-{value}",
                 deadline_seconds=value,
             )
+
+
+def test_work_retry_budget_is_bounded():
+    work = normalize_work(
+        kind="inspection",
+        payload={},
+        idempotency_key="work-budget",
+        max_attempts=2,
+    )
+    assert work["max_attempts"] == 2
+
+    for invalid in (0, 11, True, "3"):
+        with pytest.raises(WorkspaceError, match="max_attempts"):
+            normalize_work(
+                kind="inspection",
+                payload={},
+                idempotency_key="work-budget-invalid",
+                max_attempts=invalid,
+            )

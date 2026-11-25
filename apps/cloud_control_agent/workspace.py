@@ -201,6 +201,7 @@ def normalize_work(
     payload: Any,
     required_role: Any = None,
     priority: Any = 0,
+    max_attempts: Any = 3,
     idempotency_key: Any,
 ) -> dict[str, Any]:
     if kind not in WORK_KINDS:
@@ -211,6 +212,12 @@ def normalize_work(
         raise WorkspaceError("required_role must be eph, target or empty.")
     if not isinstance(priority, int) or isinstance(priority, bool) or priority < 0 or priority > 9:
         raise WorkspaceError("priority must be an integer from 0 to 9.")
+    if (
+        not isinstance(max_attempts, int)
+        or isinstance(max_attempts, bool)
+        or not 1 <= max_attempts <= 10
+    ):
+        raise WorkspaceError("max_attempts must be an integer from 1 to 10.")
     key = _bounded_text(
         idempotency_key,
         "idempotency_key",
@@ -221,6 +228,7 @@ def normalize_work(
         "payload": _bounded_json(payload, "payload", maximum=MAX_WORK_PAYLOAD_BYTES),
         "required_role": required_role or None,
         "priority": priority,
+        "max_attempts": max_attempts,
         "idempotency_key": key,
     }
 

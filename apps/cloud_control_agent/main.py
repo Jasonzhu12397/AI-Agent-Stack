@@ -197,9 +197,14 @@ def initialize_store(connection: psycopg.Connection[Any]) -> None:
             lease_token_hash TEXT,
             lease_expires_at TIMESTAMPTZ,
             attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
+    """)
+    connection.execute("""
+        ALTER TABLE agent_control_work_items
+        ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3
     """)
     connection.execute("""
         ALTER TABLE agent_control_work_items

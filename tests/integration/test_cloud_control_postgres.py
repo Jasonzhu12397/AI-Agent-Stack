@@ -1055,6 +1055,19 @@ def test_work_item_claim_and_result_round_trip(control_server, tls_material):
             assert claimed["work"]["kind"] == "inspection"
             assert claimed["lease_seconds"] == 90
 
+            rejected = agent_client.post(
+                "/api/v1/agent-control/work/result",
+                json={
+                    **identity,
+                    "work_id": str(work_id),
+                    "lease_token": "stale-lease-token",
+                    "status": "succeeded",
+                    "result": {"findings": 2},
+                },
+            )
+            assert rejected.status_code == 400, rejected.text
+            assert "WORK_RESULT_NOT_ACCEPTED" in rejected.text
+
             _post(
                 agent_client,
                 "/api/v1/agent-control/work/result",
@@ -1437,5 +1450,57 @@ def test_deployment_action_result_returns_latest_inspection(control_server, tls_
         assert synced["status"] == "succeeded"
         assert synced["output"]["host_count"] == 1
         assert synced["output"]["warnings"] == ["BMH_PCI_ADDRESS_UNAVAILABLE"]
+    finally:
+        platform_client.close()
+
+
+def test_exhausted_expired_work_lease_is_failed_instead_of_reclaimed(control_server, tls_material):
+    installation_id = uuid4()
+    platform_client = _tls_client(control_server, tls_material, tls_material["platform"])
+    try:
+        project_id = _create_project(platform_client, installation_id)
+        work_id = uuid4()
+        _post(
+            platform_client,
+            f"/api/v1/control/projects/{project_id}/work",
+            {
+                "work_id": str(work_id),
+                "kind": "inspection",
+                "priority": 1,
+                "payload": {"cluster": "edge-03"},
+                "max_attempts": 1,
+                "idempotency_key": f"work-{work_id}",
+            },
+        )
+        agent_id = uuid4()
+        _register_agent(platform_client, agent_id, installation_id)
+        agent_client = _tls_client(
+            control_server, tls_material, tls_material["issue_agent"](agent_id)
+        )
+        try:
+            identity = _identity(agent_id, installation_id)
+            claimed = _post(agent_client, "/api/v1/agent-control/work/claim", identity)
+            assert claimed["work"]["work_id"] == str(work_id)
+            assert claimed["work"]["max_attempts"] == 1
+
+            with psycopg.connect(_database_url()) as connection:
+                connection.execute(
+                    """
+                    UPDATE agent_control_work_items
+                    SET lease_expires_at = NOW() - INTERVAL '1 second'
+                    WHERE work_id = %s
+                    """,
+                    (work_id,),
+                )
+            next_claim = _post(agent_client, "/api/v1/agent-control/work/claim", identity)
+            assert next_claim["work"] is None
+        finally:
+            agent_client.close()
+
+        work = _get(platform_client, f"/api/v1/control/work/{work_id}")
+        assert work["status"] == "failed"
+        assert work["result"] == {"error": "WORK_ATTEMPTS_EXHAUSTED"}
+        assert work["attempts"] == 1
+        assert work["max_attempts"] == 1
     finally:
         platform_client.close()

@@ -951,6 +951,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     payload=document.get("payload"),
                     required_role=document.get("required_role"),
                     priority=document.get("priority", 0),
+                    max_attempts=document.get("max_attempts", 3),
                     idempotency_key=document.get("idempotency_key"),
                 )
             except WorkspaceError as exc:
@@ -961,8 +962,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         INSERT INTO agent_control_work_items (
                             work_id, project_id, kind, priority, required_role,
-                            payload, idempotency_key
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            payload, max_attempts, idempotency_key
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (idempotency_key) DO NOTHING
                         """,
                         (
@@ -972,6 +973,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                             work["priority"],
                             work["required_role"],
                             Jsonb(work["payload"]),
+                            work["max_attempts"],
                             work["idempotency_key"],
                         ),
                     )
@@ -981,7 +983,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     """
                     SELECT work_id, project_id, kind, status, priority, required_role,
                            payload, result, idempotency_key, assigned_agent_id,
-                           attempts, created_at, updated_at
+                           attempts, max_attempts, created_at, updated_at
                     FROM agent_control_work_items WHERE work_id = %s
                     """,
                     (work_id,),
@@ -991,7 +993,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         """
                         SELECT work_id, project_id, kind, status, priority, required_role,
                                payload, result, idempotency_key, assigned_agent_id,
-                               attempts, created_at, updated_at
+                               attempts, max_attempts, created_at, updated_at
                         FROM agent_control_work_items WHERE idempotency_key = %s
                         """,
                         (work["idempotency_key"],),
@@ -1002,6 +1004,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row["project_id"] != project_id
                 or row["kind"] != work["kind"]
                 or row["payload"] != work["payload"]
+                or row["max_attempts"] != work["max_attempts"]
             ):
                 raise ControlApiError("WORK_IDEMPOTENCY_CONFLICT")
             self._send(200, {"created": row["work_id"] == work_id, **row})
@@ -1013,7 +1016,8 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 rows = connection.execute(
                     """
                     SELECT work_id, kind, status, priority, required_role, payload,
-                           result, assigned_agent_id, attempts, created_at, updated_at
+                           result, assigned_agent_id, attempts, max_attempts,
+                           created_at, updated_at
                     FROM agent_control_work_items WHERE project_id = %s
                     ORDER BY created_at DESC
                     """,
@@ -1028,7 +1032,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 row = connection.execute(
                     """
                     SELECT work_id, project_id, kind, status, priority, required_role,
-                           payload, result, assigned_agent_id, attempts,
+                           payload, result, assigned_agent_id, attempts, max_attempts,
                            lease_expires_at, created_at, updated_at
                     FROM agent_control_work_items WHERE work_id = %s
                     """,
@@ -1054,10 +1058,32 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                 database_url, row_factory=dict_row, autocommit=False
             ) as connection:
                 with connection.transaction():
+                    # A worker may die without reporting a result. Reclaim the
+                    # expired lease, but stop after the work item's retry budget
+                    # instead of leasing the same item forever.
+                    connection.execute(
+                        """
+                        UPDATE agent_control_work_items
+                        SET status = 'failed',
+                            result = jsonb_build_object(
+                                'error', 'WORK_ATTEMPTS_EXHAUSTED'
+                            ),
+                            lease_token_hash = NULL, lease_expires_at = NULL,
+                            updated_at = NOW()
+                        WHERE status = 'leased' AND lease_expires_at < NOW()
+                          AND attempts >= max_attempts
+                          AND project_id IN (
+                              SELECT project_id FROM agent_control_projects
+                              WHERE installation_id = %s AND status = 'active'
+                          )
+                        """,
+                        (agent["installation_id"],),
+                    )
                     row = connection.execute(
                         """
                         SELECT w.work_id, w.project_id, w.kind, w.priority,
-                               w.required_role, w.payload, p.name AS project_name
+                               w.required_role, w.payload, w.max_attempts,
+                               p.name AS project_name
                         FROM agent_control_work_items w
                         JOIN agent_control_projects p ON p.project_id = w.project_id
                         WHERE p.installation_id = %(installation_id)s
@@ -1066,6 +1092,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                                OR (w.status = 'leased' AND w.lease_expires_at < NOW()))
                           AND (w.required_role IS NULL OR w.required_role = %(role)s)
                           AND (%(kind)s::text IS NULL OR w.kind = %(kind)s::text)
+                          AND w.attempts < w.max_attempts
                         ORDER BY w.priority DESC, w.created_at
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
@@ -1117,6 +1144,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                         "project_name": row["project_name"],
                         "kind": row["kind"],
                         "priority": row["priority"],
+                        "max_attempts": row["max_attempts"],
                         "payload": row["payload"],
                     },
                     "skills": skills,
@@ -1152,6 +1180,10 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
         def _work_result(self, document: dict[str, Any]) -> None:
             agent = self._authenticated_agent(document)
             work_id = _parse_uuid(document.get("work_id"), "WORK_ID")
+            token = document.get("lease_token")
+            if not isinstance(token, str) or not token:
+                raise ControlApiError("WORK_LEASE_TOKEN_REQUIRED")
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
             try:
                 outcome = normalize_work_result(
                     status=document.get("status"),
@@ -1166,10 +1198,16 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     SET status = %s, result = %s, lease_token_hash = NULL,
                         lease_expires_at = NULL, updated_at = NOW()
                     WHERE work_id = %s AND assigned_agent_id = %s
-                      AND status = 'leased'
+                      AND status = 'leased' AND lease_token_hash = %s
                     RETURNING work_id, status, result, updated_at
                     """,
-                    (outcome["status"], Jsonb(outcome["result"]), work_id, agent["agent_id"]),
+                    (
+                        outcome["status"],
+                        Jsonb(outcome["result"]),
+                        work_id,
+                        agent["agent_id"],
+                        token_hash,
+                    ),
                 ).fetchone()
             if row is None:
                 raise ControlApiError("WORK_RESULT_NOT_ACCEPTED")
@@ -2472,9 +2510,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
 
             self._require_platform_api()
             deployment_id = _parse_uuid(raw_id, "DEPLOYMENT_ID")
-            if not isinstance(action, str) or not re.fullmatch(
-                r"[a-z][a-z0-9._-]{2,63}", action
-            ):
+            if not isinstance(action, str) or not re.fullmatch(r"[a-z][a-z0-9._-]{2,63}", action):
                 raise ControlApiError("ACTION_INVALID")
             with psycopg.connect(database_url, row_factory=dict_row) as connection:
                 deployment = connection.execute(
@@ -2514,9 +2550,7 @@ def create_handler(database_url: str) -> type[BaseHTTPRequestHandler]:
                     "action": action,
                     "available": isinstance(output, dict),
                     "reason": (
-                        None
-                        if isinstance(output, dict)
-                        else "DEPLOYMENT_ACTION_OUTPUT_INVALID"
+                        None if isinstance(output, dict) else "DEPLOYMENT_ACTION_OUTPUT_INVALID"
                     ),
                     "phase": deployment["phase"],
                     "sequence": deployment["sequence"],
