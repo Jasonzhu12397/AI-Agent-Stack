@@ -8,6 +8,16 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- A worker upgrade that failed after `kubectl drain` left the node cordoned. The
+  executor now records the drain as a possible mutation before the command
+  returns, and on any later failure runs `kubectl uncordon` and reports the
+  recovery result in `upgrade_steps[workers].release`.
+- A partial upgrade reported `upgrade_performed: false` because the worker
+  stage was only recorded after every step succeeded. Any accepted package,
+  kubeadm or drain mutation now marks the run as performed, so an interrupted
+  upgrade cannot be mistaken for a no-op.
+- A multi-worker upgrade overwrote the previous worker's command list, leaving
+  the report with only the last node. Commands now accumulate per worker.
 - The EPH Agent read-only runner accepted no `stdin`, while the shared
   `cluster.manifest.validate` and `k8s.resource.read` handlers pass a manifest
   body through that keyword. Validation raised `TypeError` instead of parsing

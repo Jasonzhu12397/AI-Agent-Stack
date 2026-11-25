@@ -945,3 +945,81 @@ def test_the_snapshot_is_written_where_the_request_says_retention_looks():
     assert result["etcd_snapshot"]["path"].startswith(
         "/var/lib/etcd/backups-labcache/snapshot-pre-edge-lab-v1.34.1-"
     )
+
+
+def test_a_failed_worker_upgrade_uncordons_the_drained_node(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "apt")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.34.1-1.1")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(UPGRADED_CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        fail_when=lambda argv: argv[:1] == ["ssh"] and "apt-get" in " ".join(argv),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_WORKER_PACKAGE_FAILED"
+    assert result["upgrade_performed"] is True
+    assert result["upgrade_steps"][2]["release"] == {
+        "node": "w-0",
+        "uncordon_attempted": True,
+        "uncordon_succeeded": True,
+        "detail": "",
+    }
+    assert ["kubectl", "uncordon", "w-0"] in runner.calls
+    assert "released by recovery" in result["upgrade_steps"][2]["detail"]
+
+
+def test_an_uncordon_failure_is_reported_instead_of_hidden(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    monkeypatch.setenv(PACKAGE_MANAGER_ENV, "apt")
+    monkeypatch.setenv(PACKAGE_VERSION_ENV, "1.34.1-1.1")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(UPGRADED_CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        fail_when=lambda argv: argv[:1] == ["ssh"]
+        and "apt-get" in " ".join(argv)
+        or argv[:3] == ["kubectl", "uncordon", "w-0"],
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_WORKER_PACKAGE_FAILED"
+    assert result["upgrade_steps"][2]["release"]["uncordon_succeeded"] is False
+    assert result["upgrade_steps"][2]["release"]["detail"]
+    assert "still cordoned by recovery" in result["upgrade_steps"][2]["detail"]
+
+
+def test_a_failed_drain_still_tries_to_uncordon(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    runner = FakeRunner(
+        nodes=_nodes(CONTROL, ("w-0", {}, "10.0.0.20", "v1.33.4")),
+        upgraded=_nodes(UPGRADED_CONTROL, ("w-0", {}, "10.0.0.20", "v1.34.1")),
+        fail_on=["drain"],
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    assert result["failure_code"] == "UPGRADE_WORKER_DRAIN_FAILED"
+    assert result["upgrade_steps"][2]["release"]["uncordon_attempted"] is True
+    assert result["upgrade_steps"][2]["release"]["uncordon_succeeded"] is True
+    assert ["kubectl", "uncordon", "w-0"] in runner.calls
+
+
+def test_every_worker_contributes_to_the_reported_command_list(monkeypatch):
+    monkeypatch.setenv(REMOTE_USER_ENV, "metal")
+    runner = FakeRunner(
+        nodes=_nodes(
+            CONTROL,
+            ("w-0", {}, "10.0.0.20", "v1.33.4"),
+            ("w-1", {}, "10.0.0.21", "v1.33.4"),
+        ),
+        upgraded=_nodes(
+            UPGRADED_CONTROL,
+            ("w-0", {}, "10.0.0.20", "v1.34.1"),
+            ("w-1", {}, "10.0.0.21", "v1.34.1"),
+        ),
+    )
+    result = UpgradeExecutor(runner).run(REQUEST)
+
+    commands = result["upgrade_steps"][2]["commands"]
+    assert any("w-0" in command and "drain" in command for command in commands)
+    assert any("w-1" in command and "drain" in command for command in commands)

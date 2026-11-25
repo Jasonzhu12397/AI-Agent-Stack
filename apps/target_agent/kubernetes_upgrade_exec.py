@@ -140,6 +140,7 @@ class UpgradeExecutor:
         self._last_snapshot: dict[str, Any] | None = None
         self._etcd_pod = ""
         self._already_at_target = False
+        self._mutation_started = False
         self._etcd_health: list[dict[str, Any]] = []
         self._etcd_health_attempts = max(1, int(etcd_health_attempts))
         self._etcd_health_interval = max(0.0, float(etcd_health_interval))
@@ -855,8 +856,29 @@ class UpgradeExecutor:
             step["detail"] = _output(result)
         return ok
 
+    def _release_cordoned_worker(self, step: dict[str, Any], name: str) -> bool:
+        """Undo a drain when a later worker step fails.
+
+        ``kubectl drain`` marks the node unschedulable. Returning the failure
+        without an uncordon leaves the worker out of the cluster while the
+        control plane may already be upgraded, which reads as an unexplained
+        capacity loss. The recovery result is reported, not assumed.
+        """
+
+        argv = ["kubectl", "uncordon", name]
+        result = self._runner(argv, timeout=DRAIN_TIMEOUT_SECONDS)
+        ok = result.get("available", True) and result.get("returncode") == 0
+        step["release"] = {
+            "node": name,
+            "uncordon_attempted": True,
+            "uncordon_succeeded": ok,
+            "detail": "" if ok else _output(result),
+        }
+        return ok
+
     def run(self, request: dict[str, str]) -> dict[str, Any]:
         target = request["target_version"]
+        self._mutation_started = False
         nodes = self._nodes()
         self._already_at_target = all(
             self._on_target(self._node_version(node), target) for node in nodes
@@ -959,11 +981,13 @@ class UpgradeExecutor:
                         "package upgrade failed; the control plane was not upgraded"
                     )
                     return self._result(request, steps, performed, "UPGRADE_PACKAGE_FAILED")
+                self._mutation_started = True
             apply_argv = ["kubeadm", "upgrade", "apply", "-y", target]
             if not self._execute_step(steps[1], apply_argv, STEP_TIMEOUT_SECONDS):
                 return self._result(
                     request, steps, performed, "UPGRADE_CONTROL_PLANE_FAILED"
                 )
+            self._mutation_started = True
             if not self._execute_step(
                 steps[1], ["sudo", "systemctl", "restart", "kubelet"], STEP_TIMEOUT_SECONDS
             ):
@@ -989,6 +1013,7 @@ class UpgradeExecutor:
                     steps[1]["exit_code"] = step_probe["exit_code"]
                     steps[1]["detail"] = f"{name}: {step_probe['detail']}"
                     return self._result(request, steps, performed, code)
+                self._mutation_started = True
             code = self._guard_etcd(steps[1], name)
             if code:
                 return self._result(request, steps, performed, code)
@@ -1025,12 +1050,14 @@ class UpgradeExecutor:
             restart = ["ssh", remote, "sudo systemctl restart kubelet"]
             uncordon = ["kubectl", "uncordon", name]
             worker_step["commands"] = [
+                *worker_step["commands"],
                 " ".join(drain),
                 *(command[2] for command in remote_commands),
                 " ".join(upgrade),
                 " ".join(restart),
                 " ".join(uncordon),
             ]
+            drained = False
             for argv, timeout, code in (
                 (drain, DRAIN_TIMEOUT_SECONDS, "UPGRADE_WORKER_DRAIN_FAILED"),
                 *(
@@ -1042,11 +1069,22 @@ class UpgradeExecutor:
                 (uncordon, DRAIN_TIMEOUT_SECONDS, "UPGRADE_WORKER_UNCORDON_FAILED"),
             ):
                 step_probe = dict(worker_step)
+                if argv[:3] == ["kubectl", "drain", name]:
+                    # drain cordons the node before it evicts pods, so even a
+                    # non-zero drain may have changed scheduling already.
+                    drained = True
                 if not self._execute_step(step_probe, argv, timeout):
                     worker_step["status"] = "failed"
                     worker_step["exit_code"] = step_probe["exit_code"]
                     worker_step["detail"] = f"{name}: {step_probe['detail']}"
+                    if drained:
+                        released = self._release_cordoned_worker(worker_step, name)
+                        suffix = "released" if released else "still cordoned"
+                        worker_step["detail"] += f"; worker {suffix} by recovery"
                     return self._result(request, steps, performed, code)
+                self._mutation_started = True
+                if argv[:3] == ["kubectl", "uncordon", name]:
+                    drained = False
             performed.append(f"worker:{name}")
         if not workers:
             worker_step["status"] = "skipped"
@@ -1197,7 +1235,8 @@ class UpgradeExecutor:
             "upgrade_simulated": False,
             # A preflight-only run changed nothing; only the control-plane stage
             # (or a worker stage) actually moves a node to the new version.
-            "upgrade_performed": any(
+            "upgrade_performed": self._mutation_started
+            or any(
                 step == "control_plane"
                 or step.startswith("control_plane:")
                 or step.startswith("worker:")
