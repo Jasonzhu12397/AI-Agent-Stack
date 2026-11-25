@@ -17,7 +17,9 @@
           "name": "wecom.contact.list",
           "description": "List members of one department"
         }
-      ]
+      ],
+      "category": "办公管理",
+      "vendor": "企业微信"
     },
     {
       "plugin_key": "map",
@@ -219,7 +221,9 @@
           }
         }
       ],
-      "builtin": true
+      "builtin": true,
+      "category": "生活休闲",
+      "vendor": "平台内置"
     },
     {
       "plugin_key": "weather",
@@ -409,7 +413,450 @@
           }
         }
       ],
-      "builtin": true
+      "builtin": true,
+      "category": "生活休闲",
+      "vendor": "平台内置"
+    },
+    {
+      "plugin_key": "feishu",
+      "name": "飞书企业号",
+      "description": "绑定企业后完成飞书消息、日历与文档协同",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "FEISHU_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "办公管理",
+      "vendor": "飞书",
+      "capabilities": [
+        {
+          "name": "feishu.query",
+          "description": "飞书企业号 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "dingtalk",
+      "name": "钉钉插件技能",
+      "description": "通过钉钉连接器处理审批、群消息与日程",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "DINGTALK_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "办公管理",
+      "vendor": "钉钉",
+      "capabilities": [
+        {
+          "name": "dingtalk.query",
+          "description": "钉钉插件技能 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "tencent-meeting",
+      "name": "腾讯会议",
+      "description": "预约和管理会议，查询参会、录制、转写与纪要",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "TENCENT_MEETING_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "办公管理",
+      "vendor": "腾讯会议",
+      "capabilities": [
+        {
+          "name": "tencent-meeting.query",
+          "description": "腾讯会议 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "notion",
+      "name": "Notion",
+      "description": "查找资料、整理知识，新建或更新页面与数据库",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "NOTION_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "办公管理",
+      "vendor": "Notion",
+      "capabilities": [
+        {
+          "name": "notion.query",
+          "description": "Notion 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "baidu-drive",
+      "name": "百度网盘",
+      "description": "搜索、上传、下载和移动网盘文件，创建分享链接",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "BAIDU_DRIVE_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "办公管理",
+      "vendor": "百度网盘",
+      "capabilities": [
+        {
+          "name": "baidu-drive.query",
+          "description": "百度网盘 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "jimeng",
+      "name": "即梦",
+      "description": "一站式图片、视频与音频生成，覆盖影视、广告与 MV",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "JIMENG_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "内容创作",
+      "vendor": "即梦",
+      "capabilities": [
+        {
+          "name": "jimeng.query",
+          "description": "即梦 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "jimeng-drama",
+      "name": "即梦短剧创作",
+      "description": "拆解剧本、角色、场景与分镜，批量推进多集生产",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "JIMENG_DRAMA_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "内容创作",
+      "vendor": "即梦",
+      "capabilities": [
+        {
+          "name": "jimeng-drama.query",
+          "description": "即梦短剧创作 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "xiaoyunque",
+      "name": "小云雀",
+      "description": "图片、视频与音频生成，支持超分、擦字幕与画布操作",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "XIAOYUNQUE_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "内容创作",
+      "vendor": "小云雀",
+      "capabilities": [
+        {
+          "name": "xiaoyunque.query",
+          "description": "小云雀 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "doudian",
+      "name": "抖店商品",
+      "description": "抖店商家经营：商品、商机查询与店铺日常经营",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "DOUDIAN_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "电商",
+      "vendor": "抖音电商",
+      "capabilities": [
+        {
+          "name": "doudian.query",
+          "description": "抖店商品 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "chanmama",
+      "name": "蝉妈妈·电商助手",
+      "description": "市场分析、选品找品、商品与评论分析、带货脚本",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "CHANMAMA_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "电商",
+      "vendor": "蝉妈妈",
+      "capabilities": [
+        {
+          "name": "chanmama.query",
+          "description": "蝉妈妈·电商助手 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "tiktok-business",
+      "name": "TikTok for Business",
+      "description": "在 TikTok 上创建、管理与分析广告活动",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "TIKTOK_BUSINESS_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "电商",
+      "vendor": "TikTok",
+      "capabilities": [
+        {
+          "name": "tiktok-business.query",
+          "description": "TikTok for Business 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "douyin-life",
+      "name": "抖音生活服务经营",
+      "description": "门店经营、商品、交易、流量与人群数据查询",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "DOUYIN_LIFE_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "电商",
+      "vendor": "抖音生活服务",
+      "capabilities": [
+        {
+          "name": "douyin-life.query",
+          "description": "抖音生活服务经营 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "wind",
+      "name": "Wind Alice 万得金融数据",
+      "description": "股票、基金、指数、债券、公告新闻及宏观数据",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "WIND_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "万得",
+      "capabilities": [
+        {
+          "name": "wind.query",
+          "description": "Wind Alice 万得金融数据 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "ifind",
+      "name": "同花顺 IFinD",
+      "description": "追踪关注行情，掌握市场动态",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "IFIND_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "同花顺",
+      "capabilities": [
+        {
+          "name": "ifind.query",
+          "description": "同花顺 IFinD 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "tdx",
+      "name": "通达信",
+      "description": "全球股票行情、条件选股、研报公告与智能筛查",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "TDX_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "通达信",
+      "capabilities": [
+        {
+          "name": "tdx.query",
+          "description": "通达信 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "eastmoney",
+      "name": "东方财富妙想金融数据",
+      "description": "股票、基金、债券、指数、宏观数据与公告资讯",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "EASTMONEY_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "东方财富",
+      "capabilities": [
+        {
+          "name": "eastmoney.query",
+          "description": "东方财富妙想金融数据 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "tushare",
+      "name": "Tushare 金融数据",
+      "description": "股票、基金、公告、债券及宏观数据",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "TUSHARE_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "Tushare",
+      "capabilities": [
+        {
+          "name": "tushare.query",
+          "description": "Tushare 金融数据 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "alpha-pai",
+      "name": "Alpha 派投研助手",
+      "description": "公司、行业及大类资产基本面查询与报告生成",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "ALPHA_PAI_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "Alpha 派",
+      "capabilities": [
+        {
+          "name": "alpha-pai.query",
+          "description": "Alpha 派投研助手 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "yingmi",
+      "name": "盈米基金",
+      "description": "基金筛选、诊断、组合分析、资产配置与风险评估",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "YINGMI_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "盈米",
+      "capabilities": [
+        {
+          "name": "yingmi.query",
+          "description": "盈米基金 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "financial-datasets",
+      "name": "Financial Datasets",
+      "description": "股票财报、价格和新闻，以及加密货币行情",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "FINANCIAL_DATASETS_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "金融",
+      "vendor": "Financial Datasets",
+      "capabilities": [
+        {
+          "name": "financial-datasets.query",
+          "description": "Financial Datasets 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "tianyancha",
+      "name": "天眼查",
+      "description": "查公司、查老板、查关系",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "TIANYANCHA_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "法律政务",
+      "vendor": "天眼查",
+      "capabilities": [
+        {
+          "name": "tianyancha.query",
+          "description": "天眼查 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "qichacha",
+      "name": "企查查",
+      "description": "企业信息搜索、工商信息与变更记录查询",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "QICHACHA_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "法律政务",
+      "vendor": "企查查",
+      "capabilities": [
+        {
+          "name": "qichacha.query",
+          "description": "企查查 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "qixin",
+      "name": "启信慧眼",
+      "description": "企业数据查询、尽调、核验、监控与报告",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "QIXIN_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "法律政务",
+      "vendor": "启信慧眼",
+      "capabilities": [
+        {
+          "name": "qixin.query",
+          "description": "启信慧眼 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "shuidi",
+      "name": "水滴信用 企业尽调",
+      "description": "工商、股东、实控人穿透、司法风险与税务信用",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "SHUIDI_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "法律政务",
+      "vendor": "水滴信用",
+      "capabilities": [
+        {
+          "name": "shuidi.query",
+          "description": "水滴信用 企业尽调 查询"
+        }
+      ]
+    },
+    {
+      "plugin_key": "pkulaw",
+      "name": "北大法宝·法律智能检索",
+      "description": "专业法律数据检索",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "PKULAW_CONNECTOR_URL",
+      "auth_required": true,
+      "category": "法律政务",
+      "vendor": "北大法宝",
+      "capabilities": [
+        {
+          "name": "pkulaw.query",
+          "description": "北大法宝·法律智能检索 查询"
+        }
+      ]
     }
+  ],
+  "categories": [
+    "精选",
+    "办公管理",
+    "金融",
+    "营销增长",
+    "电商",
+    "内容创作",
+    "教育科研",
+    "效率工具",
+    "法律政务",
+    "产品研发",
+    "医疗医药",
+    "财税支付",
+    "工程",
+    "生活休闲"
   ]
 }

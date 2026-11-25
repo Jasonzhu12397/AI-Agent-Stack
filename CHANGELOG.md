@@ -11,6 +11,12 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The Integration Hub now reads agent-plugin definitions instead of the legacy
   plugin table, so it lists the connectors chat actually has and can install,
   disable and uninstall them.
+- The connector catalog now carries categories and vendors (office, finance,
+  e-commerce, content, legal and more), filters by category in the hub, and
+  marks unprovisioned providers as needing an endpoint instead of offering a
+  broken install.
+- Secure-session failures now report the HTTP status and say the workspace may
+  be starting or its public port offline.
 - The Integration Hub can run an installed capability with declared arguments
   and show the result, through the same resolver and adapter a chat turn uses.
 - The hub can rotate the credential reference of an installed connector.

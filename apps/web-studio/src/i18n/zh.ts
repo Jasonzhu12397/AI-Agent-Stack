@@ -1217,6 +1217,8 @@ export const zhCN: Record<string, string> = {
   "Run": "运行",
   "Run capability": "运行能力",
   "returned in": "返回耗时",
+  "uses": "次使用",
+  "This connector needs an endpoint before it can be installed.": "该连接器需要先配置端点，之后才能安装。",
   "credential reference": "凭证引用，例如 vault://tenant/agent",
   "Save credential": "保存凭证",
   "credential rotated for": "凭证已更换：",

@@ -72,6 +72,19 @@ def _capability(entry: dict) -> dict:
     }
 
 
+def _catalog_metadata(entry: dict, availability: str) -> dict:
+    """Describe the listing independently of whether its endpoint exists."""
+
+    return {
+        "kind": entry.get("kind", "connector"),
+        "category": entry.get("category", ""),
+        "vendor": entry.get("vendor", ""),
+        "availability": availability,
+        "usage_count": int(entry.get("usage_count", 0)),
+        "featured": bool(entry.get("featured")),
+    }
+
+
 def _manifest(endpoint: str, capabilities: list[dict]) -> dict:
     operations = {
         item["name"]: {
@@ -134,11 +147,19 @@ class Command(BaseCommand):
                         "endpoint_url": endpoint,
                         "auth_required": bool(entry.get("auth_required")),
                         "capabilities": capabilities,
-                        "manifest": (
-                            _manifest(endpoint, capabilities)
-                            if endpoint and not builtin
-                            else {}
-                        ),
+                        "manifest": {
+                            **(
+                                _manifest(endpoint, capabilities)
+                                if endpoint and not builtin
+                                else {}
+                            ),
+                            "catalog": _catalog_metadata(
+                                entry,
+                                "builtin"
+                                if builtin
+                                else ("ready" if endpoint else "unprovisioned"),
+                            ),
+                        },
                         "enabled": builtin or bool(endpoint),
                     },
                 )

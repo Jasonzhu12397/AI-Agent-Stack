@@ -42,6 +42,7 @@ const runBusy = ref(false);
 const runOutput = ref("");
 const runError = ref("");
 const rotateOpen = ref(false);
+const activeCategory = ref("All");
 const rotateRef = ref("");
 const registerPlaceholders = {
   key: "example-agent",
@@ -74,6 +75,31 @@ const selectedInstallation = computed(() => {
 const installedCount = computed(
   () => installations.value.filter((item) => item.status !== "uninstalled").length,
 );
+function catalogMeta(definition: AgentPluginDefinition) {
+  return definition.manifest?.catalog ?? {};
+}
+
+const categoryFilters = computed<string[]>(() => {
+  const seen: string[] = [];
+  for (const definition of definitions.value) {
+    const category = catalogMeta(definition).category;
+    if (category && !seen.includes(category)) seen.push(category);
+  }
+  return ["All", ...seen];
+});
+
+const visibleDefinitions = computed(() =>
+  activeCategory.value === "All"
+    ? definitions.value
+    : definitions.value.filter(
+        (definition) => catalogMeta(definition).category === activeCategory.value,
+      ),
+);
+
+function isProvisioned(definition: AgentPluginDefinition): boolean {
+  return catalogMeta(definition).availability !== "unprovisioned";
+}
+
 const selectedCapabilities = computed<AgentPluginManifestCapability[]>(() =>
   selected.value?.capability_definitions?.length
     ? selected.value.capability_definitions
@@ -349,8 +375,20 @@ function lastInvocation(name: string): string {
         <p v-if="!loading && !definitions.length" class="hub-empty">
           {{ t("No connector definitions registered") }}
         </p>
+        <div v-if="definitions.length" class="hub-filters">
+          <button
+            v-for="category in categoryFilters"
+            :key="category"
+            type="button"
+            class="hub-filter"
+            :class="{ on: category === activeCategory }"
+            @click="activeCategory = category"
+          >
+            {{ category === "All" ? t("All categories") : category }}
+          </button>
+        </div>
         <button
-          v-for="definition in definitions"
+          v-for="definition in visibleDefinitions"
           :key="definition.id"
           type="button"
           class="hub-row"
@@ -360,6 +398,15 @@ function lastInvocation(name: string): string {
           <span class="hub-row-main">
             <strong>{{ definition.name }}</strong>
             <small>{{ definition.plugin_key }} · v{{ definition.version }}</small>
+            <small v-if="catalogMeta(definition).vendor || catalogMeta(definition).category">
+              {{ catalogMeta(definition).vendor || "" }}
+              <template v-if="catalogMeta(definition).category">
+                · {{ catalogMeta(definition).category }}
+              </template>
+              <template v-if="catalogMeta(definition).usage_count">
+                · {{ catalogMeta(definition).usage_count }} {{ t("uses") }}
+              </template>
+            </small>
           </span>
           <span class="hub-row-tags">
             <el-tag v-if="!definition.enabled" size="small" type="info" effect="plain">
@@ -533,10 +580,13 @@ function lastInvocation(name: string): string {
               class="hub-credential"
               :placeholder="t('Secret reference, e.g. vault://acme/wecom')"
             />
+            <p v-if="!isProvisioned(selected)" class="hub-hint">
+              {{ t("This connector needs an endpoint before it can be installed.") }}
+            </p>
             <el-button
               type="primary"
               :loading="submitting"
-              :disabled="!projectId || !granted.length"
+              :disabled="!projectId || !granted.length || !isProvisioned(selected)"
               @click="installSelected"
             >
               {{ t("Install") }}
@@ -686,6 +736,31 @@ function lastInvocation(name: string): string {
 .hub-panel-title span,
 .hub-empty {
   font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.hub-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.hub-filter {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 999px;
+  background: transparent;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+}
+.hub-filter.on {
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.hub-hint {
+  margin: 6px 0;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 .hub-row {

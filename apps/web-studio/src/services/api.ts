@@ -167,7 +167,16 @@ async function csrfToken(): Promise<string> {
     // A cached token no longer matches the cookie the browser holds.
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Unable to initialize secure session.");
+  if (!response.ok) {
+    // A 404/403 here means the workspace or its forwarded port is not answering,
+    // not that the credentials are wrong; say so instead of blaming the session.
+    throw new ApiError(
+      `Unable to initialize secure session (HTTP ${response.status}). ` +
+        "If this repeats, the workspace may be starting or its public port is offline.",
+      {},
+      response.status,
+    );
+  }
   const result = (await response.json()) as CsrfResponse;
   return result.csrf_token;
 }
@@ -2021,6 +2030,14 @@ export type AgentPluginDefinition = {
   updated_at: string;
   manifest?: {
     capabilities?: AgentPluginManifestCapability[];
+    catalog?: {
+      kind?: string;
+      category?: string;
+      vendor?: string;
+      availability?: "builtin" | "ready" | "unprovisioned";
+      usage_count?: number;
+      featured?: boolean;
+    };
   } | null;
 };
 
