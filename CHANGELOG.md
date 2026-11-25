@@ -6,6 +6,16 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `eph.target.agent.bootstrap`: the EPH Agent installs the Target Agent from a
+  sealed `target-agent-bootstrap` Secret over the Pivot target kubeconfig, waits
+  for the `target-agent` rollout, and verifies the Target cluster UID and live
+  ready replica count before advancing to `target_agent_ready`.
+- Target write actions now run a `kubectl auth can-i` preflight for every
+  required rule before the first side effect. Missing permissions return
+  `TARGET_RBAC_INSUFFICIENT:<verb>:<resource>` with zero writes.
+
 ### Removed
 
 - The legacy connector stack is gone: `PluginDefinition`, `PluginTool`,

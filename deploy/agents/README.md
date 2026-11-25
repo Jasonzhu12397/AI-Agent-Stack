@@ -5,7 +5,7 @@ This directory deploys the new three-Agent architecture. The legacy Node Agent d
 ## Runtime topology
 
 - **Cloud Control Agent**: cloud-side durable command coordinator and mTLS API. Deploy in the Alibaba Cloud or Tencent Cloud management environment.
-- **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight and reports readiness. Mutating CAPI Pivot remains blocked until its dedicated, approved adapter is implemented and tested.
+- **EPH Agent**: one replica inside the temporary EPH Single-Node Kubernetes cluster. It performs source-side preflight, renders and applies the target control plane, and bootstraps the Target Agent into the Target Control Plane from the sealed `target-agent-bootstrap` bundle before handing over.
 - **Software worker sidecar**: both `eph-agent` and `target-agent` Pods run `dev-agent-worker` by default. It claims only `kind: "software"` work and edits the repository mounted from the `software-workspace` PVC at `/workspace/repo`. `AGENT_SOFTWARE_WORKSPACE` points at the same path. No control-plane approval gates these pods; approval applies only to interactive software work outside the EPH/Target autonomy boundary.
 - **Target Agent**: three replicas, spread one per Target Control Plane master. Kubernetes Lease leader election ensures only the elected replica polls and executes commands. All replicas expose readiness and report their own pod identity.
 
@@ -50,7 +50,8 @@ The Cloud Control API listens on TCP/8443 and is exposed as a LoadBalancer Servi
 - `eph-agent-credentials`: `control-url`, `agent-id`, `installation-id`.
 - `agent-control-plane-mtls`: `ca.crt`, `tls.crt`, `tls.key`.
 - `capi-pivot-source-kubeconfig`: key `kubeconfig` (required at EPH bootstrap).
-- `capi-pivot-target-kubeconfig`: key `kubeconfig` (optional until the Target Control Plane API is ready; mount it later before enabling the Pivot adapter).
+- `capi-pivot-target-kubeconfig`: key `kubeconfig` (optional until the Target Control Plane API is ready; the Target Agent bootstrap action requires it).
+- `target-agent-bootstrap`: key `bundle.yaml`; the sealed Target Agent workload, credentials and mTLS document set. The EPH Agent applies it to the Target Control Plane and verifies the rollout before `target_agent_ready`. The bundle is never read from a command payload.
 
 The EPH client certificate Common Name must equal the configured Agent UUID. EPH identity must not include a Target cluster ID.
 

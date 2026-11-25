@@ -19,6 +19,27 @@ This contract supersedes the older EPH-as-a-future-worker/reclamation flow.
 
 Each transition requires positive evidence from the preceding operation. Missing evidence, stale identity, duplicate stable BMH hardware identity, or a mismatch between source and target BMH identity sets blocks the transition. The Target Agent must persist a checkpoint before and after every external side effect and resume idempotently after restart.
 
+## Target Agent bootstrap invariant
+
+`eph.target.agent.bootstrap` is the transition from `target_control_plane_ready`
+to `target_agent_ready`. It is owned by the EPH Agent because it is the only
+agent running before the Target Control Plane is ready. The EPH Agent uses the
+mounted Pivot target kubeconfig and a sealed bundle Secret
+(`target-agent-bootstrap`) mounted at
+`/var/run/secrets/ai-agent/target-agent-bootstrap/bundle.yaml`. The bundle is
+never accepted from a command payload and its secret values never appear in the
+command result.
+
+The executor accepts only ServiceAccount, Secret, ConfigMap, Role, RoleBinding,
+ClusterRole, ClusterRoleBinding and Deployment documents. Every namespaced
+document must belong to `ai-agent-system`; hostPath, NFS, iSCSI, Fibre Channel
+and CSI volumes are rejected, and the Target Agent container must set
+`runOnNonRoot` and must not be privileged. It applies the bundle idempotently
+with server-side apply, waits for `deployment/target-agent` rollout, then reads
+the Target cluster UID from `kube-system` and the live ready replica count. A
+missing bundle, digest mismatch, failed rollout or short replica count blocks
+the phase with the corresponding `TARGET_AGENT_BOOTSTRAP_*` code.
+
 ## BMH migration invariant
 
 The source and target inventories must be complete and have exactly equal sets of (namespace, name and stable hardware identity). The target Metal3/CAPM3 controller must be healthy and demonstrably own/reconcile the migrated inventory. A matching count alone is insufficient. Do not delete source BMH objects until target ownership and reconciliation are verified.

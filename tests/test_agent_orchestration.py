@@ -54,7 +54,7 @@ def test_full_lifecycle_dispatch_chain_is_monotonic():
         ("eph", "eph.metal3.bmh.wait_ready", "bmh_ready"),
         ("eph", "eph.capi.cluster.apply", "target_control_plane_applied"),
         ("eph", "eph.capi.cluster.wait_ready", "target_control_plane_ready"),
-        ("target", "target.handoff.evaluate", "target_agent_ready"),
+        ("eph", "eph.target.agent.bootstrap", "target_agent_ready"),
         ("target", "target.capi.pivot", "capi_pivot_verified"),
         ("target", "target.metal3.verify_ownership", "bmh_registry_migrated"),
         ("target", "target.eph.cleanup", "eph_cleanup_verified"),

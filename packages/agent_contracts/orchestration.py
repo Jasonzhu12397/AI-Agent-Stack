@@ -85,6 +85,7 @@ EPH_ACTIONS: frozenset[str] = frozenset(
         "eph.capi.cluster.apply",
         "eph.capi.cluster.observe",
         "eph.capi.cluster.wait_ready",
+        "eph.target.agent.bootstrap",
     }
 )
 
@@ -121,6 +122,7 @@ EPH_CHECKPOINT_PHASES: dict[str, DeploymentPhase] = {
     "eph.metal3.bmh.wait_ready": DeploymentPhase.BMH_READY,
     "eph.capi.cluster.apply": DeploymentPhase.TARGET_CONTROL_PLANE_APPLIED,
     "eph.capi.cluster.wait_ready": DeploymentPhase.TARGET_CONTROL_PLANE_READY,
+    "eph.target.agent.bootstrap": DeploymentPhase.TARGET_AGENT_READY,
 }
 
 #: Checkpoint advanced by deterministic Target actions. ``target.handoff.evaluate``
@@ -179,8 +181,8 @@ _DISPATCH_TABLE: dict[DeploymentPhase, tuple[str, str, DeploymentPhase]] = {
         DeploymentPhase.TARGET_CONTROL_PLANE_READY,
     ),
     DeploymentPhase.TARGET_CONTROL_PLANE_READY: (
-        "target",
-        "target.handoff.evaluate",
+        "eph",
+        "eph.target.agent.bootstrap",
         DeploymentPhase.TARGET_AGENT_READY,
     ),
     DeploymentPhase.TARGET_AGENT_READY: (

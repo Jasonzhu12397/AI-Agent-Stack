@@ -62,6 +62,7 @@ from .metal3_skill import (
     wait_for_baremetalhosts_ready,
     wait_for_capi_control_plane_ready,
 )
+from .target_bootstrap import TargetBootstrapError, execute_target_agent_bootstrap
 
 LOG = logging.getLogger("eph-agent")
 CAPABILITIES = sorted(EPH_ACTIONS)
@@ -91,7 +92,11 @@ def _run_kubectl(
     arguments: list[str],
     timeout: int = 60,
     max_output_bytes: int = 2 * 1024 * 1024,
+    kubeconfig: str | None = None,
+    lease_lost_event: Any = None,
 ) -> dict[str, Any]:
+    if lease_lost_event is not None and lease_lost_event.is_set():
+        return {"available": False, "error": "COMMAND_LEASE_LOST"}
     try:
         completed = subprocess.run(
             ["kubectl", *arguments],
@@ -101,7 +106,7 @@ def _run_kubectl(
             timeout=timeout,
             env={
                 **os.environ,
-                "KUBECONFIG": os.environ.get("EPH_KUBECONFIG", ""),
+                "KUBECONFIG": kubeconfig or os.environ.get("EPH_KUBECONFIG", ""),
             },
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -721,6 +726,37 @@ def execute(
             "error_code": None,
             "output": evidence,
             "side_effects": False,
+        }
+    if action == "eph.target.agent.bootstrap":
+        checkpoint = command.get("deployment_checkpoint", {})
+        if (
+            not isinstance(checkpoint, dict)
+            or checkpoint.get("phase") != "target_control_plane_ready"
+        ):
+            return {
+                "status": "blocked",
+                "error_code": "TARGET_CONTROL_PLANE_READY_CHECKPOINT_REQUIRED",
+                "output": {},
+                "side_effects": False,
+            }
+        try:
+            evidence = execute_target_agent_bootstrap(
+                command.get("payload", {}),
+                runner=_run_kubectl,
+                lease_lost_event=lease_lost_event,
+            )
+        except TargetBootstrapError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {},
+                "side_effects": exc.side_effects,
+            }
+        return {
+            "status": "succeeded",
+            "error_code": None,
+            "output": evidence,
+            "side_effects": True,
         }
     if action == "eph.source.observe":
         result = _run_read_only(["kubectl", "get", "nodes", "-o", "json"])

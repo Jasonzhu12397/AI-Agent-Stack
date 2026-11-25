@@ -278,6 +278,10 @@ spec:
               value: /var/run/secrets/ai-agent/control-plane-tls/tls.key
             - name: AGENT_SOFTWARE_WORKSPACE
               value: /workspace/repo
+            - name: CAPI_PIVOT_TARGET_KUBECONFIG
+              value: /var/run/secrets/ai-agent/capi-pivot/target/kubeconfig
+            - name: TARGET_AGENT_BOOTSTRAP_DIR
+              value: /var/run/secrets/ai-agent/target-agent-bootstrap
             - name: EPH_CAPI_NAMESPACE
               value: metal3
             - name: EPH_KUBECONFIG
@@ -302,6 +306,12 @@ spec:
               readOnly: true
             - name: source-kubeconfig
               mountPath: /var/run/secrets/ai-agent/capi-pivot/source
+              readOnly: true
+            - name: target-kubeconfig
+              mountPath: /var/run/secrets/ai-agent/capi-pivot/target
+              readOnly: true
+            - name: target-agent-bootstrap
+              mountPath: /var/run/secrets/ai-agent/target-agent-bootstrap
               readOnly: true
             - name: eph-tmp
               mountPath: /tmp
@@ -403,6 +413,14 @@ spec:
             items:
               - key: kubeconfig
                 path: kubeconfig
+            defaultMode: 0440
+        - name: target-agent-bootstrap
+          secret:
+            secretName: target-agent-bootstrap
+            optional: true
+            items:
+              - key: bundle.yaml
+                path: bundle.yaml
             defaultMode: 0440
         - name: eph-tmp
           emptyDir:

@@ -39,7 +39,7 @@ def test_plan_deployment_command_applies_the_control_stack_before_bmh_registrati
     assert step["next_phase"] == "bmh_registered"
 
 
-def test_plan_deployment_command_hands_over_to_target_after_control_plane_ready():
+def test_plan_deployment_command_bootstraps_target_agent_after_control_plane_ready():
     step = plan_deployment_command(uuid4(), "bmh_ready", {})["next_step"]
     assert step["role"] == "eph"
     assert step["action"] == "eph.capi.cluster.apply"
@@ -51,8 +51,9 @@ def test_plan_deployment_command_hands_over_to_target_after_control_plane_ready(
     assert step["next_phase"] == "target_control_plane_ready"
 
     step = plan_deployment_command(uuid4(), "target_control_plane_ready", {})["next_step"]
-    assert step["role"] == "target"
-    assert step["action"] == "target.handoff.evaluate"
+    assert step["role"] == "eph"
+    assert step["action"] == "eph.target.agent.bootstrap"
+    assert step["next_phase"] == "target_agent_ready"
 
 
 def test_plan_deployment_command_reports_terminal_deployment():
