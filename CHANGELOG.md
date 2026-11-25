@@ -6,6 +6,24 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Self-service registration accepts an email address or a phone number. A new
+  member receives an owner tenant and a default project in the same
+  transaction, and the console exposes `/register` beside the sign-in form.
+  `PLATFORM_ALLOW_SELF_REGISTRATION=0` closes the endpoint for managed
+  deployments.
+- Doubao is a first-class model provider preset (Ark OpenAI-compatible
+  endpoint, `PLATFORM_DOUBAO_KEY`), so it appears in Platform accounts next to
+  Qwen and the other providers.
+- The plugin catalog lists Amap, Baidu Maps, China Railway 12306, DiDi, mainland
+  public services and the WeChat Official Account connector. Each declares its
+  capabilities and endpoint environment; a deployment supplies the connector
+  endpoint to enable live calls. Personal WeChat accounts have no official API
+  and are not marketed as supported.
+- The control-plane overview uses larger type and spacing across its banner,
+  metrics, panels and task rows, and the shell widens to 1560px.
+
 ### Fixed
 
 - A worker upgrade that failed after `kubectl drain` left the node cordoned. The

@@ -296,6 +296,23 @@ export async function login(username: string, password: string): Promise<Current
   return user;
 }
 
+export async function register(
+  identifier: string,
+  password: string,
+  displayName: string,
+): Promise<CurrentUser> {
+  const user = await request<CurrentUser>("/api/v1/auth/register/", {
+    method: "POST",
+    body: JSON.stringify({
+      identifier,
+      password,
+      display_name: displayName,
+    }),
+  });
+  if (user.session_token) setSessionToken(user.session_token);
+  return user;
+}
+
 export async function logout(): Promise<void> {
   await request<void>("/api/v1/auth/logout/", {
     method: "POST",

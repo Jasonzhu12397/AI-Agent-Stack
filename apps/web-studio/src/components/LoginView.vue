@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useRoute } from "vue-router";
 import { login, type CurrentUser } from "../services/api";
+
+const route = useRoute();
 
 const emit = defineEmits<{ authenticated: [user: CurrentUser] }>();
 const username = ref("");
@@ -63,6 +66,10 @@ async function submit(): Promise<void> {
           Sign in
         </el-button>
       </el-form>
+      <p class="login-footnote">
+        New here?
+        <router-link :to="{ path: '/register', query: route.query }">Create an account</router-link>
+      </p>
       <p class="login-footnote">Access is controlled by your organization membership.</p>
     </section>
   </main>

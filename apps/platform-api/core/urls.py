@@ -60,7 +60,7 @@ from core.agent_views import (
     AgentRunDetailView,
     AgentRunListCreateView,
 )
-from core.auth_views import CurrentUserView, LoginView, LogoutView, csrf_cookie
+from core.auth_views import CurrentUserView, LoginView, LogoutView, RegisterView, csrf_cookie
 from core.roadmap_views import PlatformRoadmapView
 from core.chat_views import (
     AgentChatContextView,
@@ -485,6 +485,11 @@ urlpatterns = [
         "api/v1/auth/login/",
         LoginView.as_view(),
         name="auth-login",
+    ),
+    path(
+        "api/v1/auth/register/",
+        RegisterView.as_view(),
+        name="auth-register",
     ),
     path(
         "api/v1/auth/logout/",

@@ -38,6 +38,17 @@ PROVIDER_PRESETS: dict[str, dict] = {
             {"model_name": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna"},
         ],
     },
+    "doubao": {
+        "console_url": "https://console.volcengine.com/ark",
+        "platform_env": "PLATFORM_DOUBAO_KEY",
+        "label": "豆包 Doubao",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "models": [
+            {"model_name": "doubao-seed-2-1-pro-260915", "display_name": "Doubao Seed 2.1 Pro"},
+            {"model_name": "doubao-seed-2.0-pro", "display_name": "Doubao Seed 2.0 Pro"},
+            {"model_name": "doubao-seed-2.0-lite", "display_name": "Doubao Seed 2.0 Lite"},
+        ],
+    },
     "google": {
         "console_url": "https://aistudio.google.com/app/apikey",
         "platform_env": "PLATFORM_GOOGLE_KEY",

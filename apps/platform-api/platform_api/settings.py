@@ -190,6 +190,9 @@ PLUGIN_HTTP_ALLOWED_HOSTS = [
     for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
     if value.strip()
 ]
+PLATFORM_ALLOW_SELF_REGISTRATION = os.getenv(
+    "PLATFORM_ALLOW_SELF_REGISTRATION", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
 PLUGIN_CREDENTIAL_RESOLVER = os.getenv(
     "PLUGIN_CREDENTIAL_RESOLVER", "core.plugin_credentials.resolve"
 ).strip()

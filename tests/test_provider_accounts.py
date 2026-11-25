@@ -54,8 +54,12 @@ def test_catalog_is_readable_by_a_member_without_a_purchase(member):
     response = client.get(f"/api/v1/tenants/{tenant.id}/model-providers/catalog/")
     assert response.status_code == 200
     keys = [item["key"] for item in response.data["presets"]]
-    assert keys[:3] == ["openai", "google", "deepseek"]
-    assert {"qwen", "zhipu", "moonshot", "minimax", "openrouter"} <= set(keys)
+    assert keys[:4] == ["openai", "doubao", "google", "deepseek"]
+    assert {"doubao", "qwen", "zhipu", "moonshot", "minimax", "openrouter"} <= set(keys)
+    assert provider_accounts.PROVIDER_PRESETS["doubao"]["base_url"] == (
+        "https://ark.cn-beijing.volces.com/api/v3"
+    )
+    assert provider_accounts.PROVIDER_PRESETS["doubao"]["platform_env"] == "PLATFORM_DOUBAO_KEY"
     # The catalogue ships the platforms' current flagship families, not retired
     # models: a member who authorizes today must land on a callable model.
     openai_models = [

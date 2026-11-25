@@ -841,6 +841,418 @@
           "description": "北大法宝·法律智能检索 查询"
         }
       ]
+    },
+    {
+      "plugin_key": "amap",
+      "name": "高德地图",
+      "description": "Amap connector: place search plus driving and transit route planning for mainland China.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "AMAP_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "amap.place.search",
+          "description": "Search places by keyword and city",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Place keyword, e.g. 西安钟楼"
+              },
+              "city": {
+                "type": "string",
+                "description": "City name, optional"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        },
+        {
+          "name": "amap.route.driving",
+          "description": "Plan a driving route between two points",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "description": "Origin longitude,latitude"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination longitude,latitude"
+              },
+              "strategy": {
+                "type": "integer",
+                "description": "Amap driving strategy, optional"
+              }
+            },
+            "required": [
+              "origin",
+              "destination"
+            ]
+          }
+        },
+        {
+          "name": "amap.route.transit",
+          "description": "Plan a public transit route between two cities or points",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string"
+              },
+              "destination": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string",
+                "description": "City for the transit search"
+              },
+              "cityd": {
+                "type": "string",
+                "description": "Destination city, optional"
+              }
+            },
+            "required": [
+              "origin",
+              "destination",
+              "city"
+            ]
+          }
+        }
+      ],
+      "category": "生活休闲",
+      "vendor": "高德地图"
+    },
+    {
+      "plugin_key": "baidu-map",
+      "name": "百度地图",
+      "description": "Baidu Maps connector: place search and driving route planning for mainland China.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "BAIDU_MAP_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "baidu_map.place.search",
+          "description": "Search places in one city",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string",
+                "description": "City name"
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "query",
+              "region"
+            ]
+          }
+        },
+        {
+          "name": "baidu_map.route.driving",
+          "description": "Plan a driving route between two points",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "description": "Origin latitude,longitude"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination latitude,longitude"
+              }
+            },
+            "required": [
+              "origin",
+              "destination"
+            ]
+          }
+        },
+        {
+          "name": "baidu_map.geocode",
+          "description": "Resolve an address to coordinates",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "address"
+            ]
+          }
+        }
+      ],
+      "category": "生活休闲",
+      "vendor": "百度地图"
+    },
+    {
+      "plugin_key": "rail-12306",
+      "name": "铁路12306",
+      "description": "China Railway connector: timetable, remaining tickets and train stop lookup through an authorized 12306 gateway.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "RAIL_12306_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "rail.ticket.query",
+          "description": "Query remaining tickets for one date and city pair",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "from_station": {
+                "type": "string"
+              },
+              "to_station": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string",
+                "description": "Travel date in YYYY-MM-DD"
+              },
+              "train_code": {
+                "type": "string",
+                "description": "Filter by train number, optional"
+              }
+            },
+            "required": [
+              "from_station",
+              "to_station",
+              "date"
+            ]
+          }
+        },
+        {
+          "name": "rail.train.stops",
+          "description": "List the stop sequence of one train",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "train_code": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string",
+                "description": "Service date in YYYY-MM-DD"
+              }
+            },
+            "required": [
+              "train_code",
+              "date"
+            ]
+          }
+        }
+      ],
+      "category": "生活休闲",
+      "vendor": "中国铁路12306"
+    },
+    {
+      "plugin_key": "didi",
+      "name": "滴滴出行",
+      "description": "DiDi connector: ride price estimates and trip status for the bound DiDi enterprise or open-platform account.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "DIDI_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "didi.ride.estimate",
+          "description": "Estimate ride options and prices between two points",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "description": "Origin latitude,longitude or address"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination latitude,longitude or address"
+              },
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "destination",
+              "city"
+            ]
+          }
+        },
+        {
+          "name": "didi.ride.status",
+          "description": "Read the status of a ride booked by the bound account",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "order_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "order_id"
+            ]
+          }
+        }
+      ],
+      "category": "生活休闲",
+      "vendor": "滴滴出行"
+    },
+    {
+      "plugin_key": "china-services",
+      "name": "国内便民服务",
+      "description": "Mainland public-service connector: utility bill lookup, express tracking and government service search through an authorized gateway.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "CHINA_SERVICES_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "life.bill.query",
+          "description": "Read utility bill status for a bound account",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "account_type": {
+                "type": "string",
+                "enum": [
+                  "water",
+                  "electricity",
+                  "gas"
+                ]
+              },
+              "account_number": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "account_type",
+              "account_number"
+            ]
+          }
+        },
+        {
+          "name": "life.package.track",
+          "description": "Track one parcel with a carrier and tracking number",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "carrier": {
+                "type": "string"
+              },
+              "tracking_number": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "carrier",
+              "tracking_number"
+            ]
+          }
+        },
+        {
+          "name": "gov.service.search",
+          "description": "Search a government service and its required materials",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string",
+                "description": "Province or city name"
+              }
+            },
+            "required": [
+              "query",
+              "region"
+            ]
+          }
+        }
+      ],
+      "category": "法律政务",
+      "vendor": "国内便民服务"
+    },
+    {
+      "plugin_key": "wechat",
+      "name": "微信",
+      "description": "WeChat Official Account connector: send service messages and read follower profiles for the bound official account. Personal WeChat accounts have no official API and are not supported.",
+      "version": "1.0.0",
+      "protocol": "http_json",
+      "endpoint_env": "WECHAT_CONNECTOR_URL",
+      "auth_required": true,
+      "capabilities": [
+        {
+          "name": "wechat.official.message.send",
+          "description": "Send a template or service message to one follower",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "openid": {
+                "type": "string"
+              },
+              "template_id": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "openid",
+              "template_id",
+              "data"
+            ]
+          }
+        },
+        {
+          "name": "wechat.official.user.info",
+          "description": "Read a follower profile from the official account",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "openid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "openid"
+            ]
+          }
+        }
+      ],
+      "category": "办公管理",
+      "vendor": "微信"
     }
   ],
   "categories": [

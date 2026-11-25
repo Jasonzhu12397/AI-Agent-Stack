@@ -4,6 +4,7 @@ import { ApiError, request } from "../services/http";
 import { resolveNavigation } from "./guard";
 import { settingsRoutes } from "../settings/routes";
 import LoginView from "../components/LoginView.vue";
+import RegisterView from "../components/RegisterView.vue";
 import WorkspaceView from "../components/WorkspaceView.vue";
 import ChatWorkspaceView from "../components/ChatWorkspaceView.vue";
 import ScheduledJobsView from "../components/ScheduledJobsView.vue";
@@ -50,6 +51,7 @@ const WORKSPACE_SECTIONS: { path: string; section: WorkspaceSection }[] = [
 
 const legacyRoutes: RouteRecordRaw[] = [
   { path: "/login", name: "login", component: LoginView, meta: {} },
+  { path: "/register", name: "register", component: RegisterView, meta: {} },
   // The chat console and the scheduler are full-surface workbenches, so they
   // mount their own views instead of the generic section workspace.
   {

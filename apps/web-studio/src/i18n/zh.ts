@@ -1236,4 +1236,20 @@ export const zhCN: Record<string, string> = {
   "New project": "新建项目",
   "Creating": "创建中…",
   "Project created": "项目已创建",
+
+  "New here?": "新用户？",
+  "Create an account": "创建账号",
+  "Authorize your own model platform account once, including OpenAI, Google, DeepSeek, Qwen and Doubao. Its models then show up in Model Manager and in the Control Agent chat, and calls draw on the free per-member daily allowance instead of a purchased tenant balance.":
+    "只需授权一次自己的模型平台账号，支持 OpenAI、Google、DeepSeek、千问与豆包。其模型会出现在模型管理器和 Control Agent 对话中，调用消耗每位成员的每日免费额度，而不是租户购买的余额。",
+  "CREATE YOUR WORKSPACE": "创建你的工作空间",
+  "Start building.": "开始构建。",
+  "Register with an email address or a phone number. A personal workspace and a default project are created for you automatically.":
+    "使用邮箱或手机号注册。系统会自动为你创建个人工作空间和一个默认项目。",
+  "Phone": "手机号",
+  "Create account": "创建账号",
+  "Already registered?": "已有账号？",
+  "Sign up with": "注册方式",
+  "At least 8 characters": "至少 8 个字符",
+  "Confirm password": "确认密码",
+  "Repeat the password": "再次输入密码",
 };

@@ -89,11 +89,11 @@ function evidenceText(item: RoadmapItem): string {
 }
 let timer: number | undefined;
 
-const isLogin = computed(() => route.path === "/login");
+const isAuthPage = computed(() => route.path === "/login" || route.path === "/register");
 // The shell owns the viewport so a workbench page can size itself; the login
 // screen keeps normal document scrolling.
 watch(
-  isLogin,
+  isAuthPage,
   (value) => document.body.classList.toggle("app-shell", !value),
   { immediate: true },
 );
@@ -177,7 +177,7 @@ onUnmounted(() => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <router-view v-if="isLogin" @authenticated="onAuthenticated" />
+    <router-view v-if="isAuthPage" @authenticated="onAuthenticated" />
     <div v-else class="layout-shell">
       <WorkspaceRail
         :user="currentUser?.username"
