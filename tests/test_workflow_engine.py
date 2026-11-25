@@ -1735,3 +1735,69 @@ def test_workflow_validator_rejects_invalid_loop_contracts(workflow_workspace):
     definition["nodes"][1]["config"]["body"]["type"] = "approval"
     with pytest.raises(WorkflowValidationError):
         validate_workflow_definition(definition)
+
+
+def test_workflow_ui_positions_are_validated_and_preserved():
+    definition = linear_workflow(uuid4())
+    definition["ui"] = {
+        "node_positions": {
+            "start": {"x": 24, "y": 24},
+            "answer": {"x": 260, "y": 24},
+            "end": {"x": 496, "y": 24},
+        }
+    }
+
+    graph = validate_workflow_definition(definition)
+
+    assert set(graph["nodes"]) == {"start", "answer", "end"}
+
+
+def test_workflow_ui_positions_reject_unknown_nodes_and_bad_coordinates():
+    definition = linear_workflow(uuid4())
+    definition["ui"] = {"node_positions": {"missing": {"x": 10, "y": 20}}}
+    with pytest.raises(WorkflowValidationError, match="unknown node"):
+        validate_workflow_definition(definition)
+
+    definition["ui"] = {"node_positions": {"start": {"x": float("nan"), "y": 20}}}
+    with pytest.raises(WorkflowValidationError, match="out of range"):
+        validate_workflow_definition(definition)
+
+    definition["ui"] = {"node_positions": {"start": {"x": True, "y": 20}}}
+    with pytest.raises(WorkflowValidationError, match="must be a number"):
+        validate_workflow_definition(definition)
+
+
+@pytest.mark.django_db
+def test_workflow_draft_api_round_trips_canvas_positions(workflow_workspace):
+    user, tenant, project, model = workflow_workspace
+    definition = linear_workflow(model.id)
+    definition["ui"] = {
+        "node_positions": {
+            "start": {"x": 24, "y": 24},
+            "answer": {"x": 260, "y": 24},
+            "end": {"x": 496, "y": 24},
+        }
+    }
+    workflow = WorkflowDefinition.objects.create(
+        tenant=tenant,
+        project=project,
+        created_by=user,
+        name="Canvas workflow",
+        slug="canvas-workflow",
+        draft_definition=definition,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.patch(
+        f"/api/v1/workflows/{workflow.id}/",
+        {"draft_definition": definition},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    workflow.refresh_from_db()
+    assert workflow.draft_definition["ui"]["node_positions"]["answer"] == {
+        "x": 260,
+        "y": 24,
+    }

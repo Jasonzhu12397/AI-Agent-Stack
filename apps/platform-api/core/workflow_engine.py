@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import math
 import re
 import uuid
 from collections import deque
@@ -341,6 +342,37 @@ def validate_workflow_definition(definition):
                     f"Node {node_id} has an invalid source node reference."
                 )
         node_map[node_id] = node
+    ui = definition.get("ui")
+    if ui is not None:
+        if not isinstance(ui, dict):
+            raise WorkflowValidationError("Workflow ui metadata must be an object.")
+        positions = ui.get("node_positions")
+        if positions is not None:
+            if not isinstance(positions, dict) or len(positions) > 50:
+                raise WorkflowValidationError(
+                    "Workflow ui.node_positions must be an object with at most 50 entries."
+                )
+            for position_node_id, position in positions.items():
+                if position_node_id not in node_map:
+                    raise WorkflowValidationError(
+                        f"Workflow ui.node_positions references an unknown node: {position_node_id}"
+                    )
+                if not isinstance(position, dict):
+                    raise WorkflowValidationError(
+                        f"Workflow ui.node_positions[{position_node_id}] must be an object."
+                    )
+                for axis in ("x", "y"):
+                    value = position.get(axis)
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        raise WorkflowValidationError(
+                            "Workflow ui.node_positions"
+                            f"[{position_node_id}].{axis} must be a number."
+                        )
+                    if not math.isfinite(value) or not 0 <= value <= 100000:
+                        raise WorkflowValidationError(
+                            "Workflow ui.node_positions"
+                            f"[{position_node_id}].{axis} is out of range."
+                        )
     starts = [node_id for node_id, node in node_map.items() if node["type"] == "start"]
     ends = [node_id for node_id, node in node_map.items() if node["type"] == "end"]
     if len(starts) != 1 or not ends:

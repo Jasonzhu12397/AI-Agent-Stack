@@ -2,6 +2,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { t, tf } from "../i18n";
 import {
+  appendEdge,
+  readNodePositions,
+  removeNodePosition,
+  renameNodePosition,
+  writeNodePositions,
+} from "../domain/workflowCanvas";
+import {
   createWorkflow,
   createWorkflowRun,
   decideWorkflowStep,
@@ -289,6 +296,8 @@ function onCanvasKeydown(event: KeyboardEvent): void {
   } else if (event.shiftKey && event.key === "5") {
     event.preventDefault();
     zoomTo(0.5);
+  } else if (event.key === "Escape" && connectionState.value) {
+    cancelConnection();
   } else if (event.key === "Escape" && document.fullscreenElement) {
     void document.exitFullscreen();
   }
@@ -357,6 +366,15 @@ const dragState = ref<{
   originX: number;
   originY: number;
 } | null>(null);
+// A connection gesture starts on a node's output port and ends on another node.
+// The line is tracked in canvas coordinates so it stays attached while panning
+// or zooming during the gesture.
+const connectionState = ref<{
+  sourceId: string;
+  cursorX: number;
+  cursorY: number;
+} | null>(null);
+const connectionTargetId = ref("");
 const catalog = ref<WorkflowCatalog>({
   models: [],
   knowledge_bases: [],
@@ -488,8 +506,29 @@ const canvasLayout = computed(() => {
   return {
     nodes: canvasNodes,
     edges: canvasEdges,
-    width: Math.max(680, 24 + (maxLayer + 1) * LAYER_GAP + NODE_WIDTH),
-    height: Math.max(260, 48 + maxRows * ROW_GAP),
+    width: Math.max(
+      680,
+      24 + (maxLayer + 1) * LAYER_GAP + NODE_WIDTH,
+      ...Object.values(canvasPositions.value).map((position) => position.x + NODE_WIDTH + 24),
+    ),
+    height: Math.max(
+      260,
+      48 + maxRows * ROW_GAP,
+      ...Object.values(canvasPositions.value).map((position) => position.y + NODE_HEIGHT + 48),
+    ),
+  };
+});
+
+const connectionLine = computed(() => {
+  const state = connectionState.value;
+  if (!state) return null;
+  const source = canvasLayout.value.nodes.find((item) => item.id === state.sourceId);
+  if (!source) return null;
+  return {
+    x1: source.x + NODE_WIDTH,
+    y1: source.y + NODE_HEIGHT / 2,
+    x2: state.cursorX,
+    y2: state.cursorY,
   };
 });
 
@@ -527,7 +566,46 @@ function startNodeDrag(event: PointerEvent, item: CanvasNode): void {
   event.preventDefault();
 }
 
+function startConnection(event: PointerEvent, item: CanvasNode): void {
+  connectionState.value = {
+    sourceId: item.id,
+    cursorX: item.x + NODE_WIDTH,
+    cursorY: item.y + NODE_HEIGHT / 2,
+  };
+  connectionTargetId.value = "";
+  selectNode(item.node);
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function nodeIdAtPoint(clientX: number, clientY: number): string {
+  const element = document.elementFromPoint(clientX, clientY);
+  const node = element?.closest?.("[data-node-id]");
+  return node?.getAttribute("data-node-id") ?? "";
+}
+
+function canvasPointFromEvent(event: PointerEvent): { x: number; y: number } {
+  const viewport = viewportEl.value;
+  if (!viewport) return { x: 0, y: 0 };
+  const rect = viewport.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left - view.value.x) / view.value.k,
+    y: (event.clientY - rect.top - view.value.y) / view.value.k,
+  };
+}
+
 function onCanvasPointerMove(event: PointerEvent): void {
+  if (connectionState.value) {
+    const point = canvasPointFromEvent(event);
+    connectionState.value = {
+      ...connectionState.value,
+      cursorX: point.x,
+      cursorY: point.y,
+    };
+    const targetId = nodeIdAtPoint(event.clientX, event.clientY);
+    connectionTargetId.value = targetId === connectionState.value.sourceId ? "" : targetId;
+    return;
+  }
   if (!dragState.value) return;
   // Pointer deltas are screen pixels; the canvas is scaled, so divide them
   // back into layout space or a node drifts away from the cursor.
@@ -539,8 +617,68 @@ function onCanvasPointerMove(event: PointerEvent): void {
   };
 }
 
-function onCanvasPointerUp(): void {
-  dragState.value = null;
+function persistCanvasPositions(): void {
+  const definition = parseDefinition();
+  if (!definition) return;
+  commitDefinition(writeNodePositions(definition, canvasPositions.value));
+}
+
+function finishConnection(targetId: string): void {
+  const state = connectionState.value;
+  connectionState.value = null;
+  connectionTargetId.value = "";
+  if (!state || !targetId) return;
+  const definition = parseDefinition();
+  if (!definition) return;
+  const nodes = Array.isArray(definition.nodes)
+    ? (definition.nodes as Record<string, unknown>[])
+    : [];
+  const sourceNode = nodes.find((node) => String(node.id) === state.sourceId);
+  const edges = Array.isArray(definition.edges)
+    ? (definition.edges as Record<string, unknown>[])
+    : [];
+  let when: boolean | undefined;
+  if (String(sourceNode?.type ?? "") === "condition") {
+    if (!edges.some((edge) => String(edge.source) === state.sourceId && edge.when === true)) {
+      when = true;
+    } else if (!edges.some((edge) => String(edge.source) === state.sourceId && edge.when === false)) {
+      when = false;
+    } else {
+      error.value = t("A condition node already has true and false branches.");
+      return;
+    }
+  }
+  const result = appendEdge(definition, state.sourceId, targetId, when);
+  if (!result.ok) {
+    error.value =
+      result.reason === "self"
+        ? t("A node cannot connect to itself.")
+        : result.reason === "duplicate"
+          ? t("That edge already exists.")
+          : t("Choose a source and target node.");
+    return;
+  }
+  definition.edges = result.edges;
+  commitDefinition(definition);
+  notice.value = tf("Connected {0} to {1}.", state.sourceId, targetId);
+  error.value = "";
+}
+
+function cancelConnection(): void {
+  connectionState.value = null;
+  connectionTargetId.value = "";
+}
+
+function onCanvasPointerUp(event?: PointerEvent): void {
+  if (dragState.value) {
+    dragState.value = null;
+    persistCanvasPositions();
+    return;
+  }
+  if (connectionState.value) {
+    const targetId = event ? nodeIdAtPoint(event.clientX, event.clientY) : "";
+    finishConnection(targetId);
+  }
 }
 
 function applyNodeDraft(): void {
@@ -591,12 +729,9 @@ function applyNodeDraft(): void {
   }));
   definition.nodes = nodes;
   definition.edges = nextEdges;
-  commitDefinition(definition);
-  if (previousId !== nextId && canvasPositions.value[previousId]) {
-    const nextPositions = { ...canvasPositions.value, [nextId]: canvasPositions.value[previousId] };
-    delete nextPositions[previousId];
-    canvasPositions.value = nextPositions;
-  }
+  const nextPositions = renameNodePosition(canvasPositions.value, previousId, nextId);
+  canvasPositions.value = nextPositions;
+  commitDefinition(writeNodePositions(definition, nextPositions));
   selectedNodeId.value = nextId;
   notice.value = tf("Node {0} updated.", nextId);
   error.value = "";
@@ -618,7 +753,10 @@ function removeSelectedNode(): void {
       String(edge.source) !== selectedNodeId.value &&
       String(edge.target) !== selectedNodeId.value,
   );
-  commitDefinition(definition);
+  const removedId = selectedNodeId.value;
+  const nextPositions = removeNodePosition(canvasPositions.value, removedId);
+  canvasPositions.value = nextPositions;
+  commitDefinition(writeNodePositions(definition, nextPositions));
   selectedNodeId.value = "";
   edgeSource.value = "";
   edgeTarget.value = "";
@@ -949,8 +1087,10 @@ function selectWorkflow(workflowId: string): void {
       null,
       2,
     );
+    canvasPositions.value = readNodePositions(selectedWorkflow.value.draft_definition);
   } else {
     definitionText.value = "";
+    canvasPositions.value = {};
   }
   restoreViewport();
   runs.value = [];
@@ -1217,12 +1357,27 @@ onUnmounted(() => {
               >
                 when {{ edge.when }}
               </text>
+              <line
+                v-if="connectionLine"
+                class="workflow-canvas-connection"
+                :x1="connectionLine.x1"
+                :y1="connectionLine.y1"
+                :x2="connectionLine.x2"
+                :y2="connectionLine.y2"
+                stroke="#3f8cff"
+                stroke-width="2"
+                stroke-dasharray="6 4"
+              />
             </svg>
             <article
               v-for="item in canvasLayout.nodes"
               :key="item.id"
               class="workflow-canvas-node"
-              :class="{ selected: selectedNodeId === item.id }"
+              :class="{
+                selected: selectedNodeId === item.id,
+                'connection-target': connectionTargetId === item.id,
+              }"
+              :data-node-id="item.id"
               :style="{ left: item.x + 'px', top: item.y + 'px', width: NODE_WIDTH + 'px' }"
               @pointerdown.stop="startNodeDrag($event, item)"
             >
@@ -1230,6 +1385,12 @@ onUnmounted(() => {
               <strong>{{ nodeLabel(item.node) }}</strong>
               <code>{{ item.id }}</code>
               <small v-if="nodeDetail(item.node)">{{ nodeDetail(item.node) }}</small>
+              <button
+                type="button"
+                class="workflow-node-port"
+                :title="t('Drag from this port onto another node to connect them.')"
+                @pointerdown.stop="startConnection($event, item)"
+              />
             </article>
           </div>
           </div>

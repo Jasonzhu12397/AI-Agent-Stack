@@ -122,7 +122,7 @@
 | Login | `LoginView.vue` | 接 `/api/v1/auth/csrf\|login\|logout\|me` | 【基础】 | 完整认证体验、错误态与会话恢复待核对 |
 | Dashboard | `DashboardView.vue` | 拉取真实 tasks / nodes 分页，computed 派生活跃/成功/在线指标 | 【基础】 | 指标来自任务/节点表，非独立监控指标；趋势与实时刷新待补 |
 | Agent Studio | `AgentStudioView.vue` | 接 agents / publish / runs / 模型测试 | 【基础】 | 多步工具执行过程展示与失败恢复待完善 |
-| Workflow Studio | `WorkflowStudioView.vue` | 可视化 DAG 画布：分层布局、节点拖动、节点检查器、连线编辑与 JSON 兜底；支持审批决策 | 【已实现】（可视化编辑/校验/审批/循环） | 【待开发】拖拽连线、坐标持久化 |
+| Workflow Studio | `WorkflowStudioView.vue` | 可视化 DAG 画布：分层布局、节点拖动、节点检查器、连线编辑与 JSON 兜底；节点右侧端口可拖拽连线（条件节点自动分配 true/false 分支），节点坐标写入 `draft_definition.ui.node_positions`；支持审批决策 | 【已实现】（可视化编辑/校验/审批/循环/拖拽连线/坐标持久化） | 【待验证】大规模图的连线交互与坐标冲突合并 |
 | Model Manager | `ModelManagerView.vue` | 接 model-providers / models / model-configs test | 【基础】 | 供应商覆盖、路由与降级策略 UI 待补 |
 | Integration Hub | `IntegrationHubView.vue` | 接 connectors / installations / connections / test / status | 【基础】 | 真实连接器、OAuth 授权流与连接健康闭环待补 |
 | Knowledge Base | `KnowledgeBaseView.vue` | 接 knowledge-bases / documents / retry | 【基础】 | 完整 RAG 链路（嵌入/检索/召回质量）待核对 |
