@@ -155,7 +155,10 @@ def _complete(
             402,
         ) from exc
     except ModelGatewayError as exc:
-        http_status = 403 if exc.code == "MODEL_CREDENTIAL_REJECTED" else 502
+        http_status = (
+            exc.http_status
+            or (403 if exc.code == "MODEL_CREDENTIAL_REJECTED" else 502)
+        )
         raise ChatRuntimeError(exc.code, str(exc), http_status) from exc
     return result
 
