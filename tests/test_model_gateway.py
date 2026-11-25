@@ -1,6 +1,8 @@
 import json
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pytest
 from core.model_gateway import ModelGateway, ModelGatewayError
@@ -240,6 +242,51 @@ def test_model_gateway_rejects_invalid_or_unbounded_provider_token_usage(
             )
     assert error.value.code == "MODEL_PROVIDER_INVALID_RESPONSE"
 
+
+def test_model_gateway_classifies_provider_rate_limit_and_releases_reservation(monkeypatch):
+    provider = ModelProvider(
+        name="Rate limited provider",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        base_url="https://api.example.test/v1",
+        credential_ref="env:MODEL_API_KEY",
+    )
+    model = ModelConfig(
+        provider=provider,
+        model_name="test-model",
+        display_name="Test Model",
+        max_output_tokens=200,
+    )
+    monkeypatch.setenv("MODEL_API_KEY", "test-secret")
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "30"},
+                BytesIO(b'{"error":{"message":"rate limit exceeded"}}'),
+            )
+
+    class TrackingGuard(_StubGuard):
+        def __init__(self):
+            self.release_calls = 0
+
+        def release(self, *, reservation):
+            self.release_calls += 1
+            super().release(reservation=reservation)
+
+    guard = TrackingGuard()
+    with patch("core.model_gateway.build_opener", return_value=FakeOpener()):
+        with pytest.raises(ModelGatewayError) as error:
+            ModelGateway(guard=guard).complete(
+                model,
+                [{"role": "user", "content": "hello"}],
+            )
+
+    assert error.value.code == "MODEL_PROVIDER_RATE_LIMITED"
+    assert error.value.http_status == 429
+    assert error.value.retryable is True
 
 def test_missing_model_credential_fails_without_revealing_secret():
     provider = ModelProvider(
