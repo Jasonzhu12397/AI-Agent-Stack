@@ -215,3 +215,117 @@ def test_agent_run_requires_published_version_and_idempotency_key(agent_workspac
     )
     assert not_published.status_code == 409
     assert Task.objects.count() == 0
+
+
+def _weather_plugin(tenant, project, user, risk="low"):
+    from core.models import AgentPluginDefinition, AgentPluginInstallation
+
+    definition = AgentPluginDefinition.objects.create(
+        tenant=tenant,
+        created_by=user,
+        plugin_key="weather-agent",
+        name="Weather Agent",
+        description="Built-in weather",
+        version="1.0.0",
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=[
+            {
+                "name": "weather.current",
+                "description": "Current conditions",
+                "risk_level": risk,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"place": {"type": "string"}},
+                    "required": ["place"],
+                    "additionalProperties": False,
+                },
+                "output_schema": {"type": "object", "properties": {}},
+            }
+        ],
+        enabled=True,
+    )
+    AgentPluginInstallation.objects.create(
+        tenant=tenant,
+        project=project,
+        plugin=definition,
+        plugin_version=definition.version,
+        granted_capabilities=["weather.current"],
+        installed_by=user,
+    )
+    return definition
+
+
+@pytest.mark.django_db
+def test_agent_publishes_with_installed_capability_allowlist(agent_workspace):
+    user, tenant, project, model = agent_workspace
+    model.capabilities = ["chat", "tools"]
+    model.save(update_fields=["capabilities"])
+    _weather_plugin(tenant, project, user)
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agents/"
+    created = client.post(
+        url,
+        {
+            "name": "Weather agent",
+            "slug": "weather-agent",
+            "description": "Uses the weather connector",
+            "draft_config": {
+                "model_config_id": str(model.id),
+                "system_prompt": "You are a weather assistant.",
+                "tool_allowlist": [],
+                "capability_allowlist": ["weather.current"],
+                "knowledge_base_ids": [],
+                "max_iterations": 2,
+                "timeout_seconds": 20,
+                "max_tokens": 512,
+            },
+        },
+        format="json",
+    )
+    assert created.status_code == 201, created.data
+
+    published = client.post(
+        f"/api/v1/agents/{created.data['id']}/publish/", {}, format="json"
+    )
+    assert published.status_code == 201, published.data
+    assert published.data["config_snapshot"]["capability_allowlist"] == ["weather.current"]
+    assert published.data["config_snapshot"]["tool_allowlist"] == []
+
+
+@pytest.mark.django_db
+def test_agent_publish_rejects_unknown_and_high_risk_capabilities(agent_workspace):
+    user, tenant, project, model = agent_workspace
+    model.capabilities = ["chat", "tools"]
+    model.save(update_fields=["capabilities"])
+    _weather_plugin(tenant, project, user, risk="high")
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agents/"
+    for capability in ("weather.current", "missing.capability"):
+        created = client.post(
+            url,
+            {
+                "name": f"Agent {capability}",
+                "slug": f"agent-{capability.replace('.', '-')}",
+                "description": "capability boundary",
+                "draft_config": {
+                    "model_config_id": str(model.id),
+                    "system_prompt": "You are a test assistant.",
+                    "tool_allowlist": [],
+                    "capability_allowlist": [capability],
+                    "knowledge_base_ids": [],
+                    "max_iterations": 1,
+                    "timeout_seconds": 20,
+                    "max_tokens": 512,
+                },
+            },
+            format="json",
+        )
+        assert created.status_code == 201, created.data
+        published = client.post(
+            f"/api/v1/agents/{created.data['id']}/publish/", {}, format="json"
+        )
+        assert published.status_code == 400, getattr(published, "data", published.content)

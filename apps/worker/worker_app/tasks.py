@@ -1,8 +1,10 @@
 # ruff: noqa: I001
 import json
 import logging
+import re
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 from time import sleep
 
 from core.model_gateway import ModelGateway, ModelGatewayError
@@ -34,7 +36,12 @@ from core.tool_approvals import (
     expire_pending_tool_approvals,
     validate_execution_checkpoint,
 )
-from core.agent_capability_router import register_invalidation_hook
+from core.agent_capability_router import (
+    CapabilityResolutionError,
+    invoke_capability,
+    register_invalidation_hook,
+    resolve_capability,
+)
 from core.audit import record_audit_event
 from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
@@ -545,6 +552,83 @@ def _load_agent_tools(task, config):
     return offered, by_name
 
 
+def _capability_tool_name(plugin_key, capability):
+    """OpenAI function names allow letters, digits, underscore and dash only."""
+
+    base = f"{plugin_key}__{capability}"
+    normalized = re.sub(r"[^A-Za-z0-9_-]", "_", base)
+    if len(normalized) > 64:
+        normalized = normalized[:64]
+    return normalized
+
+
+def _closed_schema(schema):
+    if not isinstance(schema, dict):
+        return None
+    if schema.get("type") != "object":
+        return None
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return None
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": schema.get("required", []),
+        "additionalProperties": False,
+    }
+
+
+def _load_agent_capabilities(task, config):
+    """Resolve plugin capabilities a published agent may call.
+
+    Published agents use the same project-scoped capability resolution the chat
+    does, so an agent can only call connectors installed in its own project.
+    High-risk capabilities are rejected at publish time because the agent run
+    has no per-call approval checkpoint for them.
+    """
+
+    names = config.get("capability_allowlist", [])
+    if not isinstance(names, list) or len(names) > 32:
+        raise PermanentTaskError("Published agent capability allowlist is invalid")
+    if not names:
+        return [], {}
+    offered = []
+    by_name = {}
+    for name in names:
+        try:
+            resolved = resolve_capability(str(task.tenant_id), str(task.project_id), name)
+        except CapabilityResolutionError as exc:
+            raise PermanentTaskError(
+                f"Allowed capability {name} is no longer installed: {exc}"
+            ) from exc
+        definition = resolved.definition
+        schema = _closed_schema(definition.get("input_schema"))
+        if schema is None:
+            raise PermanentTaskError(f"Capability {name} has no callable input schema")
+        function_name = _capability_tool_name(resolved.plugin.plugin_key, name)
+        if function_name in by_name:
+            raise PermanentTaskError("Capability function names collide")
+        by_name[function_name] = SimpleNamespace(
+            kind="capability",
+            capability=name,
+            tenant_id=str(task.tenant_id),
+            project_id=str(task.project_id),
+        )
+        offered.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "description": (
+                        definition.get("description") or f"Call {name}"
+                    )[:1024],
+                    "parameters": schema,
+                },
+            }
+        )
+    return offered, by_name
+
+
 def _execute_agent_tool(task, tool, arguments, call_id):
     try:
         installation = PluginInstallation.objects.select_related("plugin").get(
@@ -711,6 +795,8 @@ def execute_agent_run(task):
                 }
             )
     offered_tools, tools_by_name = _load_agent_tools(task, config)
+    if not offered_tools and config.get("capability_allowlist"):
+        offered_tools, tools_by_name = _load_agent_capabilities(task, config)
     if offered_tools and "tools" not in model_config.capabilities:
         raise PermanentTaskError("Selected model does not declare tools capability")
     system_prompt = (
@@ -950,7 +1036,26 @@ def execute_agent_run(task):
             tool = tools_by_name[call["name"]]
             _renew_agent_lease(task)
             try:
-                result = _execute_agent_tool(task, tool, call["arguments"], call["id"])
+                if getattr(tool, "kind", "") == "capability":
+                    try:
+                        result = invoke_capability(
+                            tool.tenant_id,
+                            tool.project_id,
+                            tool.capability,
+                            call["arguments"],
+                            approved=False,
+                        )
+                    except CapabilityResolutionError as exc:
+                        result = {"ok": False, "error": str(exc), "code": exc.code}
+                    except ToolApprovalRequired:
+                        # A risk level raised after publish must fail closed;
+                        # capability approvals have no checkpoint in this run.
+                        result = {
+                            "ok": False,
+                            "error": "Capability now requires explicit approval.",
+                        }
+                else:
+                    result = _execute_agent_tool(task, tool, call["arguments"], call["id"])
             except ToolApprovalRequired as exc:
                 checkpoint = {
                     "version": 1,

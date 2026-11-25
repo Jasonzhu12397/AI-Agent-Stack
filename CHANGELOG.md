@@ -11,6 +11,9 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The Integration Hub now reads agent-plugin definitions instead of the legacy
   plugin table, so it lists the connectors chat actually has and can install,
   disable and uninstall them.
+- Published agents can allow connector capabilities by name; the worker
+  resolves them through the chat capability resolver instead of legacy plugin
+  tool rows.
 - The connector catalog now carries categories and vendors (office, finance,
   e-commerce, content, legal and more), filters by category in the hub, and
   marks unprovisioned providers as needing an endpoint instead of offering a

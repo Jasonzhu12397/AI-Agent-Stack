@@ -6,27 +6,26 @@ import {
   getAgentRuns,
   getAgents,
   getKnowledgeBases,
-  getPluginCatalog,
-  getPluginInstallations,
   getModelConfigs,
+  getProjectAgentCapabilities,
   getModelProviders,
   publishAgent,
   type AgentDraft,
   type AgentRun,
   type KnowledgeBase,
+  type InstalledAgentCapability,
   type ModelConfig,
-  type PluginTool,
 } from "../services/api";
 
 const props = defineProps<{ tenantId: string; projectId: string }>();
 const agents = ref<AgentDraft[]>([]);
 const models = ref<ModelConfig[]>([]);
 const runs = ref<AgentRun[]>([]);
-type SelectableTool = PluginTool & { plugin_name: string; plugin_key: string };
+type SelectableCapability = InstalledAgentCapability & { label: string };
 const knowledgeBases = ref<KnowledgeBase[]>([]);
-const availableTools = ref<SelectableTool[]>([]);
+const availableCapabilities = ref<SelectableCapability[]>([]);
 const selectedKnowledgeBaseIds = ref<string[]>([]);
-const selectedToolIds = ref<string[]>([]);
+const selectedCapabilityNames = ref<string[]>([]);
 const selectedAgentId = ref("");
 const selectedModelId = ref("");
 const agentName = ref("New assistant");
@@ -49,9 +48,9 @@ async function loadWorkspace(): Promise<void> {
   models.value = [];
   runs.value = [];
   knowledgeBases.value = [];
-  availableTools.value = [];
+  availableCapabilities.value = [];
   selectedKnowledgeBaseIds.value = [];
-  selectedToolIds.value = [];
+  selectedCapabilityNames.value = [];
   selectedAgentId.value = "";
   selectedModelId.value = "";
   if (!props.tenantId || !props.projectId) return;
@@ -68,28 +67,18 @@ async function loadWorkspace(): Promise<void> {
     );
     models.value = modelPages.flat().filter((model) => model.capabilities.includes("chat"));
     if (models.value.length > 0) selectedModelId.value = models.value[0].id;
-    const [basePage, catalogPage, installationPage] = await Promise.all([
+    const [basePage, capabilityPage] = await Promise.all([
       getKnowledgeBases(props.tenantId, props.projectId),
-      getPluginCatalog(props.tenantId),
-      getPluginInstallations(props.tenantId, props.projectId),
+      getProjectAgentCapabilities(props.tenantId, props.projectId),
     ]);
     knowledgeBases.value = basePage.results;
-    const installedPluginIds = new Set(
-      installationPage.results
-        .filter((installation) => installation.status === "installed")
-        .map((installation) => installation.plugin_id),
+    const lowRisk = capabilityPage.capabilities.filter(
+      (capability) => !["high", "critical"].includes(capability.risk_level),
     );
-    availableTools.value = catalogPage.results
-      .filter((plugin) => installedPluginIds.has(plugin.id) && plugin.enabled)
-      .flatMap((plugin) =>
-        plugin.tools
-          .filter((tool) => tool.enabled)
-          .map((tool) => ({
-            ...tool,
-            plugin_name: plugin.name,
-            plugin_key: plugin.plugin_key,
-          })),
-      );
+    availableCapabilities.value = lowRisk.map((capability) => ({
+      ...capability,
+      label: capability.plugin_key + " / " + capability.name,
+    }));
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load Agent Studio data.";
   }
@@ -119,9 +108,10 @@ async function createDraft(): Promise<void> {
       draft_config: {
         model_config_id: selectedModel.value.id,
         system_prompt: systemPrompt.value,
-        tool_allowlist: selectedToolIds.value,
+        tool_allowlist: [],
+        capability_allowlist: selectedCapabilityNames.value,
         knowledge_base_ids: selectedKnowledgeBaseIds.value,
-        max_iterations: selectedToolIds.value.length > 0 ? 4 : 1,
+        max_iterations: selectedCapabilityNames.value.length > 0 ? 4 : 1,
         timeout_seconds: 60,
         max_tokens: Math.min(2048, selectedModel.value.max_output_tokens),
       },
@@ -219,17 +209,17 @@ onUnmounted(() => {
             />
           </el-select>
           <el-select
-            v-model="selectedToolIds"
+            v-model="selectedCapabilityNames"
             multiple
             collapse-tags
-            placeholder="Allow installed connector tools (optional)"
+            placeholder="Allow installed connector capabilities (optional)"
             class="full-width"
           >
             <el-option
-              v-for="tool in availableTools"
-              :key="tool.id"
-              :label="tool.plugin_name + ' / ' + tool.name + ' · ' + tool.risk_level"
-              :value="tool.id"
+              v-for="capability in availableCapabilities"
+              :key="capability.installation_id + ':' + capability.name"
+              :label="capability.label + ' · ' + capability.risk_level"
+              :value="capability.name"
             />
           </el-select>
           <p class="task-note">
@@ -237,7 +227,10 @@ onUnmounted(() => {
           </p>
           <el-button
             type="primary"
-            :disabled="!selectedModel || (selectedToolIds.length > 0 && !selectedModel.capabilities.includes('tools'))"
+            :disabled="
+              !selectedModel ||
+              (selectedCapabilityNames.length > 0 && !selectedModel.capabilities.includes('tools'))
+            "
             :loading="busy"
             @click="createDraft"
           >Create draft</el-button>

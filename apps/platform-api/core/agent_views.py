@@ -9,6 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.agent_capability_router import CapabilityResolutionError, resolve_capability
 from core.agent_serializers import (
     AgentDraftSerializer,
     AgentRunSerializer,
@@ -225,10 +226,20 @@ class AgentPublishView(APIView):
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
             tool_allowlist = config.get("tool_allowlist", [])
+            capability_allowlist = config.get("capability_allowlist", [])
             knowledge_base_ids = config.get("knowledge_base_ids", [])
-            if not isinstance(tool_allowlist, list) or not isinstance(knowledge_base_ids, list):
+            if (
+                not isinstance(tool_allowlist, list)
+                or not isinstance(capability_allowlist, list)
+                or not isinstance(knowledge_base_ids, list)
+            ):
                 return legacy_error_response(
-                    "tool_allowlist and knowledge_base_ids must be arrays.",
+                    "tool_allowlist, capability_allowlist and knowledge_base_ids must be arrays.",
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
+            if tool_allowlist and capability_allowlist:
+                return legacy_error_response(
+                    "Use either tool_allowlist or capability_allowlist, not both.",
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
             if len(knowledge_base_ids) > 8:
@@ -308,6 +319,49 @@ class AgentPublishView(APIView):
                         ),
                         http_status=status.HTTP_400_BAD_REQUEST,
                     )
+            capability_names: list[str] = []
+            if capability_allowlist:
+                if len(capability_allowlist) > 32:
+                    return legacy_error_response(
+                        "capability_allowlist may contain at most 32 capabilities.",
+                        http_status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not all(
+                    isinstance(value, str) and value for value in capability_allowlist
+                ):
+                    return legacy_error_response(
+                        "capability_allowlist entries must be capability names.",
+                        http_status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if len(set(capability_allowlist)) != len(capability_allowlist):
+                    return legacy_error_response(
+                        "capability_allowlist cannot contain duplicate names.",
+                        http_status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if "tools" not in model_config.capabilities:
+                    return legacy_error_response(
+                        "Selected model does not declare tools capability.",
+                        http_status=status.HTTP_400_BAD_REQUEST,
+                    )
+                for name in capability_allowlist:
+                    try:
+                        resolved = resolve_capability(
+                            str(agent.tenant_id), str(agent.project_id), name
+                        )
+                    except CapabilityResolutionError as error:
+                        return legacy_error_response(
+                            f"{name}: {error}",
+                            http_status=status.HTTP_400_BAD_REQUEST,
+                            code=error.code,
+                        )
+                    risk = resolved.definition.get("risk_level", "low")
+                    if risk in {"high", "critical"}:
+                        return legacy_error_response(
+                            f"{name} requires per-call approval, which published "
+                            "agents do not support yet.",
+                            http_status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    capability_names.append(name)
             max_iterations = config.get("max_iterations", 4)
             timeout_seconds = config.get("timeout_seconds", 60)
             max_tokens = config.get("max_tokens", 2048)
@@ -349,6 +403,7 @@ class AgentPublishView(APIView):
                 "model_config_id": str(model_config.id),
                 "system_prompt": system_prompt,
                 "tool_allowlist": [str(value) for value in tool_ids],
+                "capability_allowlist": capability_names,
                 "knowledge_base_ids": [str(value) for value in knowledge_ids],
                 "max_iterations": max_iterations,
                 "timeout_seconds": timeout_seconds,
@@ -372,7 +427,8 @@ class AgentPublishView(APIView):
                     "agent_id": str(agent.id),
                     "version": version_number,
                     "model_config_id": snapshot["model_config_id"],
-                    "tool_count": len(snapshot["tool_allowlist"]),
+                    "tool_count": len(snapshot["tool_allowlist"])
+                    + len(snapshot["capability_allowlist"]),
                     "knowledge_base_count": len(snapshot["knowledge_base_ids"]),
                 },
             )
