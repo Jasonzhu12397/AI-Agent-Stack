@@ -27,7 +27,11 @@ def validate_sriov_device_plugin_config(value: Any) -> dict[str, Any]:
     pool_assignments: list[tuple[str, dict[str, str]]] = []
 
     for pool_name, pool in value.items():
-        if not isinstance(pool_name, str) or not re.fullmatch(r"pool[0-9]+", pool_name):
+        if (
+            not isinstance(pool_name, str)
+            or len(pool_name) > 63
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", pool_name)
+        ):
             raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_POOL_NAME_INVALID")
         if not isinstance(pool, dict):
             raise SriovDevicePluginConfigError("SRIOV_DEVICE_PLUGIN_POOL_INVALID")

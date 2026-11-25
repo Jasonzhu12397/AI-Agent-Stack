@@ -2,22 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-// Pools 0-3 belong to the network layout, so the first assignable pool is
-// pool4. A fresh SR-IOV configuration must open on that name rather than start
-// empty and later emit "pool0", which would collide with the reserved range.
-const source = readFileSync(new URL("../src/components/SriovDevicePluginEditor.vue", import.meta.url), "utf8");
+const editor = readFileSync(
+  new URL("../src/components/SriovDevicePluginEditor.vue", import.meta.url),
+  "utf8",
+);
+const fleet = readFileSync(
+  new URL("../src/components/Metal3FleetView.vue", import.meta.url),
+  "utf8",
+);
 
-test("test_sriov_pool_numbering_starts_at_four", () => {
-  const starts = source.match(/let index = \d+;/g) ?? [];
-  assert.equal(starts.length, 2);
-  for (const start of starts) assert.equal(start, "let index = 4;");
+test("test_sriov_pool_name_is_editable_in_the_ui", () => {
+  assert.match(editor, /<el-form-item label="Pool name">/);
+  assert.match(editor, /@change="renamePool"/);
+  assert.match(editor, /function renamePool/);
+  assert.match(editor, /draft\[next\] = pool/);
 });
 
-test("test_empty_configuration_opens_on_pool4", () => {
-  assert.match(source, /if \(count === 0\) addPool\(\)/);
+test("test_sriov_editor_has_no_reserved_pool4_default", () => {
+  assert.doesNotMatch(editor, /pool4/);
+  assert.doesNotMatch(editor, /let index = 4;/);
 });
 
-test("test_new_pool_is_named_pool4", () => {
-  assert.match(source, /const name = "pool" \+ index;/);
-  assert.match(source, /sriov_network_device_plugin_configmap_name: "sriov-dp-configmap-" \+ name/);
+test("test_empty_configuration_uses_the_editable_starter_pool", () => {
+  assert.match(editor, /if \(count === 0\) addPool\(\)/);
+  assert.match(editor, /const name = "pool-" \+ index;/);
+});
+
+test("test_fleet_view_does_not_preload_pool4", () => {
+  assert.doesNotMatch(fleet, /pool4/);
+  assert.match(fleet, /const sriovPools = ref<Record<string, any>>\(\{\}\);/);
 });

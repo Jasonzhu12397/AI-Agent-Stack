@@ -166,3 +166,25 @@ def test_sriov_editor_emits_immutable_updates_and_uses_unique_defaults():
     assert "@update:model-value=" in editor
     assert 'sriov-dp-configmap-" + name' in editor
     assert 'existingNames.has("mlnx_dpdk_" + suffix)' in editor
+
+
+def test_validate_sriov_config_accepts_operator_chosen_pool_names():
+    normalized = validate_sriov_device_plugin_config(
+        {
+            "pool-dpdk": _pool(["0000:2f:00.0"], configmap="sriov-pool-dpdk"),
+            "gpu-numa0": {
+                **_pool(["0000:8a:00.0"], configmap="sriov-pool-gpu"),
+                "node_selectors": {"type": "gpu"},
+            },
+        }
+    )
+
+    assert set(normalized) == {"pool-dpdk", "gpu-numa0"}
+
+
+@pytest.mark.parametrize("name", ["Pool4", "pool_4", "-pool", "pool-", ""])
+def test_validate_sriov_config_rejects_non_kubernetes_pool_names(name):
+    with pytest.raises(SriovDevicePluginConfigError, match="POOL_NAME_INVALID"):
+        validate_sriov_device_plugin_config(
+            {name: _pool(["0000:2f:00.0"], configmap="sriov-pool")}
+        )

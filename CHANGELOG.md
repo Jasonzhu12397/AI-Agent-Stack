@@ -8,6 +8,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Added
 
+- The SR-IOV device-plugin editor now exposes an editable pool name. Pool keys
+  are validated as Kubernetes-style lowercase names instead of being restricted
+  to `pool<number>`, and a new configuration no longer opens on a reserved
+  `pool4`.
 - `eph.target.agent.bootstrap`: the EPH Agent installs the Target Agent from a
   sealed `target-agent-bootstrap` Secret over the Pivot target kubeconfig, waits
   for the `target-agent` rollout, and verifies the Target cluster UID and live

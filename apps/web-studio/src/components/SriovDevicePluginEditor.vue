@@ -25,6 +25,7 @@ const props = defineProps<{ modelValue: SriovConfig; pciAddresses?: string[] }>(
 const emit = defineEmits<{ "update:modelValue": [value: SriovConfig] }>();
 const poolNames = computed(() => Object.keys(props.modelValue));
 const selectedPool = ref("");
+const poolNameDraft = ref("");
 const error = ref("");
 const selectedPoolConfig = computed(() => props.modelValue[selectedPool.value]);
 const selectedNodeSelector = computed(
@@ -52,9 +53,16 @@ function ensureSelection(): void {
 }
 watch(poolNames, ensureSelection, { immediate: true });
 
-// Numbering starts at pool4: pools 0-3 are reserved by the network layout, so a
-// fresh configuration opens on the first assignable pool instead of an empty
-// editor that later produces a colliding name.
+watch(
+  selectedPool,
+  (name) => {
+    poolNameDraft.value = name;
+  },
+  { immediate: true },
+);
+
+// A fresh configuration gets one editable starter pool. The name is only a
+// local key; the operator can rename it before saving.
 watch(
   () => poolNames.value.length,
   (count) => {
@@ -62,6 +70,40 @@ watch(
   },
   { immediate: true },
 );
+
+function updatePoolNameDraft(value: string): void {
+  poolNameDraft.value = value;
+}
+function renamePool(value: string): void {
+  const current = selectedPool.value;
+  const next = value.trim().toLowerCase();
+  if (!current) return;
+  if (next === current) {
+    poolNameDraft.value = current;
+    return;
+  }
+  if (!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(next) || next.length > 63) {
+    error.value = t("Pool name must be a lowercase Kubernetes name (letters, digits and dashes, up to 63 characters).");
+    poolNameDraft.value = current;
+    return;
+  }
+  if (props.modelValue[next]) {
+    error.value = tf("A pool named {0} already exists.", next);
+    poolNameDraft.value = current;
+    return;
+  }
+  error.value = "";
+  update((draft) => {
+    const pool = draft[current];
+    delete draft[current];
+    draft[next] = pool;
+    const configmapName = pool.sriov_network_device_plugin_configmap_name;
+    if (configmapName === "sriov-dp-configmap-" + current) {
+      pool.sriov_network_device_plugin_configmap_name = "sriov-dp-configmap-" + next;
+    }
+  });
+  selectedPool.value = next;
+}
 
 function updateConfigMapName(value: string): void {
   const name = selectedPool.value;
@@ -99,9 +141,9 @@ function updateResourceField(
   });
 }
 function addPool(): void {
-  let index = 4;
-  while (props.modelValue["pool" + index]) index += 1;
-  const name = "pool" + index;
+  let index = 1;
+  while (props.modelValue["pool-" + index]) index += 1;
+  const name = "pool-" + index;
   update((draft) => {
     draft[name] = {
       node_selectors: { type: "high-throughput" },
@@ -115,9 +157,9 @@ function addPool(): void {
 function duplicatePool(): void {
   const source = selectedPool.value;
   if (!source) return;
-  let index = 4;
-  while (props.modelValue["pool" + index]) index += 1;
-  const name = "pool" + index;
+  let index = 1;
+  while (props.modelValue["pool-" + index]) index += 1;
+  const name = "pool-" + index;
   update((draft) => { draft[name] = JSON.parse(JSON.stringify(draft[source])) as SriovPool; });
   selectedPool.value = name;
 }
@@ -166,6 +208,12 @@ function updateList(index: number, field: "vendors" | "drivers", value: string):
 }
 function validate(): boolean {
   error.value = "";
+  for (const name of Object.keys(props.modelValue)) {
+    if (!/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(name) || name.length > 63) {
+      error.value = t("Pool name must be a lowercase Kubernetes name (letters, digits and dashes, up to 63 characters).");
+      return false;
+    }
+  }
   const resources = Object.values(props.modelValue).flatMap((pool) => pool.sriov_network_device_plugin_configmap_data.resourceList);
   if (!Object.keys(props.modelValue).length || !resources.length) {
     error.value = t("Add at least one resource pool and one SR-IOV resource.");
@@ -236,11 +284,19 @@ defineExpose({ validate });
       </aside>
       <div v-if="selectedPool" class="pool-editor">
         <div class="pool-title">
-          <strong>{{ selectedPool }}</strong>
+          <strong>Pool settings</strong>
           <el-button text type="danger" size="small" @click="removePool(selectedPool)">Remove pool</el-button>
         </div>
         <el-form label-position="top" size="small">
           <div class="form-grid">
+            <el-form-item label="Pool name">
+              <el-input
+                :model-value="poolNameDraft"
+                placeholder="e.g. pool-dpdk"
+                @update:model-value="updatePoolNameDraft"
+                @change="renamePool"
+              />
+            </el-form-item>
             <el-form-item label="Node selector key">
               <el-input
                 :model-value="selectedNodeSelector[0]"

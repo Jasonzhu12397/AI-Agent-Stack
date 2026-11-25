@@ -150,14 +150,7 @@ const selectedSriovDeploymentId = ref("");
 const sriovSaving = ref(false);
 const sriovSaveMessage = ref("");
 const sriovEditor = ref<{ validate: () => boolean } | null>(null);
-const sriovPools = ref<Record<string, any>>({
-  pool4: {
-    node_selectors: { type: "high-throughput" },
-    tolerations: [{ effect: "NoSchedule", key: "high-throughput", operator: "Equal", value: "true" }],
-    sriov_network_device_plugin_configmap_name: "sriov-dp-configmap",
-    sriov_network_device_plugin_configmap_data: { resourceList: [] },
-  },
-});
+const sriovPools = ref<Record<string, any>>({});
 let refreshTimer: number | undefined;
 let refreshGeneration = 0;
 
@@ -438,14 +431,7 @@ function loadSriovConfig(deploymentId: string): void {
     : null;
   sriovPools.value = configured && typeof configured === "object" && !Array.isArray(configured)
     ? JSON.parse(JSON.stringify(configured)) as Record<string, any>
-    : {
-        pool4: {
-          node_selectors: { type: "high-throughput" },
-          tolerations: [{ effect: "NoSchedule", key: "high-throughput", operator: "Equal", value: "true" }],
-          sriov_network_device_plugin_configmap_name: "sriov-dp-configmap",
-          sriov_network_device_plugin_configmap_data: { resourceList: [] },
-        },
-      };
+    : {};
   sriovSaveMessage.value = "";
 }
 
