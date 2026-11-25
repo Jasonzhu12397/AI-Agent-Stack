@@ -1229,4 +1229,7 @@ export const zhCN: Record<string, string> = {
     "此处仅只读展示连接器定义与安装记录；安装、轮换凭证与运行请前往集成中心。命令审批仍绑定计划哈希。",
   "No capability is installed in this project.": "该项目尚未安装任何能力。",
   "Select an installed capability": "选择一个已安装能力",
+  "New project": "新建项目",
+  "Creating": "创建中…",
+  "Project created": "项目已创建",
 };

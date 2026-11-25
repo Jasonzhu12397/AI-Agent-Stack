@@ -6,6 +6,7 @@
  */
 import { ref } from "vue";
 import {
+  createProject,
   getChatThreads,
   getProjects,
   getTenants,
@@ -114,6 +115,31 @@ export async function selectProject(projectId: string): Promise<void> {
   activeThreadId.value = "";
   persist();
   await refreshThreads();
+}
+
+function projectSlug(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return slug || `project-${Date.now().toString(36)}`;
+}
+
+export async function createWorkspaceProject(name: string): Promise<Project> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Project name is required");
+  if (!activeTenantId.value) throw new Error("Choose a tenant first");
+  const existing = new Set(projects.value.map((project) => project.slug));
+  let slug = projectSlug(trimmed);
+  if (existing.has(slug)) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
+  const project = await createProject(activeTenantId.value, trimmed, slug);
+  projects.value = [...projects.value, project];
+  activeProjectId.value = project.id;
+  activeThreadId.value = "";
+  persist();
+  await refreshThreads();
+  return project;
 }
 
 export function requestNewChat(mode: "chat" | "task" = "chat"): void {

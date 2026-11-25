@@ -29,6 +29,7 @@ import {
   activeProjectId,
   activeTenantId,
   activeThreadId,
+  createWorkspaceProject,
   newChatMode,
   newChatSignal,
   projects,
@@ -90,6 +91,9 @@ const pluginOpen = ref(false);
 const envOpen = ref(false);
 const effortOpen = ref(false);
 const projectOpen = ref(false);
+const newProjectName = ref("");
+const creatingProject = ref(false);
+const projectError = ref("");
 const goalOpen = ref(false);
 const goalDraft = ref("");
 const knowledgeOpen = ref(false);
@@ -235,6 +239,25 @@ async function pickProject(projectId: string): Promise<void> {
   await selectProject(projectId);
   await loadContext();
   await loadThread(activeThreadId.value);
+}
+
+async function submitProject(): Promise<void> {
+  const name = newProjectName.value.trim();
+  if (!name || creatingProject.value) return;
+  creatingProject.value = true;
+  projectError.value = "";
+  try {
+    await createWorkspaceProject(name);
+    newProjectName.value = "";
+    projectOpen.value = false;
+    await loadContext();
+    await loadThread("");
+    notice.value = t("Project created");
+  } catch (cause) {
+    projectError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    creatingProject.value = false;
+  }
 }
 
 async function newConversation(mode: "chat" | "task" = "chat"): Promise<void> {
@@ -619,10 +642,11 @@ onMounted(async () => {
           <el-popover v-model:visible="projectOpen" placement="top-start" :width="220" trigger="click">
             <template #reference>
               <button class="chat-chip" type="button">
-                ▤ {{ t("Project") }} · {{ projectName || t("none") }}
+                ▤ {{ t("Project") }}
               </button>
             </template>
             <div class="chat-menu">
+              <p class="chat-menu-label">{{ t("Project") }}</p>
               <button
                 v-for="project in projects"
                 :key="project.id"
@@ -632,6 +656,23 @@ onMounted(async () => {
               >
                 {{ project.name }}
               </button>
+              <p class="chat-menu-label">{{ t("New project") }}</p>
+              <input
+                v-model="newProjectName"
+                class="chat-menu-input"
+                type="text"
+                :placeholder="t('Project name')"
+                maxlength="120"
+                @keydown.enter.prevent="submitProject"
+              />
+              <button
+                type="button"
+                :disabled="!newProjectName.trim() || creatingProject"
+                @click="submitProject"
+              >
+                {{ creatingProject ? t("Creating") : t("Create") }}
+              </button>
+              <p v-if="projectError" class="chat-menu-empty">{{ projectError }}</p>
             </div>
           </el-popover>
 
@@ -882,6 +923,9 @@ onMounted(async () => {
 .chat-menu-hint { margin: 4px 0 0; color: #8a9aa6; font-size: 10.5px; line-height: 1.5; }
 .chat-menu-empty { margin: 0; padding: 6px 9px; color: #93a3af; font-size: 11px; }
 .chat-menu-muted { color: #8a9aa6; }
+.chat-menu-input { width: 100%; box-sizing: border-box; margin: 2px 0; padding: 7px 9px; border: 1px solid #e0e9f1; border-radius: 7px; background: #fff; color: #22303a; font: inherit; font-size: 11.5px; }
+.chat-menu-input:focus { outline: none; border-color: #0a7f58; }
+.chat-menu button:disabled { color: #a9b6c0; cursor: not-allowed; background: transparent; }
 .chat-detail { display: grid; gap: 18px; }
 .chat-detail h4 { margin: 0 0 6px; font-size: 12px; color: #16222b; }
 .chat-detail p { margin: 2px 0; color: #4c5f6b; font-size: 12px; }
