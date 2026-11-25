@@ -27,6 +27,10 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ### Fixed
 
+- The landing overview collapsed its module workspace to a clipped heading:
+  the workspace was a flex child of a 100dvh shell that also held the hero and
+  platform status. The overview page now grows and scrolls as one column, so
+  the live metrics and task panels are visible.
 - A worker upgrade that failed after `kubectl drain` left the node cordoned. The
   executor now records the drain as a possible mutation before the command
   returns, and on any later failure runs `kubectl uncordon` and reports the

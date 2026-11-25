@@ -80,6 +80,12 @@ body.app-shell #app { display: flex; flex-direction: column; }
 .layout-main-fixed { overflow: hidden; }
 .shell { display: flex; flex-direction: column; flex: 1; min-height: 0; width: min(1560px, calc(100% - 40px)); margin: 0 auto; }
 .workspace { flex: 1; min-height: 0; overflow-y: auto; }
+/* The landing overview puts the hero, the module workspace and the platform
+ * status on one page. Letting the workspace flex inside a 100dvh shell
+ * collapsed it to a clipped heading, so on this page the column grows and the
+ * surrounding layout-main scrolls the whole page. */
+.shell-overview { flex: 0 0 auto; }
+.shell-overview .workspace { flex: 0 0 auto; overflow: visible; }
 /* Workbench: no page padding, no card chrome, the canvas is the page. */
 .workspace-workbench { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
 .workspace-workbench .workspace-grid { flex: 1; min-height: 0; align-items: stretch; gap: 0; }

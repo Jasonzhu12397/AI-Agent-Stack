@@ -185,7 +185,10 @@ onUnmounted(() => {
         @new-task="startConversation('task')"
       />
       <div class="layout-main" :class="{ 'layout-main-fixed': isChatSection }">
-    <main class="shell" :class="{ 'shell-wide': isWideSection }">
+    <main
+      class="shell"
+      :class="{ 'shell-wide': isWideSection, 'shell-overview': isOverview }"
+    >
       <header v-if="!isChatSection" class="topbar">
         <router-link class="brand" to="/">
           <span class="brand-mark">A</span>
