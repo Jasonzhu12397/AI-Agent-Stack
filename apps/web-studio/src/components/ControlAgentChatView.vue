@@ -47,11 +47,15 @@ function useSuggestion(prompt: string): void {
 }
 
 const activeThread = computed(() => threads.value.find((item) => item.id === activeThreadId.value) ?? null);
-const canSend = computed(() => draft.value.trim().length > 0 && !sending.value);
+const canSend = computed(
+  () => draft.value.trim().length > 0 && !sending.value && usableModels.value.length > 0,
+);
 
 const errorCode = ref("");
 const usableModels = computed(() =>
-  (context.value?.models ?? []).filter((model) => model.ready !== false),
+  (context.value?.models ?? []).filter(
+    (model) => model.ready !== false && model.provider_type !== "fake",
+  ),
 );
 const needsModelSetup = computed(
   () => errorCode.value === "MODEL_NOT_CONFIGURED" || usableModels.value.length === 0,
@@ -158,10 +162,8 @@ async function loadContext(): Promise<void> {
       // The API recommends the member's linked account first, a configured
       // shared pool next, and the local echo model last, so a pasted key is
       // used by the next conversation instead of being shadowed by the demo.
-      const recommended = context.value.models.find(
-        (model) => model.recommended && model.ready !== false,
-      );
-      selectedModelId.value = (recommended ?? context.value.models[0]).id;
+      const recommended = usableModels.value.find((model) => model.recommended);
+      selectedModelId.value = (recommended ?? usableModels.value[0])?.id ?? "";
     }
   } catch (cause) {
     if (isWorkspaceGone(cause)) {
@@ -596,9 +598,9 @@ function fallbackNotice(message: ChatMessage): string {
           </template>
 
           <template v-else>
-            <p v-if="!(context?.models ?? []).length" class="sheet-empty">{{ t("No model is available yet.") }}</p>
+            <p v-if="!usableModels.length" class="sheet-empty">{{ t("No model is available yet.") }}</p>
             <button
-              v-for="model in context?.models ?? []"
+              v-for="model in usableModels"
               :key="model.id"
               type="button"
               class="sheet-row"

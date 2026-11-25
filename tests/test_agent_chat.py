@@ -230,7 +230,7 @@ def test_context_reports_whether_a_plugin_still_needs_authorization(chat_workspa
 
 
 @pytest.mark.django_db
-def test_turn_falls_back_to_ready_model_when_selected_provider_rejects_key(
+def test_turn_falls_back_to_another_real_model_when_selected_key_is_rejected(
     chat_workspace, monkeypatch
 ):
     user, tenant, project, fake_model, _installation = chat_workspace
@@ -247,6 +247,22 @@ def test_turn_falls_back_to_ready_model_when_selected_provider_rejects_key(
         provider=bad_provider,
         model_name="gpt-5.6",
         display_name="GPT-5.6",
+        capabilities=["chat"],
+        max_output_tokens=1024,
+    )
+    backup_provider = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="Backup OpenAI",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        auth_mode=ModelProvider.AuthMode.TENANT_SECRET,
+        base_url="https://backup.example.com/v1",
+        credential_ref="env:BACKUP_OPENAI_KEY",
+    )
+    ModelConfig.objects.create(
+        provider=backup_provider,
+        model_name="gpt-5.6-backup",
+        display_name="GPT-5.6 Backup",
         capabilities=["chat"],
         max_output_tokens=1024,
     )
@@ -274,7 +290,7 @@ def test_turn_falls_back_to_ready_model_when_selected_provider_rejects_key(
     assert response.status_code == 201, response.content
     body = response.json()
     assert body["assistant"]["content"] == "Fallback answered."
-    assert body["assistant"]["usage"]["fallback_provider"] == "Chat fake provider"
+    assert body["assistant"]["usage"]["fallback_provider"] == "Backup OpenAI"
     assert body["assistant"]["usage"]["fallback_reason"] == "MODEL_CREDENTIAL_REJECTED"
 
 

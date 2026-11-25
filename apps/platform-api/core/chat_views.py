@@ -682,8 +682,10 @@ def _fallback_candidates(tenant, user, exclude_model_id):
     for model in queryset:
         provider = model.provider
         if provider.provider_type == ModelProvider.ProviderType.FAKE:
-            rank = 2
-        elif provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
+            # A rejected real key must surface as a credential error, not be
+            # papered over by the local demo's canned "Demo model" sentence.
+            continue
+        if provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
             if provider_accounts.active_link(user, provider) is None:
                 continue
             rank = 0
@@ -692,7 +694,7 @@ def _fallback_candidates(tenant, user, exclude_model_id):
                 continue
             rank = 1
         else:
-            continue
+            rank = 2
         ranked.append((rank, model))
     ranked.sort(key=lambda item: (item[0], item[1].provider.name, item[1].model_name))
     return [model for _rank, model in ranked]
