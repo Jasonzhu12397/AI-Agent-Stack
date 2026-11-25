@@ -236,6 +236,9 @@ def test_reservation_is_idempotent_and_counts_while_live(member, settings):
 def test_a_settled_account_call_cannot_be_replayed(member):
     user, tenant, _ = member
     provider = _account_provider(tenant, user)
+    provider_accounts.link_account(
+        user=user, provider=provider, credential_ref="env:REPLAY_KEY"
+    )
     usage = provider_accounts.reserve_account_tokens(
         user=user, provider=provider, requested_tokens=10, idempotency_key="once"
     )
@@ -399,3 +402,53 @@ def test_verification_rejects_a_key_that_can_list_models_but_not_chat(member, mo
         provider_accounts.verify_account_credential(provider, "sk-restricted")
     assert raised.value.code == "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED"
     assert "chat completion" in str(raised.value)
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(BYO_FREE_DAILY_TOKENS=50000)
+def test_concurrent_reservations_cannot_overdraw_the_daily_allowance(member):
+    """Two simultaneous calls must not both spend the same remainder.
+
+    The link row serializes the check-and-reserve step; a race here would let a
+    50k allowance hand out 80k when two 40k calls interleave.
+    """
+
+    import threading
+
+    from django.db import connection, connections
+
+    if connection.vendor != "postgresql":
+        pytest.skip("row locking semantics are verified on PostgreSQL")
+
+    user, tenant, _client = member
+    provider = _account_provider(tenant, user)
+    provider_accounts.link_account(
+        user=user, provider=provider, credential_ref="env:CONCURRENT_KEY"
+    )
+    results = []
+    barrier = threading.Barrier(2)
+
+    def reserve(key):
+        try:
+            barrier.wait(timeout=10)
+            provider_accounts.reserve_account_tokens(
+                user=user,
+                provider=provider,
+                requested_tokens=40000,
+                idempotency_key=key,
+            )
+            results.append("reserved")
+        except ProviderAccountError as exc:
+            results.append(exc.code)
+        finally:
+            connections.close_all()
+
+    threads = [
+        threading.Thread(target=reserve, args=(f"concurrent-{index}",))
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert sorted(results) == ["PROVIDER_FREE_QUOTA_EXCEEDED", "reserved"]

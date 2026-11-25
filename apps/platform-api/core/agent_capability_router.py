@@ -463,7 +463,7 @@ def invoke_capability(
             CAPABILITY_INVOCATION_FAILED, "Capability arguments are invalid."
         ) from exc
 
-    if risk_level in {"high", "critical"} and not approved:
+    if risk_level in {"high", "critical", "unclassified"} and not approved:
         _record_invocation(
             installation,
             capability_name,

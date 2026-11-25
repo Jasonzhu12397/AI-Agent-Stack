@@ -166,7 +166,9 @@ def _auth_headers(installation: Any) -> tuple[dict[str, str], tuple[str, str] | 
     ref = getattr(installation, "credential_ref", "") or ""
     if not ref:
         return headers, query
-    credential = plugin_credentials.resolve(ref)
+    credential = plugin_credentials.resolve(
+        ref, tenant_id=getattr(installation, "tenant_id", None)
+    )
     if not isinstance(credential, dict):
         raise CredentialInvalidShapeError("Credential resolver returned an invalid credential.")
     kind = credential.get("type")
@@ -282,8 +284,8 @@ def discover(installation: Any) -> list[dict[str, Any]]:
 
         description = str(tool.get("description", ""))[:_MAX_DESCRIPTION_LENGTH]
         risk_level = risk_levels.get(remote_name, "low")
-        if risk_level not in {"low", "medium", "high", "critical"}:
-            risk_level = "low"
+        if risk_level not in {"unclassified", "low", "medium", "high", "critical"}:
+            risk_level = "unclassified"
         capabilities.append(
             {
                 "name": local_name,

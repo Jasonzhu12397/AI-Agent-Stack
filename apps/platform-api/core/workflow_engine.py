@@ -502,7 +502,7 @@ def validate_model_references(graph, tenant, project):
                     "A workflow tool node references a capability that is not "
                     "installed in this project: " + str(exc)
                 ) from exc
-            if resolved.definition.get("risk_level") in {"high", "critical"}:
+            if resolved.definition.get("risk_level") in {"high", "critical", "unclassified"}:
                 raise WorkflowValidationError(
                     "High-risk workflow capabilities require a human approval "
                     "node and cannot execute directly."

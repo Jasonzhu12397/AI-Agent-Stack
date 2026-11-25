@@ -20,6 +20,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from contextvars import ContextVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -43,6 +44,11 @@ _VAULT_LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 Provider = Callable[[str], dict[str, str]]
 
 _PROVIDERS: dict[str, Provider] = {}
+#: Tenant of the installation whose credential is being resolved. Providers
+#: that store tenant-scoped secrets read this instead of trusting a bare UUID.
+_CREDENTIAL_TENANT: ContextVar[str | None] = ContextVar(
+    "credential_tenant_id", default=None
+)
 
 _WHITESPACE = re.compile(r"\s")
 _SCHEME = re.compile(r"[a-z][a-z0-9+.-]*")
@@ -349,8 +355,19 @@ def _vault_provider(reference: str) -> dict[str, str]:
     )
 
 
-def resolve(credential_ref: str) -> dict[str, str]:
-    """Resolve a credential reference URI to a credential contract dict."""
+def current_tenant_id() -> str | None:
+    """Tenant bound to the in-flight credential resolution, if any."""
+
+    return _CREDENTIAL_TENANT.get()
+
+
+def resolve(credential_ref: str, *, tenant_id: str | None = None) -> dict[str, str]:
+    """Resolve a credential reference URI to a credential contract dict.
+
+    Callers that resolve a tenant-scoped credential must pass ``tenant_id``.
+    The provider then rejects a reference whose row belongs to another tenant,
+    so possessing a UUID alone is not enough to read it.
+    """
 
     parsed = _parse_reference(credential_ref)
     provider = _PROVIDERS.get(parsed.scheme)
@@ -358,7 +375,11 @@ def resolve(credential_ref: str) -> dict[str, str]:
         raise CredentialProviderUnsupportedError(
             f"No credential provider is registered for scheme '{parsed.scheme}'."
         )
-    return provider(credential_ref)
+    token = _CREDENTIAL_TENANT.set(str(tenant_id) if tenant_id is not None else None)
+    try:
+        return provider(credential_ref)
+    finally:
+        _CREDENTIAL_TENANT.reset(token)
 
 
 def validate_reference(reference: str) -> str:

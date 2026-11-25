@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 CAPABILITY_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
-RISK_LEVELS = {"low", "medium", "high", "critical"}
+RISK_LEVELS = {"unclassified", "low", "medium", "high", "critical"}
 MAX_CAPABILITIES = 32
 MAX_DESCRIPTION_LENGTH = 1000
 MAX_MANIFEST_BYTES = 32768
@@ -137,7 +137,9 @@ def validate_manifest(manifest: Any, protocol: str, endpoint_url: str | None = N
 
         risk_level = entry.get("risk_level", "low")
         if risk_level not in RISK_LEVELS:
-            return "Capability risk_level must be low, medium, high or critical."
+            return (
+                "Capability risk_level must be unclassified, low, medium, high or critical."
+            )
 
         timeout_seconds = entry.get("timeout_seconds", 30)
         if (

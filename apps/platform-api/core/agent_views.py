@@ -308,7 +308,7 @@ class AgentPublishView(APIView):
                             code=error.code,
                         )
                     risk = resolved.definition.get("risk_level", "low")
-                    if risk in {"high", "critical"}:
+                    if risk in {"high", "critical", "unclassified"}:
                         return legacy_error_response(
                             f"{name} requires per-call approval, which published "
                             "agents do not support yet.",

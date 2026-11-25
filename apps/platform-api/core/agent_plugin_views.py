@@ -5,6 +5,7 @@ import time
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -36,6 +37,7 @@ from core.plugin_credentials import (
 from core.tool_router import ToolApprovalRequired, ToolExecutionError
 from core.models import (
     AgentCapabilityInvocation,
+    AgentPluginCredential,
     AgentPluginDefinition,
     AgentPluginInstallation,
     Project,
@@ -227,7 +229,7 @@ def _definition_data(plugin):
     }
 
 
-def _credential_reference_error(reference: str) -> tuple[str, str] | None:
+def _credential_reference_error(reference: str, tenant=None) -> tuple[str, str] | None:
     """Validate an installation credential reference against one authority.
 
     The resolver owns the syntax; the storage column owns the length. A reference
@@ -250,6 +252,21 @@ def _credential_reference_error(reference: str) -> tuple[str, str] | None:
             f"No credential provider is registered for scheme '{scheme}'.",
             CredentialProviderUnsupportedError.code,
         )
+    if scheme == "plugin":
+        # A sealed credential is tenant-owned. Knowing its UUID is not an
+        # authorization to bind it into another tenant's installation.
+        credential_id = reference[len(plugin_studio.CREDENTIAL_PREFIX) :]
+        try:
+            owned = AgentPluginCredential.objects.filter(
+                pk=credential_id, tenant=tenant
+            ).exists()
+        except (ValidationError, ValueError):
+            owned = False
+        if not owned:
+            return (
+                "Plugin credential is not available in this workspace.",
+                "CREDENTIAL_ACCESS_DENIED",
+            )
     return None
 
 
@@ -445,6 +462,16 @@ def _studio_fingerprint(manifest: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _credential_fingerprint(contract: dict) -> str:
+    """Stable hash of the credential contract, never the secret itself."""
+
+    import hashlib
+    import json
+
+    encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _next_version(previous: str) -> str:
     match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", previous or "")
     if not match:
@@ -539,6 +566,11 @@ class AgentPluginStudioPublishView(APIView):
         selected = list(dict.fromkeys(selected))
         manifest = _studio_manifest_subset(discovered["manifest"], selected)
         manifest["studio"]["auth_mode"] = discovered["credential_kind"]
+        credential_fingerprint = _credential_fingerprint(discovered["contract"])
+        # The hash identifies the credential version without putting the secret
+        # in the manifest. Rotation can therefore happen independently of the
+        # schema version.
+        manifest["studio"]["credential_fingerprint"] = credential_fingerprint
         manifest["studio"]["schema_fingerprint"] = _studio_fingerprint(manifest)
         if len(str(manifest).encode("utf-8")) > agent_plugin_manifest.MAX_MANIFEST_BYTES:
             return legacy_error_response(
@@ -570,8 +602,37 @@ class AgentPluginStudioPublishView(APIView):
             .first()
         )
         unchanged = latest is not None and _studio_fingerprint(latest.manifest or {}) == fingerprint
+        credential_rotated = False
         if unchanged:
             plugin = latest
+            previous_credential = (latest.manifest or {}).get("studio", {}).get(
+                "credential_fingerprint"
+            )
+            if previous_credential != credential_fingerprint:
+                # Schema is stable but the member supplied a new secret or auth
+                # mode. Rotate the sealed credential in place; do not fork a new
+                # plugin version just because a key changed.
+                updated_manifest = dict(latest.manifest or {})
+                updated_studio = dict(updated_manifest.get("studio") or {})
+                updated_studio["auth_mode"] = discovered["credential_kind"]
+                updated_studio["credential_fingerprint"] = credential_fingerprint
+                updated_manifest["studio"] = updated_studio
+                try:
+                    with transaction.atomic():
+                        credential_ref = plugin_studio.seal_credential(
+                            tenant, request.user, name, discovered["contract"]
+                        )
+                        latest.credential_ref = credential_ref
+                        latest.auth_required = bool(credential_ref)
+                        latest.manifest = updated_manifest
+                        latest.save(
+                            update_fields=["credential_ref", "auth_required", "manifest"]
+                        )
+                except IntegrityError:
+                    return legacy_error_response(
+                        "The credential could not be rotated.", http_status=409
+                    )
+                credential_rotated = True
         else:
             requested_version = data.get("version")
             if requested_version is not None and (
@@ -587,11 +648,13 @@ class AgentPluginStudioPublishView(APIView):
                 tenant=tenant, plugin_key=plugin_key, version=version
             ).exists():
                 version = _next_version(version)
-            credential_ref = plugin_studio.seal_credential(
-                tenant, request.user, name, discovered["contract"]
-            )
             try:
+                # Seal and create in one transaction: a 409 must not leave a
+                # credential row behind that no plugin or installation owns.
                 with transaction.atomic():
+                    credential_ref = plugin_studio.seal_credential(
+                        tenant, request.user, name, discovered["contract"]
+                    )
                     plugin = AgentPluginDefinition.objects.create(
                         tenant=tenant,
                         created_by=request.user,
@@ -627,6 +690,7 @@ class AgentPluginStudioPublishView(APIView):
                     "protocol": plugin.protocol,
                     "capabilities": len(selected),
                     "fingerprint": fingerprint,
+                    "credential_rotated": credential_rotated,
                 },
             )
 
@@ -855,7 +919,7 @@ class AgentPluginInstallationListCreateView(APIView):
             # published, so installation only binds the reference.
             credential_ref = plugin.credential_ref
         if credential_ref:
-            failure = _credential_reference_error(credential_ref)
+            failure = _credential_reference_error(credential_ref, tenant)
             if failure is not None:
                 detail, code = failure
                 return legacy_error_response(detail, http_status=400, code=code)
@@ -1160,7 +1224,7 @@ class AgentPluginCredentialRotateView(APIView):
 
         credential_ref = request.data.get("credential_ref", "")
         failure = (
-            _credential_reference_error(credential_ref)
+            _credential_reference_error(credential_ref, installation.tenant)
             if isinstance(credential_ref, str) and credential_ref
             else (
                 "credential_ref must be a valid secret reference, not a credential value.",
@@ -1172,7 +1236,7 @@ class AgentPluginCredentialRotateView(APIView):
             return legacy_error_response(detail, http_status=400, code=code)
         scheme = validate_reference(credential_ref)
         try:
-            resolve(credential_ref)
+            resolve(credential_ref, tenant_id=installation.tenant_id)
         except CredentialError as error:
             # The provider's own code is surfaced: a missing variable and an
             # unconfigured secret store are different operator actions, and the

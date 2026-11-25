@@ -726,6 +726,27 @@ def reserve_account_tokens(*, user, provider, requested_tokens: int, idempotency
         )
     _assert_usage_key(idempotency_key)
     now = timezone.now()
+    # Every reservation for this member and provider must serialize on one
+    # row. The old code locked the Usage row keyed by idempotency_key, so two
+    # different requests locked different rows and could both spend the same
+    # remainder. The active link is unique per member/provider and is the
+    # shared quota row that makes the read-check-write atomic.
+    link = (
+        ProviderAccountLink.objects.select_for_update()
+        .filter(
+            user=user,
+            provider=provider,
+            status=ProviderAccountLink.Status.LINKED,
+        )
+        .order_by("-linked_at")
+        .first()
+    )
+    if link is None:
+        raise ProviderAccountError(
+            "PROVIDER_ACCOUNT_NOT_LINKED",
+            "Link your own account on this platform before reserving its allowance.",
+            http_status=403,
+        )
     usage, created = ProviderAccountUsage.objects.select_for_update().get_or_create(
         user=user,
         provider=provider,

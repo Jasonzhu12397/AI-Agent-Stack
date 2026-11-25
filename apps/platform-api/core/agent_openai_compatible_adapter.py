@@ -91,7 +91,9 @@ def _auth(installation: Any) -> tuple[dict[str, str], tuple[str, str] | None]:
     ref = getattr(installation, "credential_ref", "") or ""
     if not ref:
         return headers, query
-    credential = plugin_credentials.resolve(ref)
+    credential = plugin_credentials.resolve(
+        ref, tenant_id=getattr(installation, "tenant_id", None)
+    )
     if not isinstance(credential, dict):
         raise CredentialInvalidShapeError("Credential resolver returned an invalid credential.")
     kind = credential.get("type")

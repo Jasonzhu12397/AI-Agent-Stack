@@ -271,7 +271,7 @@ class ToolRouter:
         if not required.issubset(granted) or not required.issubset(supplied):
             raise ToolExecutionError("Required connector permissions have not been granted.")
 
-        if tool.risk_level in {"high", "critical"} and not approved:
+        if tool.risk_level in {"high", "critical", "unclassified"} and not approved:
             raise ToolApprovalRequired("This tool requires explicit approval before execution.")
         if connection is not None:
             if connection.installation_id != installation.id or connection.status != "healthy":

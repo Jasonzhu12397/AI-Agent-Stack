@@ -727,8 +727,15 @@ def discover_mcp(*, endpoint_url: str, contract: dict[str, Any]) -> dict[str, An
                 "name": local_name,
                 "description": str(tool.get("description", ""))[:1000],
                 "input_schema": schema,
-                "output_schema": _response_text_schema(),
-                "risk_level": "low",
+                "output_schema": _closed_object_schema(
+                    tool.get("outputSchema") or tool.get("output_schema")
+                )
+                or _response_text_schema(),
+                # A remote tool definition cannot prove whether it only reads.
+                # Discovery therefore grants no execution authority: the tool
+                # stays unclassified until an administrator reviews it.
+                "risk_level": "unclassified",
+                "review_required": True,
                 "timeout_seconds": 30,
                 "source": "discovered",
                 "remote_name": remote_name,
@@ -752,10 +759,11 @@ def discover_mcp(*, endpoint_url: str, contract: dict[str, Any]) -> dict[str, An
             },
         },
         "permission_policy": {
-            "default": "read_only",
-            "approval_required": [],
+            "default": "deny",
+            "approval_required": discovered_names,
             "blocked_methods": [],
-            "max_risk": "low",
+            "max_risk": "unclassified",
+            "review_required": True,
         },
         "studio": {
             "plugin_type": "mcp",
@@ -903,6 +911,12 @@ def _plugin_credential_provider(reference: str) -> dict[str, str]:
     credential = AgentPluginCredential.objects.filter(pk=credential_id).first()
     if credential is None:
         raise plugin_credentials.CredentialNotFoundError("Plugin credential was not found.")
+    tenant_id = plugin_credentials.current_tenant_id()
+    if tenant_id is not None and str(credential.tenant_id) != str(tenant_id):
+        # A valid UUID from another tenant must look inaccessible, not resolved.
+        raise plugin_credentials.CredentialAccessDeniedError(
+            "Plugin credential belongs to another workspace."
+        )
     plaintext = open_sealed(credential.sealed_value, CREDENTIAL_SCOPE)
     if not plaintext:
         raise plugin_credentials.CredentialNotFoundError("Plugin credential could not be read.")

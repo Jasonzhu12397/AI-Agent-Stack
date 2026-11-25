@@ -333,3 +333,108 @@ def test_pasted_openapi_document_generates_capabilities_without_fetch(
     names = [entry["name"] for entry in response.data["capabilities"]]
     assert "getpet" in names
     assert "deletepet" not in names
+
+
+def test_credential_rotation_does_not_fork_the_schema_version(studio_workspace, monkeypatch):
+    _user, tenant, project, client = studio_workspace
+    payload = {
+        "plugin_type": "openapi",
+        "base_url": "https://pets.example.com",
+        "auth_type": "bearer",
+        "credential": "old-token",
+        "plugin_key": "rotate-tools",
+        "name": "Rotate tools",
+        "project_id": str(project.id),
+        "selected_capabilities": ["get_pets"],
+    }
+    discovered = _discovered_contract()
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda body: discovered)
+    first = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/", payload, format="json"
+    )
+    assert first.status_code == 201, first.data
+    definition = AgentPluginDefinition.objects.get(tenant=tenant, plugin_key="rotate-tools")
+    old_ref = definition.credential_ref
+
+    rotated = copy.deepcopy(discovered)
+    rotated["contract"] = {"type": "bearer", "token": "new-token"}
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda body: rotated)
+    second = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/", payload, format="json"
+    )
+    assert second.status_code == 200, second.data
+    assert second.data["changed"] is False
+    assert second.data["version"] == "1.0.0"
+    definition.refresh_from_db()
+    assert definition.credential_ref != old_ref
+    assert resolve(definition.credential_ref, tenant_id=tenant.id) == {
+        "type": "bearer",
+        "token": "new-token",
+    }
+
+
+def test_failed_publish_rolls_back_the_sealed_credential(studio_workspace, monkeypatch):
+    from core.models import AgentPluginCredential
+
+    _user, tenant, project, client = studio_workspace
+    discovered = _discovered_contract()
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda body: discovered)
+
+    def explode(*args, **kwargs):
+        from django.db import IntegrityError
+
+        raise IntegrityError("duplicate")
+
+    monkeypatch.setattr(AgentPluginDefinition.objects, "create", explode)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/",
+        {
+            "plugin_type": "openapi",
+            "base_url": "https://pets.example.com",
+            "auth_type": "bearer",
+            "credential": "orphan-token",
+            "plugin_key": "orphan-tools",
+            "name": "Orphan tools",
+            "project_id": str(project.id),
+            "selected_capabilities": ["get_pets"],
+        },
+        format="json",
+    )
+    assert response.status_code == 409
+    assert not AgentPluginCredential.objects.filter(tenant=tenant).exists()
+
+
+def test_mcp_discovery_grants_no_execution_authority(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def initialize(self):
+            return None
+
+        def list_tools(self):
+            return [
+                {
+                    "name": "delete_cluster",
+                    "description": "Delete a production cluster",
+                    "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}},
+                }
+            ]
+
+    monkeypatch.setattr("core.mcp_connector.McpClient", FakeClient)
+    monkeypatch.setattr(plugin_studio, "validate_public_url", lambda value, field="url": value)
+    result = plugin_studio.discover_mcp(
+        endpoint_url="https://mcp.example.com/rpc", contract={"type": "bearer", "token": "t"}
+    )
+    capability = result["manifest"]["capabilities"][0]
+    assert capability["risk_level"] == "unclassified"
+    assert capability["review_required"] is True
+    assert result["manifest"]["permission_policy"]["default"] == "deny"
+    assert result["manifest"]["permission_policy"]["approval_required"] == ["delete_cluster"]
+    assert result["manifest"]["permission_policy"]["max_risk"] == "unclassified"
