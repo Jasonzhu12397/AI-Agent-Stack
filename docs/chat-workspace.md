@@ -225,3 +225,28 @@ worker claims a job. Production runs PostgreSQL, where this does not apply.
   recording, attachment upload/download/ownership, knowledge references,
   schedule creation and dispatch, `run-now` thread creation, once-only claiming
   and pause behaviour.
+
+## Connector catalog and agent capabilities
+
+`deploy/agent-plugins/catalog.json` is the listing the Integration Hub and the
+composer render: each provider carries a category, vendor, endpoint environment
+variable and its capability declarations. A provider whose endpoint is
+configured becomes installable; a provider without one stays listed as
+`unprovisioned` and the hub disables install rather than offering a call that
+cannot work. Built-in providers (map and weather) need no endpoint or
+credential.
+
+An installed connector can be exercised from the hub: the operator picks a
+capability, fills the declared arguments and runs it. The request uses the same
+project-scoped resolver, argument validation, approval policy, adapter dispatch,
+output schema check and invocation recording as a chat turn, so a green run is
+the call the chat would make. A connector that needs a secret can have its
+credential reference rotated in place.
+
+Published agents bind capabilities, not legacy plugin tool rows.
+`capability_allowlist` in an agent draft lists capability names; the worker
+resolves each name through the same resolver, exposes the declared schema as the
+function signature and executes through the same adapter. Agents can therefore
+only call connectors installed in their own project. High-risk capabilities are
+refused at publish time because agent runs have no per-call approval checkpoint,
+and a capability whose risk rises after publish fails closed.

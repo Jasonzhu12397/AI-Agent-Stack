@@ -454,3 +454,5 @@ Agents. Test baseline at that time: 103 passed.
 
 Before `0.2.0` the repository ran a FastAPI + React stack; that history stays in
 the git log and in `docs/verification-matrix.md`, and is not re-versioned here.
+- Published agents can allow connector capabilities by name; the worker resolves
+  them through the chat capability resolver instead of legacy plugin tool rows.
