@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-11-25T00:20:55Z",
+  "checked_at": "2026-11-25T00:34:16Z",
   "api": {
     "status": 200,
     "body": "{\"status\": \"ready\", \"database\": \"ok\", \"vector_store\": \"not_configured\", \"cache\": \"disabled\"}"
@@ -9,27 +9,27 @@
   },
   "login": {
     "status": 200,
-    "body": "{\"id\":1,\"username\":\"demo\",\"email\":\"demo@acme.ai\",\"session_token\":\"y3vojd0pzhukeapgx32096swaexzdp52\"}"
+    "body": "{\"id\":1,\"username\":\"demo\",\"email\":\"demo@acme.ai\",\"session_token\":\"ra8xysmlkpbtpnmu3vy3mzb4xgsqvnb2\"}"
   },
   "workflow": {
     "status": "succeeded",
-    "run_id": "e55143e1",
+    "run_id": "da12fb38",
     "error": null
   },
   "ok": true,
   "api_log": [
-    "127.0.0.1:50402 - - [25/Nov/2026:08:20:53] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
-    "127.0.0.1:50412 - - [25/Nov/2026:08:20:53] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50428 - - [25/Nov/2026:08:20:53] \"POST /api/v1/auth/login/\" 200 100",
-    "127.0.0.1:50438 - - [25/Nov/2026:08:20:53] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50446 - - [25/Nov/2026:08:20:54] \"POST /api/v1/auth/login/\" 200 100",
-    "127.0.0.1:50448 - - [25/Nov/2026:08:20:54] \"GET /api/v1/auth/csrf/\" 200 82",
-    "127.0.0.1:50450 - - [25/Nov/2026:08:20:54] \"GET /api/v1/tenants/\" 200 176",
-    "127.0.0.1:50452 - - [25/Nov/2026:08:20:54] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
-    "127.0.0.1:50462 - - [25/Nov/2026:08:20:54] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
-    "127.0.0.1:50478 - - [25/Nov/2026:08:20:54] \"POST /api/v1/workflows/d04cf7ff-3199-42ba-b941-d8465e6bbdb4/publish/\" 201 318",
-    "127.0.0.1:50488 - - [25/Nov/2026:08:20:54] \"POST /api/v1/workflows/d04cf7ff-3199-42ba-b941-d8465e6bbdb4/runs/\" 202 435",
-    "127.0.0.1:50504 - - [25/Nov/2026:08:20:55] \"GET /api/v1/workflows/d04cf7ff-3199-42ba-b941-d8465e6bbdb4/runs/\" 200 1553"
+    "127.0.0.1:50766 - - [25/Nov/2026:08:34:14] \"POST /api/v1/agent-runtime/commands/poll/\" 200 16",
+    "127.0.0.1:50786 - - [25/Nov/2026:08:34:14] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:50794 - - [25/Nov/2026:08:34:15] \"POST /api/v1/auth/login/\" 200 100",
+    "127.0.0.1:50808 - - [25/Nov/2026:08:34:15] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:50818 - - [25/Nov/2026:08:34:15] \"POST /api/v1/auth/login/\" 200 100",
+    "127.0.0.1:50832 - - [25/Nov/2026:08:34:15] \"GET /api/v1/auth/csrf/\" 200 82",
+    "127.0.0.1:50848 - - [25/Nov/2026:08:34:15] \"GET /api/v1/tenants/\" 200 176",
+    "127.0.0.1:50860 - - [25/Nov/2026:08:34:15] \"GET /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/\" 200 240",
+    "127.0.0.1:50866 - - [25/Nov/2026:08:34:15] \"POST /api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/workflows/\" 201 544",
+    "127.0.0.1:50876 - - [25/Nov/2026:08:34:15] \"POST /api/v1/workflows/800687bf-ce0c-4015-ad71-51f4077c70c2/publish/\" 201 318",
+    "127.0.0.1:50888 - - [25/Nov/2026:08:34:15] \"POST /api/v1/workflows/800687bf-ce0c-4015-ad71-51f4077c70c2/runs/\" 202 435",
+    "127.0.0.1:50892 - - [25/Nov/2026:08:34:16] \"GET /api/v1/workflows/800687bf-ce0c-4015-ad71-51f4077c70c2/runs/\" 200 1553"
   ],
   "web_log": [
     "",
@@ -39,10 +39,6 @@
     "sh: 1: vite: not found"
   ],
   "worker_log": [
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-xagd2x3c-uh2oc9posb-dc2o2uo2lhhmap0i7010-sandbox-4537, poll_seconds=1.0)",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-a3sw6xz5-d2k765t5tk-dc31k1o48llp74gp4v30-sandbox-1891, poll_seconds=1.0)",
-    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
-    "INFO:ai-agent-worker:Worker stopped",
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-a3sw6xz5-d2k765t5tk-dc31k1o48llp74gp4v30-sandbox-2589, poll_seconds=1.0)",
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
@@ -50,6 +46,10 @@
     "INFO:ai-agent-worker:Shutdown requested (signal=15)",
     "INFO:ai-agent-worker:Worker stopped",
     "INFO:ai-agent-worker:Worker started (worker_id=vefaas-a3sw6xz5-d2k765t5tk-dc31k1o48llp74gp4v30-sandbox-6596, poll_seconds=1.0)",
-    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-y76cswiu-f3twyy4m72-dc32hlo5703udpohgnv0-sandbox-1278, poll_seconds=1.0)"
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-y76cswiu-f3twyy4m72-dc32hlo5703udpohgnv0-sandbox-1278, poll_seconds=1.0)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Shutdown requested (signal=15)",
+    "INFO:ai-agent-worker:Worker stopped",
+    "INFO:ai-agent-worker:Worker started (worker_id=vefaas-y76cswiu-f3twyy4m72-dc32hlo5703udpohgnv0-sandbox-4367, poll_seconds=1.0)"
   ]
 }
