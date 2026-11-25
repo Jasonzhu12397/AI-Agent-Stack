@@ -108,8 +108,14 @@ const models = computed(() => (context.value?.models ?? []).filter((item) => ite
 const activeModel = computed(
   () => models.value.find((item) => item.id === selectedModelId.value) ?? models.value[0] ?? null,
 );
+// A conversation belongs to exactly one project. Label the composer and the
+// details drawer with that project, never with a global selection that could
+// point at another project (or at a cluster inside one).
+const conversationProjectId = computed(
+  () => thread.value?.project_id || activeProjectId.value,
+);
 const projectName = computed(
-  () => projects.value.find((item) => item.id === activeProjectId.value)?.name ?? "",
+  () => projects.value.find((item) => item.id === conversationProjectId.value)?.name ?? "",
 );
 const canSend = computed(() => draft.value.trim().length > 0 && !sending.value);
 const usageTotals = computed(() => {
@@ -161,6 +167,15 @@ async function loadThread(threadId: string): Promise<void> {
   }
   try {
     const loaded = await getChatThread(threadId);
+    if (loaded.project_id && loaded.project_id !== activeProjectId.value) {
+      // The store cleared the thread when the project changed; a thread that
+      // still points elsewhere must not be shown as part of this project.
+      thread.value = null;
+      messages.value = [];
+      attachments.value = [];
+      selectedAttachments.value = [];
+      return;
+    }
     thread.value = loaded;
     messages.value = loaded.messages ?? [];
     attachments.value = loaded.attachments ?? [];
@@ -603,7 +618,9 @@ onMounted(async () => {
 
           <el-popover v-model:visible="projectOpen" placement="top-start" :width="220" trigger="click">
             <template #reference>
-              <button class="chat-chip" type="button">▤ {{ projectName || t("Project") }}</button>
+              <button class="chat-chip" type="button">
+                ▤ {{ t("Project") }} · {{ projectName || t("none") }}
+              </button>
             </template>
             <div class="chat-menu">
               <button
