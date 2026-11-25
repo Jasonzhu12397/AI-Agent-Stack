@@ -170,20 +170,38 @@ def _auth_from_request(payload: dict[str, Any]) -> dict[str, Any]:
             raise PluginStudioError("PLUGIN_AUTH_INVALID", "The API key prefix is invalid.")
         value = f"{prefix}{credential}" if prefix else credential
         return {"type": "header", "name": header, "value": value}
-    # OAuth 2.0 client credentials. The token is obtained at call time by the
-    # credential resolver; only the sealed client secret is stored.
+    # OAuth 2.0. The token is obtained at call time by the credential resolver;
+    # only the sealed client secret (and, for refresh-token grants, the refresh
+    # token) is stored. Client credentials is the default machine-to-machine
+    # grant; refresh_token supports providers that only issue long-lived
+    # consent tokens. Both keep the secret out of the manifest.
     token_url = validate_public_url(auth.get("token_url"), "auth_config.token_url")
     client_id = auth.get("client_id")
     scope = auth.get("scope") or ""
-    if not isinstance(client_id, str) or not client_id or not isinstance(scope, str):
+    grant = auth.get("grant") or "client_credentials"
+    if not isinstance(client_id, str) or not isinstance(scope, str) or not isinstance(grant, str):
         raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 client_id and scope are invalid.")
-    return {
+    if grant not in {"client_credentials", "refresh_token"}:
+        raise PluginStudioError(
+            "PLUGIN_AUTH_UNSUPPORTED", "Unsupported OAuth 2.0 grant type."
+        )
+    contract: dict[str, Any] = {
         "type": "oauth2",
+        "grant": grant,
         "token_url": token_url,
         "client_id": client_id,
         "client_secret": credential,
         "scope": scope,
     }
+    if grant == "refresh_token":
+        refresh_token = auth.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token.strip():
+            raise PluginStudioError(
+                "PLUGIN_AUTH_INVALID",
+                "The refresh token is required for the refresh_token grant.",
+            )
+        contract["refresh_token"] = refresh_token.strip()
+    return contract
 
 
 def credential_headers(contract: dict[str, Any], timeout: float = 15.0) -> dict[str, str]:
@@ -197,11 +215,13 @@ def credential_headers(contract: dict[str, Any], timeout: float = 15.0) -> dict[
     if kind == "header":
         return {contract["name"]: contract["value"]}
     if kind == "oauth2":
-        data = {
-            "grant_type": "client_credentials",
-            "client_id": contract["client_id"],
-            "client_secret": contract["client_secret"],
-        }
+        grant = contract.get("grant") or "client_credentials"
+        data: dict[str, str] = {"grant_type": grant}
+        if grant == "refresh_token":
+            data["refresh_token"] = contract.get("refresh_token", "")
+        data["client_id"] = contract.get("client_id", "")
+        if contract.get("client_secret"):
+            data["client_secret"] = contract["client_secret"]
         if contract.get("scope"):
             data["scope"] = contract["scope"]
         try:
@@ -217,7 +237,7 @@ def credential_headers(contract: dict[str, Any], timeout: float = 15.0) -> dict[
             ) from exc
         if response.status_code in {401, 403}:
             raise PluginStudioError(
-                "PLUGIN_AUTH_REJECTED", "The OAuth token endpoint rejected the client credentials."
+                "PLUGIN_AUTH_REJECTED", "The OAuth token endpoint rejected the OAuth grant."
             )
         if response.status_code >= 400:
             raise PluginStudioError(
@@ -513,11 +533,35 @@ def discover_openapi(
     base_url: str,
     document_url: str,
     headers: dict[str, str],
+    document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Fetch an OpenAPI document and generate a manifest from its operations."""
+    """Generate a manifest from an OpenAPI document.
+
+    The document may be fetched from a public URL or pasted by the user. A
+    pasted document is validated with the same shape and size rules as a
+    fetched one, so neither path reaches the generator unchecked.
+    """
 
     base_url = validate_public_url(base_url, "base_url")
-    document, status = _fetch_document(document_url, headers)
+    if document is None:
+        document, status = _fetch_document(document_url, headers)
+    else:
+        if not isinstance(document, dict):
+            raise PluginStudioError(
+                "PLUGIN_DOCUMENT_INVALID", "The pasted OpenAPI document must be an object."
+            )
+        if len(json.dumps(document).encode("utf-8")) > MAX_DOCUMENT_BYTES:
+            raise PluginStudioError(
+                "PLUGIN_DOCUMENT_TOO_LARGE", "The OpenAPI document exceeds 1 MiB."
+            )
+        if not isinstance(document.get("paths"), dict) or not (
+            document.get("openapi") or document.get("swagger")
+        ):
+            raise PluginStudioError(
+                "PLUGIN_DOCUMENT_INVALID",
+                "The pasted document is not an OpenAPI document with paths.",
+            )
+        status = 200
     capabilities: list[dict[str, Any]] = []
     operations: dict[str, Any] = {}
     skipped: list[dict[str, str]] = []
@@ -757,7 +801,16 @@ def discover_plugin(payload: dict[str, Any]) -> dict[str, Any]:
         result = discover_mcp(endpoint_url=base_url, contract=contract)
     else:
         document_url = payload.get("document_url")
-        if document_url:
+        pasted = payload.get("document")
+        if pasted is not None:
+            result = discover_openapi(
+                base_url=base_url,
+                document_url="inline://openapi.json",
+                headers=credential_headers(contract),
+                document=pasted,
+            )
+            document_url = "inline://openapi.json"
+        elif document_url:
             document_url = validate_public_url(document_url, "document_url")
             result = discover_openapi(
                 base_url=base_url,

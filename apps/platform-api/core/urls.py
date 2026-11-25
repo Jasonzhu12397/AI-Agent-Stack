@@ -43,6 +43,8 @@ from core.agent_plugin_views import (
     AgentPluginStudioDiscoverView,
     AgentPluginStudioPublishView,
     AgentPluginStudioTestView,
+    AgentPluginVersionActivateView,
+    AgentPluginVersionListView,
 )
 from core.agent_plugin_views import (
     AgentPluginCapabilityInvokeView,
@@ -375,9 +377,19 @@ urlpatterns = [
         name="agent-plugin-studio-publish",
     ),
     path(
+        "api/v1/tenants/<uuid:tenant_id>/agent-plugins/versions/",
+        AgentPluginVersionListView.as_view(),
+        name="agent-plugin-versions",
+    ),
+    path(
         "api/v1/agent-plugins/<uuid:plugin_id>/",
         AgentPluginDetailView.as_view(),
         name="agent-plugin-detail",
+    ),
+    path(
+        "api/v1/agent-plugins/<uuid:plugin_id>/activate/",
+        AgentPluginVersionActivateView.as_view(),
+        name="agent-plugin-version-activate",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/agent-plugin-installations/",

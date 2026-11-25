@@ -280,6 +280,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         response.status,
       );
     }
+    if ([502, 503, 504].includes(response.status) && payload === null) {
+      throw new ApiError(
+        `The platform gateway returned HTTP ${response.status} before the API answered. ` +
+          "The upstream model service may be unavailable; retry in a moment or check the provider status.",
+        { status: response.status },
+        response.status,
+      );
+    }
     throw new ApiError(`Request failed with HTTP ${response.status}`, body, response.status);
   }
   return (payload ?? ({} as T)) as T;
@@ -1843,6 +1851,7 @@ export type AgentPluginDefinition = {
   timeout_seconds: number | null;
   max_concurrency: number | null;
   enabled: boolean;
+  schema_fingerprint?: string;
   created_at: string;
   updated_at: string;
   manifest?: {
@@ -1903,6 +1912,7 @@ export type AgentPluginStudioRequest = {
   plugin_type: "openapi" | "mcp" | "http_api";
   base_url: string;
   document_url?: string;
+  document?: Record<string, unknown>;
   auth_type: "none" | "bearer" | "api_key" | "oauth2";
   auth_config?: Record<string, string>;
   credential?: string;
@@ -2037,6 +2047,36 @@ export function invokeAgentPluginCapability(
       body: JSON.stringify({ arguments: args }),
     },
   );
+}
+
+export type AgentPluginVersion = {
+  id: string;
+  version: string;
+  enabled: boolean;
+  is_active: boolean;
+  schema_fingerprint: string;
+  capabilities: number;
+  created_at: string;
+};
+
+export function getAgentPluginVersions(
+  tenantId: string,
+  pluginKey: string,
+): Promise<AgentPluginVersion[]> {
+  return request(
+    "/api/v1/tenants/" +
+      tenantId +
+      "/agent-plugins/versions/?plugin_key=" +
+      encodeURIComponent(pluginKey),
+  );
+}
+
+export function activateAgentPluginVersion(pluginId: string): Promise<AgentPluginDefinition> {
+  return request("/api/v1/agent-plugins/" + pluginId + "/activate/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({}),
+  });
 }
 
 export function setAgentPluginEnabled(

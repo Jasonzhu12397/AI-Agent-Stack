@@ -8,9 +8,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { t } from "../i18n";
 import PluginStudioDialog from "./PluginStudioDialog.vue";
+import PlatformAccountsPanel from "./PlatformAccountsPanel.vue";
 import {
+  activateAgentPluginVersion,
   getAgentPluginDefinitions,
   getAgentPluginInstallations,
+  getAgentPluginVersions,
   getProjectAgentCapabilities,
   installAgentPlugin,
   invokeAgentPluginCapability,
@@ -20,6 +23,7 @@ import {
   type AgentPluginDefinition,
   type AgentPluginInstallation,
   type AgentPluginManifestCapability,
+  type AgentPluginVersion,
   type InstalledAgentCapability,
 } from "../services/api";
 
@@ -38,12 +42,16 @@ const info = ref("");
 const studioOpen = ref(false);
 const runCapability = ref("");
 const runArgs = ref("{}");
+const advancedRunArgs = ref(false);
+const runFormValues = ref<Record<string, unknown>>({});
 const runBusy = ref(false);
 const runOutput = ref("");
 const runError = ref("");
 const rotateOpen = ref(false);
 const activeCategory = ref("All");
 const rotateRef = ref("");
+const versions = ref<AgentPluginVersion[]>([]);
+const versionsBusy = ref(false);
 
 const selected = computed(
   () => definitions.value.find((item) => item.id === selectedId.value) ?? null,
@@ -125,7 +133,39 @@ async function refresh(): Promise<void> {
   }
 }
 
+async function loadVersions(): Promise<void> {
+  if (!props.tenantId || !selected.value) {
+    versions.value = [];
+    return;
+  }
+  try {
+    versions.value = await getAgentPluginVersions(props.tenantId, selected.value.plugin_key);
+  } catch {
+    versions.value = [];
+  }
+}
+
+async function activateVersion(version: AgentPluginVersion): Promise<void> {
+  if (!version.is_active && version.enabled === false && versions.value.some((item) => item.is_active)) {
+    // Activating an older version deliberately retires the active one.
+    if (!window.confirm(`${t("Activate")} v${version.version}?`)) return;
+  }
+  versionsBusy.value = true;
+  error.value = "";
+  try {
+    await activateAgentPluginVersion(version.id);
+    info.value = `${selected.value?.name ?? ""} v${version.version} ${t("activated")}.`;
+    await refresh();
+    await loadVersions();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to activate the version.";
+  } finally {
+    versionsBusy.value = false;
+  }
+}
+
 watch(selectedId, () => {
+  void loadVersions();
   credentialRef.value = "";
   rotateOpen.value = false;
   rotateRef.value = "";
@@ -205,6 +245,53 @@ function canRun(capability: AgentPluginManifestCapability): boolean {
   );
 }
 
+type RunField = {
+  key: string;
+  type: string;
+  required: boolean;
+  description: string;
+  enumValues: string[];
+  minimum?: number;
+  maximum?: number;
+  itemType: string;
+};
+
+// The backend publishes each capability's JSON Schema. The console renders
+// that schema as a form, so a non-technical operator never writes JSON.
+const runFields = computed<RunField[]>(() => {
+  const capability = selectedCapabilities.value.find((item) => item.name === runCapability.value);
+  const schema = (capability?.input_schema ?? {}) as {
+    properties?: Record<string, Record<string, unknown>>;
+    required?: string[];
+  };
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  return Object.entries(schema.properties ?? {}).map(([key, raw]) => {
+    const property = raw ?? {};
+    const type =
+      typeof property.type === "string"
+        ? property.type
+        : Array.isArray(property.anyOf) && property.anyOf[0]?.type
+          ? String(property.anyOf[0].type)
+          : "string";
+    const enumValues = Array.isArray(property.enum)
+      ? property.enum.map((value) => String(value))
+      : [];
+    return {
+      key,
+      type,
+      required: required.includes(key),
+      description: typeof property.description === "string" ? property.description : "",
+      enumValues,
+      minimum: typeof property.minimum === "number" ? property.minimum : undefined,
+      maximum: typeof property.maximum === "number" ? property.maximum : undefined,
+      itemType:
+        typeof (property.items as { type?: unknown } | undefined)?.type === "string"
+          ? String((property.items as { type: string }).type)
+          : "string",
+    };
+  });
+});
+
 function argumentTemplate(capability: AgentPluginManifestCapability): string {
   const schema = capability.input_schema ?? {};
   const properties = (schema.properties ?? {}) as Record<string, { default?: unknown }>;
@@ -223,21 +310,71 @@ function argumentTemplate(capability: AgentPluginManifestCapability): string {
 function openRun(capability: AgentPluginManifestCapability): void {
   runCapability.value = capability.name;
   runArgs.value = argumentTemplate(capability);
+  advancedRunArgs.value = false;
+  const schema = (capability.input_schema ?? {}) as {
+    properties?: Record<string, { default?: unknown; type?: string }>;
+  };
+  const draft: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema.properties ?? {})) {
+    draft[key] = value?.default ?? (value?.type === "boolean" ? false : "");
+  }
+  runFormValues.value = draft;
   runOutput.value = "";
   runError.value = "";
+}
+
+function formArguments(): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const field of runFields.value) {
+    const raw = runFormValues.value[field.key];
+    if (raw === "" || raw === undefined || raw === null) continue;
+    if (field.type === "integer" || field.type === "number") {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) throw new Error(`${field.key} must be a number.`);
+      args[field.key] = value;
+      continue;
+    }
+    if (field.type === "boolean") {
+      args[field.key] = Boolean(raw);
+      continue;
+    }
+    if (field.type === "array" || field.type === "object") {
+      if (typeof raw === "string") {
+        try {
+          args[field.key] = JSON.parse(raw);
+        } catch {
+          throw new Error(`${field.key} must be valid JSON.`);
+        }
+      } else {
+        args[field.key] = raw;
+      }
+      continue;
+    }
+    args[field.key] = raw;
+  }
+  for (const field of runFields.value) {
+    if (field.required && args[field.key] === undefined) {
+      throw new Error(`${field.key} is required.`);
+    }
+  }
+  return args;
 }
 
 async function submitRun(): Promise<void> {
   if (!selected.value || !props.projectId || !runCapability.value) return;
   let args: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(runArgs.value || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Arguments must be a JSON object.");
+    if (advancedRunArgs.value) {
+      const parsed = JSON.parse(runArgs.value || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Arguments must be a JSON object.");
+      }
+      args = parsed as Record<string, unknown>;
+    } else {
+      args = formArguments();
     }
-    args = parsed as Record<string, unknown>;
   } catch (cause) {
-    runError.value = cause instanceof Error ? cause.message : "Invalid JSON arguments.";
+    runError.value = cause instanceof Error ? cause.message : "Invalid arguments.";
     return;
   }
   runBusy.value = true;
@@ -308,6 +445,21 @@ function lastInvocation(name: string): string {
 
     <el-alert v-if="error" :title="error" type="error" show-icon closable @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon closable @close="info = ''" />
+
+    <section class="hub-model-accounts">
+      <div class="hub-panel-title">
+        <h3>{{ t("Model platforms · API key or account") }}</h3>
+        <span>{{ t("shared with Model Manager") }}</span>
+      </div>
+      <p class="hub-sub">
+        {{
+          t(
+            "OpenAI, Google Gemini, DeepSeek, Qwen and Doubao are model platforms, not tools. Add a real API key or authorize an account here once; the models then appear in Model Manager and Chat for you only.",
+          )
+        }}
+      </p>
+      <PlatformAccountsPanel :tenant-id="props.tenantId" />
+    </section>
 
     <div class="hub-grid">
       <section class="hub-panel">
@@ -407,6 +559,37 @@ function lastInvocation(name: string): string {
             </div>
           </dl>
 
+          <div v-if="versions.length > 1" class="hub-versions">
+            <div class="hub-panel-title">
+              <h5>{{ t("Schema versions") }}</h5>
+              <span>{{ versions.length }}</span>
+            </div>
+            <div v-for="version in versions" :key="version.id" class="hub-version-row">
+              <div>
+                <strong>v{{ version.version }}</strong>
+                <small>{{ new Date(version.created_at).toLocaleDateString() }}</small>
+                <small v-if="version.schema_fingerprint">
+                  {{ version.schema_fingerprint.slice(0, 12) }}
+                </small>
+              </div>
+              <div class="hub-cap-tags">
+                <el-tag v-if="version.is_active" size="small" type="success" effect="plain">
+                  {{ t("active") }}
+                </el-tag>
+                <el-button
+                  v-else
+                  size="small"
+                  text
+                  type="primary"
+                  :loading="versionsBusy"
+                  @click="activateVersion(version)"
+                >
+                  {{ t("Activate") }}
+                </el-button>
+              </div>
+            </div>
+          </div>
+
           <div class="hub-caps">
             <h5>{{ t("Capabilities") }}</h5>
             <div v-for="capability in selectedCapabilities" :key="capability.name" class="hub-cap">
@@ -434,12 +617,56 @@ function lastInvocation(name: string): string {
 
           <div v-if="runCapability" class="hub-run">
             <p class="hub-panel-label">{{ t("Run capability") }} · <code>{{ runCapability }}</code></p>
-            <el-input
-              v-model="runArgs"
-              type="textarea"
-              :rows="4"
-              spellcheck="false"
-            />
+            <el-checkbox v-model="advancedRunArgs" class="hub-form-toggle">
+              {{ t("Advanced JSON arguments") }}
+            </el-checkbox>
+            <div v-if="advancedRunArgs">
+              <el-input v-model="runArgs" type="textarea" :rows="6" spellcheck="false" />
+            </div>
+            <div v-else class="hub-form">
+              <p v-if="!runFields.length" class="hub-empty">
+                {{ t("This capability takes no parameters.") }}
+              </p>
+              <label v-for="field in runFields" :key="field.key" class="hub-form-field">
+                <span>
+                  {{ field.key }}
+                  <em v-if="field.required">{{ t("required") }}</em>
+                </span>
+                <el-select
+                  v-if="field.enumValues.length"
+                  v-model="runFormValues[field.key]"
+                  :placeholder="field.description || field.key"
+                >
+                  <el-option
+                    v-for="option in field.enumValues"
+                    :key="option"
+                    :label="option"
+                    :value="option"
+                  />
+                </el-select>
+                <el-switch
+                  v-else-if="field.type === 'boolean'"
+                  v-model="runFormValues[field.key]"
+                />
+                <el-input-number
+                  v-else-if="field.type === 'integer' || field.type === 'number'"
+                  v-model="runFormValues[field.key]"
+                  :min="field.minimum"
+                  :max="field.maximum"
+                  :precision="field.type === 'integer' ? 0 : undefined"
+                  controls-position="right"
+                />
+                <el-input
+                  v-else
+                  v-model="runFormValues[field.key]"
+                  :type="field.type === 'array' || field.type === 'object' ? 'textarea' : 'text'"
+                  :rows="3"
+                  :placeholder="field.description || field.key"
+                  spellcheck="false"
+                />
+                <small v-if="field.description">{{ field.description }}</small>
+              </label>
+            </div>
             <div class="hub-actions">
               <el-button type="primary" size="small" :loading="runBusy" @click="submitRun">
                 {{ t("Run capability") }}
@@ -627,6 +854,57 @@ function lastInvocation(name: string): string {
   border-radius: 14px;
   padding: 16px;
   background: var(--el-bg-color);
+}
+.hub-model-accounts {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 18px;
+  background: var(--el-bg-color);
+}
+.hub-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+.hub-form-field {
+  display: grid;
+  gap: 6px;
+}
+.hub-form-field > span {
+  font-size: 13px;
+  font-weight: 600;
+}
+.hub-form-field em {
+  margin-left: 6px;
+  color: var(--el-color-danger);
+  font-style: normal;
+  font-weight: 400;
+}
+.hub-form-field small {
+  color: var(--el-text-color-secondary);
+}
+.hub-form-toggle {
+  margin: 8px 0;
+}
+.hub-versions {
+  margin-top: 14px;
+}
+.hub-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.hub-version-row > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hub-version-row small {
+  color: var(--el-text-color-secondary);
 }
 .hub-head-actions {
   display: flex;

@@ -221,6 +221,7 @@ def _definition_data(plugin):
         "timeout_seconds": plugin.timeout_seconds,
         "max_concurrency": plugin.max_concurrency,
         "enabled": plugin.enabled,
+        "schema_fingerprint": (manifest.get("studio") or {}).get("schema_fingerprint", ""),
         "created_at": plugin.created_at,
         "updated_at": plugin.updated_at,
     }
@@ -687,6 +688,77 @@ class AgentPluginStudioTestView(APIView):
                 "protocol": discovered["protocol"],
             }
         )
+
+
+class AgentPluginVersionListView(APIView):
+    """Version history for one plugin key.
+
+    Plugin Studio never overwrites a published definition, so history is the
+    set of rows sharing the key. The newest row is the active version unless an
+    administrator activates an earlier one.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        plugin_key = request.query_params.get("plugin_key", "")
+        if not isinstance(plugin_key, str) or not _PLUGIN_KEY_PATTERN.fullmatch(plugin_key):
+            return legacy_error_response(
+                "plugin_key must be a lowercase hyphenated identifier.", http_status=400
+            )
+        versions = (
+            AgentPluginDefinition.objects.filter(tenant=tenant, plugin_key=plugin_key)
+            .order_by("-created_at")
+        )
+        active = next((plugin for plugin in versions if plugin.enabled), None)
+        return Response(
+            [
+                {
+                    "id": str(plugin.id),
+                    "version": plugin.version,
+                    "enabled": plugin.enabled,
+                    "is_active": active is not None and plugin.id == active.id,
+                    "schema_fingerprint": (plugin.manifest or {}).get("studio", {}).get(
+                        "schema_fingerprint", ""
+                    ),
+                    "capabilities": len(_capability_names(plugin.capabilities)),
+                    "created_at": plugin.created_at,
+                }
+                for plugin in versions
+            ]
+        )
+
+
+class AgentPluginVersionActivateView(APIView):
+    """Activate one published version and retire the other versions of its key."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, plugin_id):
+        plugin = get_object_or_404(
+            AgentPluginDefinition.objects.filter(tenant__memberships__user=request.user),
+            pk=plugin_id,
+        )
+        if not _is_tenant_admin(request.user, plugin.tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
+        with transaction.atomic():
+            AgentPluginDefinition.objects.filter(
+                tenant=plugin.tenant, plugin_key=plugin.plugin_key
+            ).exclude(pk=plugin.pk).update(enabled=False)
+            plugin.enabled = True
+            plugin.save(update_fields=["enabled", "updated_at"])
+        record_audit_event(
+            request,
+            plugin.tenant,
+            "agent_plugin.version_activated",
+            "agent_plugin_definition",
+            plugin.id,
+            metadata={"plugin_key": plugin.plugin_key, "version": plugin.version},
+        )
+        return Response(_definition_data(plugin))
 
 
 class AgentPluginDetailView(APIView):

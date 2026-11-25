@@ -229,3 +229,107 @@ def test_discover_endpoint_rejects_non_admin(studio_workspace, monkeypatch):
         format="json",
     )
     assert response.status_code == 403
+
+
+def test_oauth_refresh_token_contract_keeps_secrets_out_of_manifest(monkeypatch):
+    monkeypatch.setattr(
+        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
+    )
+    contract = plugin_studio._auth_from_request(
+        {
+            "auth_type": "oauth2",
+            "credential": "client-secret",
+            "auth_config": {
+                "grant": "refresh_token",
+                "token_url": "https://auth.example.com/oauth/token",
+                "client_id": "client-id",
+                "scope": "read:tools",
+                "refresh_token": "refresh-value",
+            },
+        }
+    )
+    assert contract["type"] == "oauth2"
+    assert contract["grant"] == "refresh_token"
+    assert contract["client_secret"] == "client-secret"
+    assert contract["refresh_token"] == "refresh-value"
+    assert "client-secret" not in str(contract.get("scope", ""))
+
+
+def test_version_history_lists_and_activates_earlier_versions(studio_workspace, monkeypatch):
+    _user, tenant, project, client = studio_workspace
+    first = _discovered_contract(name="get_pets")
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda payload: first)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/",
+        {
+            "plugin_type": "openapi",
+            "base_url": "https://pets.example.com",
+            "auth_type": "bearer",
+            "credential": "secret-token",
+            "plugin_key": "pet-tools",
+            "name": "Pet tools",
+            "project_id": str(project.id),
+            "selected_capabilities": ["get_pets"],
+        },
+        format="json",
+    )
+    assert response.status_code == 201, response.data
+    second = _discovered_contract(name="list_pets")
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda payload: second)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/",
+        {
+            "plugin_type": "openapi",
+            "base_url": "https://pets.example.com",
+            "auth_type": "bearer",
+            "credential": "secret-token",
+            "plugin_key": "pet-tools",
+            "name": "Pet tools",
+            "project_id": str(project.id),
+            "selected_capabilities": ["list_pets"],
+        },
+        format="json",
+    )
+    assert response.status_code == 201, response.data
+
+    history = client.get(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/versions/?plugin_key=pet-tools"
+    )
+    assert history.status_code == 200, history.data
+    assert [entry["version"] for entry in history.data] == ["1.0.1", "1.0.0"]
+    assert history.data[0]["is_active"] is True
+
+    old_id = history.data[1]["id"]
+    activated = client.post(f"/api/v1/agent-plugins/{old_id}/activate/", {}, format="json")
+    assert activated.status_code == 200, activated.data
+    definition = AgentPluginDefinition.objects.get(pk=old_id)
+    assert definition.enabled is True
+    assert AgentPluginDefinition.objects.get(tenant=tenant, version="1.0.1").enabled is False
+
+
+def test_pasted_openapi_document_generates_capabilities_without_fetch(
+    studio_workspace, monkeypatch
+):
+    _user, tenant, project, client = studio_workspace
+
+    def fail_fetch(*args, **kwargs):
+        raise AssertionError("A pasted document must not trigger a document fetch")
+
+    monkeypatch.setattr(plugin_studio, "_fetch_document", fail_fetch)
+    monkeypatch.setattr(
+        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
+    )
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/discover/",
+        {
+            "plugin_type": "openapi",
+            "base_url": "https://pets.example.com",
+            "auth_type": "none",
+            "document": OPENAPI_DOCUMENT,
+        },
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    names = [entry["name"] for entry in response.data["capabilities"]]
+    assert "getpet" in names
+    assert "deletepet" not in names

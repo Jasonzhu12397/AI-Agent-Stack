@@ -27,6 +27,8 @@ const keyTouched = ref(false);
 const description = ref("");
 const baseUrl = ref("");
 const documentUrl = ref("");
+const documentText = ref("");
+const documentOpen = ref(false);
 const authType = ref<AgentPluginStudioRequest["auth_type"]>("none");
 const credential = ref("");
 const apiKeyHeader = ref("X-API-Key");
@@ -34,6 +36,8 @@ const apiKeyPrefix = ref("");
 const tokenUrl = ref("");
 const clientId = ref("");
 const scope = ref("");
+const oauthGrant = ref<"client_credentials" | "refresh_token">("client_credentials");
+const refreshToken = ref("");
 const busy = ref(false);
 const error = ref("");
 const info = ref("");
@@ -96,6 +100,10 @@ const authConfig = computed<Record<string, string> | undefined>(() => {
     config.token_url = tokenUrl.value.trim();
     config.client_id = clientId.value.trim();
     config.scope = scope.value.trim();
+    config.grant = oauthGrant.value;
+    if (oauthGrant.value === "refresh_token") {
+      config.refresh_token = refreshToken.value.trim();
+    }
     return config;
   }
   return undefined;
@@ -109,6 +117,14 @@ const requestPayload = computed<AgentPluginStudioRequest>(() => {
   };
   const document = documentUrl.value.trim();
   if (document) payload.document_url = document;
+  if (documentText.value.trim() && pluginType.value !== "mcp") {
+    try {
+      const parsed = JSON.parse(documentText.value) as Record<string, unknown>;
+      payload.document = parsed;
+    } catch {
+      // Validation reports the malformed paste before any network call.
+    }
+  }
   if (authConfig.value) payload.auth_config = authConfig.value;
   if (authType.value !== "none") payload.credential = credential.value.trim();
   return payload;
@@ -120,11 +136,24 @@ function validateForm(requireName: boolean): string | null {
   if (requireName && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pluginKey.value)) {
     return t("Plugin key must be a lowercase hyphenated identifier.");
   }
+  if (documentText.value.trim() && pluginType.value !== "mcp") {
+    try {
+      const parsed = JSON.parse(documentText.value) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return t("The pasted OpenAPI document must be a JSON object.");
+      }
+    } catch {
+      return t("The pasted OpenAPI document is not valid JSON.");
+    }
+  }
   if (authType.value !== "none" && !credential.value.trim()) {
     return t("Connection credential is required for this authentication mode.");
   }
   if (authType.value === "oauth2" && (!tokenUrl.value.trim() || !clientId.value.trim())) {
     return t("OAuth 2.0 needs a token URL and client ID.");
+  }
+  if (authType.value === "oauth2" && oauthGrant.value === "refresh_token" && !refreshToken.value.trim()) {
+    return t("The refresh token is required for the refresh_token grant.");
   }
   return null;
 }
@@ -252,6 +281,17 @@ async function publish(): Promise<void> {
           <el-form-item :label="t('Service base URL')">
             <el-input v-model="baseUrl" placeholder="https://api.example.com" />
           </el-form-item>
+          <el-form-item v-if="pluginType !== 'mcp'">
+            <el-checkbox v-model="documentOpen">{{ t("Paste the OpenAPI document instead") }}</el-checkbox>
+            <el-input
+              v-if="documentOpen"
+              v-model="documentText"
+              type="textarea"
+              :rows="6"
+              spellcheck="false"
+              :placeholder="t('Paste the OpenAPI JSON document')"
+            />
+          </el-form-item>
           <el-form-item v-if="pluginType !== 'mcp'" :label="t('OpenAPI document URL (optional)')">
             <el-input
               v-model="documentUrl"
@@ -282,6 +322,11 @@ async function publish(): Promise<void> {
             </el-form-item>
           </div>
           <div v-if="authType === 'oauth2'" class="studio-row">
+            <label>{{ t("OAuth grant") }}</label>
+            <el-select v-model="oauthGrant">
+              <el-option :label="t('Client credentials')" value="client_credentials" />
+              <el-option :label="t('Refresh token')" value="refresh_token" />
+            </el-select>
             <el-form-item :label="t('Token URL')">
               <el-input v-model="tokenUrl" placeholder="https://auth.example.com/oauth/token" />
             </el-form-item>
@@ -290,6 +335,17 @@ async function publish(): Promise<void> {
             </el-form-item>
             <el-form-item :label="t('Scope (optional)')">
               <el-input v-model="scope" placeholder="read:tools" />
+            </el-form-item>
+            <el-form-item
+              v-if="oauthGrant === 'refresh_token'"
+              :label="t('Refresh token')"
+            >
+              <el-input
+                v-model="refreshToken"
+                type="password"
+                show-password
+                :placeholder="t('Refresh token issued by the provider')"
+              />
             </el-form-item>
           </div>
           <el-form-item
