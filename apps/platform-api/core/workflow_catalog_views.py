@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core import provider_accounts
 from core.agent_plugin_manifest import capability_definition
 from core.knowledge_models import KnowledgeBase
 from core.models import AgentPluginInstallation, AgentVersion, ModelConfig
@@ -59,7 +60,11 @@ class WorkflowCatalogView(APIView):
         project = workflow_project(request, tenant, project_id)
         models = (
             ModelConfig.objects.select_related("provider")
-            .filter(provider__tenant=tenant)
+            .filter(
+                provider_accounts.model_config_scope_q(tenant, request.user),
+                provider__enabled=True,
+                enabled=True,
+            )
             .order_by("display_name")
         )
         knowledge_bases = KnowledgeBase.objects.filter(

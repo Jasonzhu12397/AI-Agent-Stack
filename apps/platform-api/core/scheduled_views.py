@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core import scheduled_service
+from core import provider_accounts, scheduled_service
 from core.api_errors import legacy_error_response
 from core.models import ModelConfig, Project, Tenant
 from core.scheduled_models import ScheduledChatJob
@@ -93,7 +93,10 @@ class ScheduledJobListCreateView(APIView):
         model_id = payload.get("model_config_id")
         if model_id:
             model_config = ModelConfig.objects.filter(
-                provider__tenant__in=[tenant.id, None], pk=model_id, enabled=True
+                provider_accounts.model_config_scope_q(tenant, request.user),
+                provider__enabled=True,
+                enabled=True,
+                pk=model_id,
             ).first() if _is_uuid(model_id) else None
             if model_config is None:
                 return legacy_error_response(

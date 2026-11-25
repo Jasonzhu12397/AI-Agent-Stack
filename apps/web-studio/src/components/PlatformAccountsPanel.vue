@@ -199,8 +199,9 @@ defineExpose({ openPreset: openDialog });
     </div>
     <p class="hint">
       Authorize your own model platform account once, including OpenAI, Google, DeepSeek, Qwen and
-      Doubao. Its models then show up in Model Manager and in the Control Agent chat, and calls draw
-      on the free per-member daily allowance instead of a purchased tenant balance.
+      Doubao. Only you can see and use these models; another member of the same workspace never
+      sees your linked platforms or their models. Calls draw on your free per-member daily
+      allowance instead of a purchased tenant balance.
     </p>
     <el-alert v-if="error" :title="error" type="error" show-icon :closable="true" @close="error = ''" />
     <el-alert v-if="info" :title="info" type="success" show-icon :closable="true" @close="info = ''" />

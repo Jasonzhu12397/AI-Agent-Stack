@@ -12,7 +12,6 @@ from __future__ import annotations
 import uuid
 
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -149,7 +148,7 @@ class AgentChatThreadListCreateView(APIView):
             )
         model_config = _resolve_model_config(
             request, tenant, request.data.get("model_config_id")
-        ) or _default_model_config(tenant)
+        ) or _default_model_config(tenant, request.user)
         thread = AgentChatThread.objects.create(
             tenant=tenant,
             project=project,
@@ -251,7 +250,7 @@ class AgentChatMessageListCreateView(APIView):
         model_config = (
             _resolve_model_config(request, thread.tenant, request.data.get("model_config_id"))
             or thread.model_config
-            or _default_model_config(thread.tenant)
+            or _default_model_config(thread.tenant, request.user)
         )
         if model_config is not None and thread.model_config_id is None:
             # Remember the model this conversation settled on so later turns
@@ -379,7 +378,7 @@ def _available_models(request, tenant):
     queryset = (
         ModelConfig.objects.select_related("provider")
         .filter(
-            Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+            provider_accounts.model_config_scope_q(tenant, request.user),
             provider__enabled=True,
             enabled=True,
         )
@@ -417,18 +416,19 @@ def _available_models(request, tenant):
     return items
 
 
-def _default_model_config(tenant):
+def _default_model_config(tenant, user):
     """The model a new conversation falls back to.
 
     A tenant that configured nothing still needs a working chat: the local
     echo provider answers without a credential, so it is preferred over a
-    remote provider whose key may not be wired yet.
+    remote provider whose key may not be wired yet. Personal account models
+    are only candidates for the member who owns them.
     """
 
     queryset = (
         ModelConfig.objects.select_related("provider")
         .filter(
-            Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+            provider_accounts.model_config_scope_q(tenant, user),
             provider__enabled=True,
             enabled=True,
         )
@@ -442,7 +442,7 @@ def _resolve_model_config(request, tenant, model_config_id):
         return None
     model_config = get_object_or_404(
         ModelConfig.objects.select_related("provider").filter(
-            Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+            provider_accounts.model_config_scope_q(tenant, request.user),
             provider__enabled=True,
             enabled=True,
         ),

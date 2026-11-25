@@ -1,7 +1,6 @@
 import uuid
 
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -49,10 +48,7 @@ class ModelProviderListCreateView(APIView):
 
     def get(self, request, tenant_id):
         tenant = get_tenant(request, tenant_id)
-        providers = ModelProvider.objects.filter(
-            Q(tenant=tenant) | Q(tenant__isnull=True),
-            enabled=True,
-        )
+        providers = provider_accounts.visible_providers(tenant, request.user).filter(enabled=True)
         return Response(
             ModelProviderReadSerializer(
                 providers,
@@ -122,10 +118,7 @@ class ModelConfigListCreateView(APIView):
 
     def get_provider(self, request, tenant, provider_id):
         return get_object_or_404(
-            ModelProvider.objects.filter(
-                Q(tenant=tenant) | Q(tenant__isnull=True),
-                enabled=True,
-            ),
+            provider_accounts.visible_providers(tenant, request.user).filter(enabled=True),
             pk=provider_id,
         )
 
@@ -190,7 +183,7 @@ class ModelTestView(APIView):
         tenant = get_tenant(request, tenant_id)
         model_config = get_object_or_404(
             ModelConfig.objects.select_related("provider").filter(
-                Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+                provider_accounts.model_config_scope_q(tenant, request.user),
                 provider__enabled=True,
                 enabled=True,
             ),
@@ -302,10 +295,7 @@ class ModelProviderAccountView(APIView):
     def _provider(self, request, tenant_id, provider_id):
         tenant = get_tenant(request, tenant_id)
         return get_object_or_404(
-            ModelProvider.objects.filter(
-                Q(tenant=tenant) | Q(tenant__isnull=True),
-                enabled=True,
-            ),
+            provider_accounts.visible_providers(tenant, request.user).filter(enabled=True),
             pk=provider_id,
         )
 

@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core import provider_accounts
 from core.agent_capability_router import CapabilityResolutionError, resolve_capability
 from core.agent_serializers import (
     AgentDraftSerializer,
@@ -204,7 +205,7 @@ class AgentPublishView(APIView):
                     enabled=True,
                     provider__enabled=True,
                 )
-                .filter(models_q_for_tenant(agent.tenant)),
+                .filter(models_q_for_tenant(agent.tenant, request.user)),
                 pk=model_config_id,
             )
             if "chat" not in model_config.capabilities:
@@ -388,10 +389,14 @@ class AgentPublishView(APIView):
         )
 
 
-def models_q_for_tenant(tenant):
-    from django.db.models import Q
+def models_q_for_tenant(tenant, user):
+    """Model configs an agent editor may bind for this member.
 
-    return Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True)
+    Delegates to the provider-account visibility rule so a member never binds
+    a model that belongs to somebody else's linked platform account.
+    """
+
+    return provider_accounts.model_config_scope_q(tenant, user)
 
 
 class AgentRunListCreateView(APIView):

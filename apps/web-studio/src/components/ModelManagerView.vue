@@ -282,7 +282,7 @@ watch(selectedProviderId, () => void loadModels());
           <el-option
             v-for="provider in providers"
             :key="provider.id"
-            :label="`${provider.name} · ${provider.provider_type}`"
+            :label="`${provider.name} · ${provider.provider_type}${provider.auth_mode === 'user_account' ? ' · personal' : ''}`"
             :value="provider.id"
           />
         </el-select>

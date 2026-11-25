@@ -122,6 +122,10 @@ def test_authorized_account_model_appears_in_chat_context(workspace):
     tenant, project, provider = workspace
     member = _member("chatter")
     TenantMembership.objects.create(tenant=tenant, user=member, role="member")
+    # A personal platform row belongs to the member who created it; the chat
+    # context intentionally hides rows owned by somebody else.
+    provider.created_by = member
+    provider.save(update_fields=["created_by"])
     provider_accounts.link_account(user=member, provider=provider, credential_ref="sk-chat")
     ModelConfig.objects.create(
         provider=provider,

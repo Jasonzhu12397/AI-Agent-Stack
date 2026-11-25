@@ -4,7 +4,6 @@ import re
 import uuid
 
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -12,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core import provider_accounts
 from core.api_errors import legacy_error_response
 from core.audit import record_audit_event
 from core.models import (
@@ -165,7 +165,7 @@ class KnowledgeBaseListCreateView(APIView):
             return legacy_error_response("A valid embedding_model_id is required.", http_status=400)
         model = get_object_or_404(
             ModelConfig.objects.select_related("provider").filter(
-                Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+                provider_accounts.model_config_scope_q(tenant, request.user),
                 enabled=True,
                 provider__enabled=True,
             ),

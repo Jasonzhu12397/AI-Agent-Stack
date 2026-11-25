@@ -19,6 +19,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from core.models import ModelProvider, ProviderAccountLink, ProviderAccountUsage
@@ -201,6 +202,38 @@ def preset_for(key: str) -> dict:
             f"Unknown model platform preset: {key}.",
         )
     return preset
+
+
+def provider_scope_q(tenant, user) -> Q:
+    """Providers a member may see: tenant-wide rows plus their own account rows.
+
+    A ``user_account`` provider belongs to the member who created it. Sharing
+    such a row across the tenant would show every member's linked platforms in
+    Model Manager and let them bind models they cannot actually bill, so only
+    its creator may see it. Tenant-secret, platform-pool and global providers
+    stay tenant-wide.
+    """
+
+    return (
+        Q(tenant=tenant) | Q(tenant__isnull=True)
+    ) & (~Q(auth_mode=ModelProvider.AuthMode.USER_ACCOUNT) | Q(created_by=user))
+
+
+def model_config_scope_q(tenant, user) -> Q:
+    """The same visibility rule expressed for ``ModelConfig`` lookups."""
+
+    return (
+        Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True)
+    ) & (
+        ~Q(provider__auth_mode=ModelProvider.AuthMode.USER_ACCOUNT)
+        | Q(provider__created_by=user)
+    )
+
+
+def visible_providers(tenant, user):
+    """Provider queryset for a member, with their personal rows kept private."""
+
+    return ModelProvider.objects.filter(provider_scope_q(tenant, user)).distinct()
 
 
 def catalogue() -> list[dict]:

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from core import chat_runtime
+from core import chat_runtime, provider_accounts
 from core.chat_models import AgentChatMessage, AgentChatThread
 from core.scheduled_models import ScheduledChatJob
 
@@ -41,15 +41,13 @@ def next_occurrence(job, after: datetime) -> datetime:
     return candidate
 
 
-def _default_model_config(tenant):
-    from django.db.models import Q
-
+def _default_model_config(tenant, user):
     from core.models import ModelConfig
 
     return (
         ModelConfig.objects.select_related("provider")
         .filter(
-            Q(provider__tenant=tenant) | Q(provider__tenant__isnull=True),
+            provider_accounts.model_config_scope_q(tenant, user),
             provider__enabled=True,
             enabled=True,
         )
@@ -66,7 +64,7 @@ def _ensure_thread(job):
         project=job.project,
         created_by=job.created_by,
         title=job.name[:200],
-        model_config=job.model_config or _default_model_config(job.tenant),
+        model_config=job.model_config or _default_model_config(job.tenant, job.created_by),
         execution_target=job.execution_target,
         effort=job.effort,
     )
@@ -97,7 +95,7 @@ def run_job(job, *, trigger: str = "schedule") -> dict:
         )
         thread.save(update_fields=["updated_at", "execution_target", "effort", "model_config"])
 
-    model_config = thread.model_config or _default_model_config(job.tenant)
+    model_config = thread.model_config or _default_model_config(job.tenant, job.created_by)
     error_code = ""
     content = ""
     usage: dict = {}
