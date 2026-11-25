@@ -126,7 +126,6 @@ def test_task_cancellation_is_audited_with_the_previous_status(platform_admin):
     assert event.resource_id == str(task.id)
     assert event.metadata["previous_status"] == Task.Status.QUEUED
     assert event.metadata["status"] == Task.Status.CANCELLED
-    assert event.metadata["cancelled_approvals"] == 0
 
 
 @pytest.mark.django_db

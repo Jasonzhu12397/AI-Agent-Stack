@@ -7,31 +7,48 @@ node" and "the DAG validates", so the studio gets the identifiers it can
 actually choose from, scoped exactly like the server-side validation.
 """
 
-from django.db.models import F
+from django.db import models
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.agent_plugin_manifest import capability_definition
 from core.knowledge_models import KnowledgeBase
-from core.models import AgentVersion, ModelConfig, PluginInstallation, PluginTool
+from core.models import AgentPluginInstallation, AgentVersion, ModelConfig
 from core.workflow_views import workflow_project, workflow_tenant
 
 
 def available_tools(tenant, project):
-    return (
-        PluginTool.objects.select_related("plugin")
+    """Installed capabilities a workflow tool node may bind by name."""
+    items = []
+    installations = (
+        AgentPluginInstallation.objects.select_related("plugin")
         .filter(
-            enabled=True,
+            tenant=tenant,
+            project=project,
+            status=AgentPluginInstallation.Status.INSTALLED,
             plugin__enabled=True,
-            plugin__review_status="approved",
-            plugin__installations__tenant=tenant,
-            plugin__installations__project=project,
-            plugin__installations__status=PluginInstallation.Status.INSTALLED,
-            plugin__installations__plugin_version=F("plugin__version"),
+            plugin_version=models.F("plugin__version"),
         )
-        .distinct()
-        .order_by("name")
+        .order_by("plugin__name")
     )
+    for installation in installations:
+        granted = installation.granted_capabilities or []
+        for name in installation.plugin.capabilities or []:
+            if name not in granted:
+                continue
+            definition = capability_definition(installation.plugin, name)
+            if definition is None:
+                continue
+            items.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "risk_level": definition.get("risk_level", "low"),
+                    "plugin": installation.plugin.plugin_key,
+                }
+            )
+    return items
 
 
 class WorkflowCatalogView(APIView):
@@ -67,15 +84,7 @@ class WorkflowCatalogView(APIView):
                 "knowledge_bases": [
                     {"id": str(item.id), "name": item.name} for item in knowledge_bases
                 ],
-                "tools": [
-                    {
-                        "id": str(tool.id),
-                        "name": tool.name,
-                        "risk_level": tool.risk_level,
-                        "plugin": tool.plugin.name,
-                    }
-                    for tool in available_tools(tenant, project)
-                ],
+                "tools": available_tools(tenant, project),
                 "agents": [
                     {
                         "id": str(version.id),

@@ -24,7 +24,7 @@ Tenant-scoped resources:
 /api/v1/tenants/<tenant_id>/billing/...
 /api/v1/tenants/<tenant_id>/data-controls/...
 /api/v1/tenants/<tenant_id>/projects/<project_id>/archive-items/
-/api/v1/tenants/<tenant_id>/connectors/...
+/api/v1/tenants/<tenant_id>/agent-plugins/... (Integration Hub)
 /api/v1/tenants/<tenant_id>/feedback/
 ```
 
@@ -169,11 +169,11 @@ GET  .../billing/orders/<id>/status/  (read-only settlement poll: local status +
 | Worker | Owns (new files unless stated) | Migration numbers |
 |---|---|---|
 | settings-core | `core/settings_models.py`, `core/settings_views.py`, `core/settings_serializers.py`, `core/settings_urls.py`, `tests/test_settings_*.py` | 0036, 0037 |
-| settings-data | `core/data_controls_models.py`, `core/data_controls_views.py`, `core/data_controls_urls.py`, `core/connector_settings_views.py`, tests | 0038, 0039 |
+| settings-data | `core/data_controls_models.py`, `core/data_controls_views.py`, `core/data_controls_urls.py`, tests | 0038, 0039 |
 | billing | `core/billing_models.py`, `core/billing_views.py`, `core/billing_urls.py`, `core/payments/*`, tests | 0040–0042 |
 | quota | `core/model_views.py`, `core/rag_runtime.py`, `core/token_budget.py`, `tests/test_token_budget_*.py` | 0043 if any |
 | web-shell | `apps/web-studio/src/router/*`, `src/App.vue`, `src/main.ts`, `src/settings/layout/*`, `src/settings/shared/*`, `src/settings/routes.ts`, `src/settings/{account,general,help,about}/`, `src/i18n/index.ts`, `src/i18n/zh.ts`, `src/i18n/settings/index.ts`, `src/services/http.ts`, `apps/web-studio/tests/settings-*.test.mjs` | – |
-| web-a | `src/settings/{plan,subscription,connectors,appearance,notifications}/`, `src/i18n/settings/{plan,subscription,connectors,appearance,notifications}.zh.ts`, its own tests | – |
+| web-a | `src/settings/{plan,subscription,appearance,notifications}/`, `src/i18n/settings/{plan,subscription,appearance,notifications}.zh.ts`, its own tests | – |
 | web-b | `src/settings/{work-mode,shortcuts,data-controls,archive,privacy}/`, matching i18n files, its own tests | – |
 
 Registration hooks (each worker appends exactly its own lines, nothing else):
@@ -189,7 +189,7 @@ Registration hooks (each worker appends exactly its own lines, nothing else):
 - Router: `/settings/:section` under `SettingsLayout.vue`, child routes from `src/settings/routes.ts`, lazy
   components, `meta: { requiresAuth: true, group, section }`. Route names `settings.<slug>`. Legacy views stay
   reachable (`/` keeps the current workspace shell) — the settings area must not break existing navigation.
-- Slugs (fixed, in this order): `account`, `plan`, `subscription`, `general`, `connectors`, `appearance`,
+- Slugs (fixed, in this order): `account`, `plan`, `subscription`, `general`, `appearance`,
   `notifications`, `work-mode`, `shortcuts`, `data-controls`, `archive`, `privacy`, `help`, `about`.
   Groups: `account` = {account, plan, subscription}; `general` = the rest in listed order.
 - Each page lives in `src/settings/<slug>/index.vue` + `logic.ts` (pure functions: defaults folding,
@@ -212,11 +212,11 @@ Registration hooks (each worker appends exactly its own lines, nothing else):
 
 | # | Requirement | Evidence |
 |---|---|---|
-| 1 | 14 items visible, correct route, active survives refresh | `settings-routes.test.mjs` + backend `test_settings_navigation_api` |
+| 1 | 13 items visible, correct route, active survives refresh | `settings-routes.test.mjs` + backend `test_settings_navigation_api` |
 | 2 | direct route requires auth + server authorization | `test_settings_requires_auth`, `test_settings_forbidden_role`, router guard test |
 | 3 | user/tenant/project isolation | `test_settings_cross_tenant_isolation`, `test_settings_cross_user_isolation`, `test_settings_precedence` |
 | 4 | durable across restart | `test_settings_persist_across_reload` (fresh queryset / new client) |
-| 5 | connectors via real API + audit | `test_connector_install_and_audit`, `test_connector_test_invocation_uses_gateway` |
+| 5 | connector install/credential/capability live in Integration Hub (agent-plugin API + capability invoke) | `test_agent_plugin_*`, `test_agent_capabilities` |
 | 6 | subscription/usage authoritative, unavailable without provider | `test_billing_capabilities_without_provider`, `test_billing_usage_reflects_token_budget` |
 | 7 | export/archive/delete scope+confirm+idempotent+audit | `test_data_export_*`, `test_archive_restore_*`, `test_deletion_request_*` |
 | 8 | appearance/notification/shortcut defaults+persistence+failure | `test_user_preferences_defaults`, page tests |

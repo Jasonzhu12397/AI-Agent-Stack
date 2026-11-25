@@ -96,17 +96,6 @@ from core.membership_views import (
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
-from core.plugin_views import (
-    PluginApproveView,
-    PluginCatalogListCreateView,
-    PluginConnectionListCreateView,
-    PluginConnectionTestView,
-    PluginConnectionStatusView,
-    PluginDetailView,
-    PluginInstallationListCreateView,
-    PluginInstallationStatusView,
-)
-from core.mcp_views import PluginConnectionToolSyncView
 from core.provider_oauth_views import (
     ProviderOAuthExchangeView,
     ProviderOAuthStartView,
@@ -118,11 +107,6 @@ from core.model_views import (
     ModelProviderCatalogView,
     ModelProviderListCreateView,
     ModelTestView,
-)
-from core.tool_approval_views import (
-    ToolApprovalApproveView,
-    ToolApprovalListView,
-    ToolApprovalRejectView,
 )
 from core.task_views import TaskCancelView, TaskDetailView, TaskListCreateView
 from core.token_budget_views import TenantTokenBudgetView
@@ -187,54 +171,9 @@ urlpatterns = [
         name="knowledge-document-retry",
     ),
     path(
-        "api/v1/connectors/",
-        PluginCatalogListCreateView.as_view(),
-        name="plugin-catalog",
-    ),
-    path(
-        "api/v1/connectors/<uuid:plugin_id>/",
-        PluginDetailView.as_view(),
-        name="plugin-detail",
-    ),
-    path(
-        "api/v1/connectors/<uuid:plugin_id>/approve/",
-        PluginApproveView.as_view(),
-        name="plugin-approve",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/plugin-installations/",
-        PluginInstallationListCreateView.as_view(),
-        name="plugin-installations",
-    ),
-    path(
-        "api/v1/plugin-installations/<uuid:installation_id>/status/",
-        PluginInstallationStatusView.as_view(),
-        name="plugin-installation-status",
-    ),
-    path(
-        "api/v1/plugin-installations/<uuid:installation_id>/connections/",
-        PluginConnectionListCreateView.as_view(),
-        name="plugin-connections",
-    ),
-    path(
-        "api/v1/plugin-connections/<uuid:connection_id>/test/",
-        PluginConnectionTestView.as_view(),
-        name="plugin-connection-test",
-    ),
-    path(
-        "api/v1/plugin-connections/<uuid:connection_id>/sync-tools/",
-        PluginConnectionToolSyncView.as_view(),
-        name="plugin-connection-sync-tools",
-    ),
-    path(
         "api/v1/metal3/lab-workflow/",
         Metal3LabWorkflowView.as_view(),
         name="metal3-lab-workflow",
-    ),
-    path(
-        "api/v1/plugin-connections/<uuid:connection_id>/status/",
-        PluginConnectionStatusView.as_view(),
-        name="plugin-connection-status",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/infrastructure-networks/",
@@ -584,21 +523,6 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/members/<uuid:membership_id>/",
         ProjectMemberDetailView.as_view(),
         name="project-member-detail",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/",
-        ToolApprovalListView.as_view(),
-        name="tool-approval-list",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/approve/",
-        ToolApprovalApproveView.as_view(),
-        name="tool-approval-approve",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tool-approvals/<uuid:approval_id>/reject/",
-        ToolApprovalRejectView.as_view(),
-        name="tool-approval-reject",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/tasks/",

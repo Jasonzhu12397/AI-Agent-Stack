@@ -1,7 +1,6 @@
 import uuid
 
 from django.db import transaction
-from django.db.models import F
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -23,7 +22,6 @@ from core.models import (
     AgentVersion,
     KnowledgeBase,
     ModelConfig,
-    PluginTool,
     Project,
     ProjectMembership,
     Task,
@@ -225,21 +223,19 @@ class AgentPublishView(APIView):
                     "system_prompt cannot exceed 12,000 characters.",
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
-            tool_allowlist = config.get("tool_allowlist", [])
+            if "tool_allowlist" in config:
+                return legacy_error_response(
+                    "tool_allowlist is retired; use capability_allowlist.",
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
             capability_allowlist = config.get("capability_allowlist", [])
             knowledge_base_ids = config.get("knowledge_base_ids", [])
             if (
-                not isinstance(tool_allowlist, list)
-                or not isinstance(capability_allowlist, list)
+                not isinstance(capability_allowlist, list)
                 or not isinstance(knowledge_base_ids, list)
             ):
                 return legacy_error_response(
-                    "tool_allowlist, capability_allowlist and knowledge_base_ids must be arrays.",
-                    http_status=status.HTTP_400_BAD_REQUEST,
-                )
-            if tool_allowlist and capability_allowlist:
-                return legacy_error_response(
-                    "Use either tool_allowlist or capability_allowlist, not both.",
+                    "capability_allowlist and knowledge_base_ids must be arrays.",
                     http_status=status.HTTP_400_BAD_REQUEST,
                 )
             if len(knowledge_base_ids) > 8:
@@ -273,50 +269,6 @@ class AgentPublishView(APIView):
                 if available_knowledge_ids != set(knowledge_ids):
                     return legacy_error_response(
                         ("Every knowledge base must be active and belong to this project."),
-                        http_status=status.HTTP_400_BAD_REQUEST,
-                    )
-            if not isinstance(tool_allowlist, list) or len(tool_allowlist) > 32:
-                return legacy_error_response(
-                    "tool_allowlist must contain at most 32 plugin tool IDs.",
-                    http_status=status.HTTP_400_BAD_REQUEST,
-                )
-            try:
-                tool_ids = [uuid.UUID(str(value)) for value in tool_allowlist]
-            except (TypeError, ValueError, AttributeError):
-                return legacy_error_response(
-                    "tool_allowlist entries must be plugin tool UUIDs.",
-                    http_status=status.HTTP_400_BAD_REQUEST,
-                )
-            if len(set(tool_ids)) != len(tool_ids):
-                return legacy_error_response(
-                    "tool_allowlist cannot contain duplicate IDs.",
-                    http_status=status.HTTP_400_BAD_REQUEST,
-                )
-            if tool_ids:
-                if "tools" not in model_config.capabilities:
-                    return legacy_error_response(
-                        "Selected model does not declare tools capability.",
-                        http_status=status.HTTP_400_BAD_REQUEST,
-                    )
-                available_tool_ids = set(
-                    PluginTool.objects.filter(
-                        id__in=tool_ids,
-                        enabled=True,
-                        plugin__tenant=agent.tenant,
-                        plugin__enabled=True,
-                        plugin__review_status="approved",
-                        plugin__installations__tenant=agent.tenant,
-                        plugin__installations__project=agent.project,
-                        plugin__installations__status="installed",
-                        plugin__installations__plugin_version=F("plugin__version"),
-                    ).values_list("id", flat=True)
-                )
-                if available_tool_ids != set(tool_ids):
-                    return legacy_error_response(
-                        (
-                            "Every allowed tool must belong to an approved connector "
-                            "installed in this project."
-                        ),
                         http_status=status.HTTP_400_BAD_REQUEST,
                     )
             capability_names: list[str] = []
@@ -402,7 +354,6 @@ class AgentPublishView(APIView):
             snapshot = {
                 "model_config_id": str(model_config.id),
                 "system_prompt": system_prompt,
-                "tool_allowlist": [str(value) for value in tool_ids],
                 "capability_allowlist": capability_names,
                 "knowledge_base_ids": [str(value) for value in knowledge_ids],
                 "max_iterations": max_iterations,
@@ -427,8 +378,7 @@ class AgentPublishView(APIView):
                     "agent_id": str(agent.id),
                     "version": version_number,
                     "model_config_id": snapshot["model_config_id"],
-                    "tool_count": len(snapshot["tool_allowlist"])
-                    + len(snapshot["capability_allowlist"]),
+                    "tool_count": len(snapshot["capability_allowlist"]),
                     "knowledge_base_count": len(snapshot["knowledge_base_ids"]),
                 },
             )

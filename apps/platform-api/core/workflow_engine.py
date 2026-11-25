@@ -7,7 +7,6 @@ import uuid
 from collections import deque
 
 from django.db import transaction
-from django.db.models import F
 from django.utils import timezone
 
 from core.model_gateway import ModelGateway, ModelGatewayError
@@ -17,6 +16,7 @@ from core.agent_capability_router import (
     CAPABILITY_NOT_INSTALLED,
     CapabilityResolutionError,
     invoke_capability,
+    resolve_capability,
 )
 from core.plugin_agent_binding import (
     BINDING_VERSION_MISMATCH,
@@ -28,16 +28,12 @@ from core.models import (
     AuditEvent,
     KnowledgeBase,
     ModelConfig,
-    PluginConnection,
-    PluginInstallation,
-    PluginTool,
     Task,
     WorkflowRun,
     WorkflowStepRun,
 )
 from core.audit import record_audit_event
-from core.http_connector import register_http_tool
-from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
+from core.tool_router import ToolApprovalRequired
 from core.token_budget import TenantTokenBudgetExceeded, resolve_provider_token_usage
 from core.token_guard import RunTokenGuard
 
@@ -173,15 +169,11 @@ def validate_workflow_definition(definition):
             if len(config["prompt_template"]) > 12000:
                 raise WorkflowValidationError(f"LLM node {node_id} prompt is too long.")
         if node_type == "tool":
-            tool_id = config.get("tool_id")
-            if not isinstance(tool_id, str):
-                raise WorkflowValidationError(f"Tool node {node_id} requires tool_id.")
-            try:
-                uuid.UUID(tool_id)
-            except ValueError as exc:
+            capability = config.get("capability")
+            if not isinstance(capability, str) or not capability:
                 raise WorkflowValidationError(
-                    f"Tool node {node_id} tool_id must be a UUID."
-                ) from exc
+                    f"Tool node {node_id} requires capability."
+                )
             if "arguments" in config and not isinstance(config["arguments"], dict):
                 raise WorkflowValidationError(f"Tool node {node_id} arguments must be an object.")
         if node_type == "knowledge_search":
@@ -502,40 +494,18 @@ def validate_model_references(graph, tenant, project):
                 )
             continue
         if node["type"] == "tool":
-            tool = (
-                PluginTool.objects.select_related("plugin")
-                .filter(
-                    pk=config["tool_id"],
-                    enabled=True,
-                    plugin__enabled=True,
-                    plugin__review_status="approved",
-                    plugin__installations__tenant=tenant,
-                    plugin__installations__project=project,
-                    plugin__installations__status=PluginInstallation.Status.INSTALLED,
-                    plugin__installations__plugin_version=F("plugin__version"),
-                )
-                .first()
-            )
-            if tool is None:
+            capability_name = config["capability"]
+            try:
+                resolved = resolve_capability(tenant.id, project.id, capability_name)
+            except CapabilityResolutionError as exc:
                 raise WorkflowValidationError(
-                    "A workflow tool node references a tool that is not "
-                    "installed and approved in this project."
-                )
-            if tool.risk_level in {
-                PluginTool.RiskLevel.HIGH,
-                PluginTool.RiskLevel.CRITICAL,
-            }:
+                    "A workflow tool node references a capability that is not "
+                    "installed in this project: " + str(exc)
+                ) from exc
+            if resolved.definition.get("risk_level") in {"high", "critical"}:
                 raise WorkflowValidationError(
-                    "High-risk workflow tools require a human approval node "
-                    "and cannot execute directly."
-                )
-            if tool.idempotency_mode not in {
-                PluginTool.IdempotencyMode.READ_ONLY,
-                PluginTool.IdempotencyMode.IDEMPOTENT,
-            }:
-                raise WorkflowValidationError(
-                    "Workflow tools must be read-only or idempotent because "
-                    "workflow retries may replay a step."
+                    "High-risk workflow capabilities require a human approval "
+                    "node and cannot execute directly."
                 )
             continue
         if node["type"] == "agent":
@@ -922,32 +892,7 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
         source_node = config.get("input_from") or config.get("source_node")
         return state.get(source_node) if source_node else dict(state)
     if node_type == "tool":
-        tool = PluginTool.objects.select_related("plugin").get(
-            pk=config["tool_id"],
-            enabled=True,
-            plugin__enabled=True,
-            plugin__review_status="approved",
-        )
-        installation = PluginInstallation.objects.get(
-            tenant=tenant,
-            project=project,
-            plugin=tool.plugin,
-            status=PluginInstallation.Status.INSTALLED,
-            plugin_version=tool.plugin.version,
-        )
-        connections = list(
-            PluginConnection.objects.filter(
-                installation=installation,
-                status=PluginConnection.Status.HEALTHY,
-            ).order_by("created_at")[:2]
-        )
-        if len(connections) > 1:
-            raise WorkflowValidationError(
-                "Multiple healthy connector connections require an explicit connection binding."
-            )
-        router = ToolRouter()
-        register_http_tool(router, tool)
-        connection = connections[0] if connections else None
+        capability_name = config["capability"]
         arguments = dict(config.get("arguments", {}))
         if config.get("arguments_from"):
             source = state.get(config["arguments_from"])
@@ -957,27 +902,26 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
                 )
             arguments = source
         try:
-            result = router.execute(
-                installation=installation,
-                tool=tool,
-                arguments=arguments,
-                granted_permissions=installation.granted_permissions,
-                connection=connection,
+            result = invoke_capability(
+                str(tenant.id),
+                str(project.id),
+                capability_name,
+                arguments,
                 approved=False,
             )
-        except ToolExecutionError as exc:
+        except CapabilityResolutionError as exc:
             record_audit_event(
                 None,
                 tenant,
                 "workflow.tool.executed",
-                "plugin_tool",
-                tool.id,
+                "capability",
+                capability_name,
                 project=project,
                 outcome=AuditEvent.Outcome.FAILURE,
                 metadata={
                     "workflow_task_id": str(task.id),
-                    "plugin_key": tool.plugin.plugin_key,
-                    "tool_name": tool.name,
+                    "capability": capability_name,
+                    "code": exc.code,
                 },
                 actor=task.created_by,
             )
@@ -986,15 +930,11 @@ def _execute_node(node, state, input_data, tenant, project, task, workflow_run=N
             None,
             tenant,
             "workflow.tool.executed",
-            "plugin_tool",
-            tool.id,
+            "capability",
+            capability_name,
             project=project,
             outcome=AuditEvent.Outcome.SUCCESS,
-            metadata={
-                "workflow_task_id": str(task.id),
-                "plugin_key": tool.plugin.plugin_key,
-                "tool_name": tool.name,
-            },
+            metadata={"workflow_task_id": str(task.id), "capability": capability_name},
             actor=task.created_by,
         )
         return result

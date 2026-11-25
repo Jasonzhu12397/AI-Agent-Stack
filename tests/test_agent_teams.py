@@ -1,4 +1,3 @@
-from uuid import uuid4
 
 import pytest
 from core.models import (
@@ -69,7 +68,7 @@ def make_model(user, tenant, name, response):
     )
 
 
-def make_agent(user, tenant, project, model, name, tool_allowlist=None):
+def make_agent(user, tenant, project, model, name, capability_allowlist=None):
     agent = AgentDefinition.objects.create(
         tenant=tenant,
         project=project,
@@ -88,7 +87,7 @@ def make_agent(user, tenant, project, model, name, tool_allowlist=None):
         config_snapshot={
             "model_config_id": str(model.id),
             "system_prompt": f"You are {name}.",
-            "tool_allowlist": tool_allowlist or [],
+            "capability_allowlist": capability_allowlist or [],
             "knowledge_base_ids": [],
             "max_iterations": 2,
             "timeout_seconds": 30,
@@ -219,7 +218,7 @@ def test_team_run_executes_every_member_and_coordinator(team_workspace):
 
 
 @pytest.mark.django_db
-def test_team_publish_rejects_agent_with_plugin_tools(team_workspace):
+def test_team_publish_carries_member_capability_allowlist(team_workspace):
     user, tenant, project, model = team_workspace
     tool_agent = make_agent(
         user,
@@ -227,7 +226,7 @@ def test_team_publish_rejects_agent_with_plugin_tools(team_workspace):
         project,
         model,
         "Tool Agent",
-        tool_allowlist=[str(uuid4())],
+        capability_allowlist=["missing-capability"],
     )
     client = APIClient()
     client.force_authenticate(user=user)
@@ -247,9 +246,8 @@ def test_team_publish_rejects_agent_with_plugin_tools(team_workspace):
         {},
         format="json",
     )
-    assert published.status_code == 400
-    assert published.data["code"] == "TEAM_AGENT_TOOLS_UNSUPPORTED"
-    assert AgentTeamVersion.objects.count() == 0
+    assert published.status_code == 201
+    assert AgentTeamVersion.objects.count() == 1
 
 
 @pytest.mark.django_db

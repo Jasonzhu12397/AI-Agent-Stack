@@ -1,12 +1,5 @@
 from django.urls import path
 
-from core.connector_settings_views import (
-    ConnectorCatalogView,
-    ConnectorHealthView,
-    ConnectorInstallationUpdateView,
-    ConnectorInstallView,
-    ConnectorTestView,
-)
 from core.data_controls_views import (
     ArchiveItemListView,
     ArchiveItemPurgeView,
@@ -22,32 +15,6 @@ from core.data_controls_views import (
 )
 
 urlpatterns = [
-    # Connectors
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/connectors/",
-        ConnectorCatalogView.as_view(),
-        name="connector-catalog-settings",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/connectors/<str:slug>/install/",
-        ConnectorInstallView.as_view(),
-        name="connector-install-settings",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/installations/<uuid:installation_id>/",
-        ConnectorInstallationUpdateView.as_view(),
-        name="connector-installation-update",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/installations/<uuid:installation_id>/health/",
-        ConnectorHealthView.as_view(),
-        name="connector-installation-health",
-    ),
-    path(
-        "api/v1/tenants/<uuid:tenant_id>/installations/<uuid:installation_id>/test/",
-        ConnectorTestView.as_view(),
-        name="connector-installation-test",
-    ),
     # Data exports
     path(
         "api/v1/tenants/<uuid:tenant_id>/data-controls/exports/",

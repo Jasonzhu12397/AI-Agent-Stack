@@ -1,3 +1,8 @@
+# Plugin registry (retired)
+
+This document describes the removed `PluginDefinition`/`PluginTool` stack.
+It is kept only as history; current integration lives in `docs/chat-workspace.md`.
+
 # Integration Hub: plugin registry milestone
 
 ## Implemented control-plane capabilities

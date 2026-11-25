@@ -25,7 +25,6 @@ from core.models import (
     AgentRun,
     AgentTeam,
     AuditEvent,
-    PluginInstallation,
     Project,
     ProjectMembership,
     Task,
@@ -575,15 +574,7 @@ class PrivacyGrantListView(ErrorEnvelopeMixin, APIView):
 
     def get(self, request, tenant_id):
         tenant = get_tenant_for_user(request, tenant_id)
-        from core.models import PluginInstallation
-
         grants = []
-        for installation in PluginInstallation.objects.filter(tenant=tenant).select_related(
-            "plugin", "project"
-        ):
-            grants.append(
-                _grant_payload(installation, "connector", installation.granted_permissions)
-            )
         for installation in AgentPluginInstallation.objects.filter(tenant=tenant).select_related(
             "plugin", "project"
         ):
@@ -597,11 +588,6 @@ class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def _resolve(self, tenant, grant_id):
-        from core.models import PluginInstallation
-
-        plugin_installation = PluginInstallation.objects.filter(tenant=tenant, pk=grant_id).first()
-        if plugin_installation is not None:
-            return "plugin", plugin_installation
         agent_installation = AgentPluginInstallation.objects.filter(
             tenant=tenant, pk=grant_id
         ).first()
@@ -617,9 +603,9 @@ class PrivacyGrantRevokeView(ErrorEnvelopeMixin, APIView):
         if installation is None:
             return error_response("GRANT_NOT_FOUND", "Grant not found for this tenant.", status=404)
 
-        already_revoked = installation.status == PluginInstallation.Status.DISABLED
+        already_revoked = installation.status == AgentPluginInstallation.Status.DISABLED
         if not already_revoked:
-            installation.status = PluginInstallation.Status.DISABLED
+            installation.status = AgentPluginInstallation.Status.DISABLED
             installation.save(update_fields=["status", "updated_at"])
             record_audit_event(
                 request,

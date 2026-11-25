@@ -2,7 +2,6 @@ import { messages as account } from "./account.zh";
 import { messages as plan } from "./plan.zh";
 import { messages as subscription } from "./subscription.zh";
 import { messages as general } from "./general.zh";
-import { messages as connectors } from "./connectors.zh";
 import { messages as appearance } from "./appearance.zh";
 import { messages as notifications } from "./notifications.zh";
 import { messages as workMode } from "./work-mode.zh";
@@ -19,7 +18,6 @@ export const settingsNamespaceMessages: Record<string, Record<string, string>> =
   plan,
   subscription,
   general,
-  connectors,
   appearance,
   notifications,
   "work-mode": workMode,

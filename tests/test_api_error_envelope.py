@@ -67,9 +67,12 @@ ENDPOINTS = [
         "url": lambda w: _tenant_path(w["tenant"].id, "billing/plans"),
     },
     {
-        "label": "connectors",
+        "label": "agent-plugins",
         "scope": "tenant",
-        "url": lambda w: _tenant_path(w["tenant"].id, "connectors"),
+        "url": lambda w: (
+            f"/api/v1/tenants/{w['tenant'].id}/projects/{w['project'].id}"
+            "/agent-plugin-installations/"
+        ),
     },
     {
         "label": "data-controls",

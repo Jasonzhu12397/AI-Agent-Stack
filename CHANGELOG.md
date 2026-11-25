@@ -6,6 +6,19 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- The legacy connector stack is gone: `PluginDefinition`, `PluginTool`,
+  `PluginInstallation`, `PluginConnection` and `ToolApprovalRequest` are
+  dropped by migration `0066_delete_legacy_connector_stack`, together with the
+  `/api/v1/connectors/` API, plugin-installation/connection/tool-approval
+  routes, MCP tool discovery, the settings connectors page and the per-call
+  high-risk tool approval checkpoint.
+- `tool_allowlist` is retired. Agents, workflow tool nodes, the catalog and the
+  worker now use `capability_allowlist` and invoke capabilities through
+  `invoke_capability`; high-risk capabilities are rejected at publish time and
+  fail closed at run time.
+
 ### Added
 
 - The Integration Hub now reads agent-plugin definitions instead of the legacy

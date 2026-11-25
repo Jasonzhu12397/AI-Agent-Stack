@@ -64,12 +64,6 @@ PAGES = [
         "member_keys": ["section", "scope", "effective", "defaults", "sources"],
     },
     {
-        "slug": "connectors",
-        "scope": "tenant",
-        "url": lambda tenant, project: _tenant_path(tenant.id, "connectors"),
-        "member_keys": ["results"],
-    },
-    {
         "slug": "appearance",
         "scope": "user",
         "url": lambda tenant, project: "/api/v1/users/me/preferences/appearance/",
@@ -274,9 +268,9 @@ def test_slug_set_matches_contract_doc():
 
 
 def test_matrix_has_one_case_per_slug():
-    assert len(PAGES) == 14
-    assert len(SLUGS) == 14
-    assert len(set(SLUGS)) == 14
+    assert len(PAGES) == 13
+    assert len(SLUGS) == 13
+    assert len(set(SLUGS)) == 13
     registered = {entry["slug"] for entry in PAGES}
     for entry in PAGES:
         assert entry["slug"] in registered

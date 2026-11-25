@@ -58,7 +58,6 @@ def test_agent_draft_publish_creates_immutable_version(agent_workspace):
             "draft_config": {
                 "model_config_id": str(model.id),
                 "system_prompt": "You are a concise support assistant.",
-                "tool_allowlist": [],
                 "knowledge_base_ids": [],
                 "max_iterations": 1,
                 "timeout_seconds": 20,
@@ -105,7 +104,6 @@ def test_agent_publish_rejects_boolean_numeric_limits(agent_workspace, field, va
                 "max_iterations": 1,
                 "timeout_seconds": 20,
                 "max_tokens": 512,
-                "tool_allowlist": [],
                 "knowledge_base_ids": [],
             },
         },
@@ -139,7 +137,6 @@ def test_agent_run_executes_through_persistent_worker(agent_workspace):
                 "max_iterations": 1,
                 "timeout_seconds": 20,
                 "max_tokens": 512,
-                "tool_allowlist": [],
                 "knowledge_base_ids": [],
             },
         },
@@ -182,7 +179,6 @@ def test_agent_cannot_publish_with_tools_or_knowledge_before_those_modules_exist
         draft_config={
             "model_config_id": str(model.id),
             "system_prompt": "System prompt",
-            "tool_allowlist": ["github.search"],
         },
     )
     client = APIClient()
@@ -275,7 +271,6 @@ def test_agent_publishes_with_installed_capability_allowlist(agent_workspace):
             "draft_config": {
                 "model_config_id": str(model.id),
                 "system_prompt": "You are a weather assistant.",
-                "tool_allowlist": [],
                 "capability_allowlist": ["weather.current"],
                 "knowledge_base_ids": [],
                 "max_iterations": 2,
@@ -292,7 +287,6 @@ def test_agent_publishes_with_installed_capability_allowlist(agent_workspace):
     )
     assert published.status_code == 201, published.data
     assert published.data["config_snapshot"]["capability_allowlist"] == ["weather.current"]
-    assert published.data["config_snapshot"]["tool_allowlist"] == []
 
 
 @pytest.mark.django_db
@@ -314,7 +308,6 @@ def test_agent_publish_rejects_unknown_and_high_risk_capabilities(agent_workspac
                 "draft_config": {
                     "model_config_id": str(model.id),
                     "system_prompt": "You are a test assistant.",
-                    "tool_allowlist": [],
                     "capability_allowlist": [capability],
                     "knowledge_base_ids": [],
                     "max_iterations": 1,

@@ -13,7 +13,7 @@ All 14 items in the acceptance document are routed Vue pages backed by real Djan
 | 2 | Standard Plan | `plan` | `src/settings/plan/` | `GET /api/v1/tenants/<t>/billing/plans/`, `GET .../billing/capabilities/` |
 | 3 | Subscription & Usage Management | `subscription` | `src/settings/subscription/` | `GET .../billing/subscription/`, `GET .../billing/usage/`, `GET/POST .../billing/orders/`, `GET .../orders/<id>/status/`, `POST .../orders/<id>/close/`, `POST .../orders/<id>/refund/`, `POST .../billing/subscription/cancel/`, `POST .../billing/subscription/resume/`, `GET .../billing/reconciliation/` |
 | 4 | General | `general` | `src/settings/general/` | `GET/PATCH .../settings/general/`, `GET/PATCH .../projects/<p>/settings/general/` |
-| 5 | Plugins & Connectors | `connectors` | `src/settings/connectors/` | `GET .../connectors/`, `POST .../connectors/<slug>/install/`, `PATCH .../installations/<id>/`, `POST .../health/`, `POST .../test/` |
+| 5 | Plugins & Connectors | moved to Integration Hub | – | `GET/POST .../agent-plugins/`, `.../agent-plugin-installations/`, capability invoke |
 | 6 | Appearance | `appearance` | `src/settings/appearance/` | `GET/PUT/PATCH /api/v1/users/me/preferences/appearance/` |
 | 7 | Notification Settings | `notifications` | `src/settings/notifications/` | `GET/PATCH .../settings/notifications/` |
 | 8 | Work Mode Settings | `work-mode` | `src/settings/work-mode/` | `GET/PATCH .../settings/work-mode/` |
@@ -36,7 +36,7 @@ Shared shell: `src/router/{index.ts,guard.ts}`, `src/settings/routes.ts`, `src/s
 ## 3. Hard requirement A — 14 pages
 
 - Backend page matrix `tests/test_settings_pages_acceptance.py`: 44 cases = 14 pages × 3 tiers (anonymous 401 + envelope, non-member 404 + envelope, member 2xx + primary fields) + 2 integrity cases (`test_slug_set_matches_contract_doc`, `test_matrix_has_one_case_per_slug`). A missing page cannot pass.
-- Frontend per-page logic tests: `settings-account-logic`, `settings-plan`, `settings-subscription`, `settings-general-logic`, `settings-connectors`, `settings-appearance`, `settings-notifications`, `settings-work-mode`, `settings-shortcuts`, `settings-data-controls`, `settings-archive`, `settings-privacy`, `settings-help`, `settings-about` — 14 files, one per page, plus `settings-guard`, `settings-routes`, `settings-labels` for the shell. `settings-routes.test.mjs` also asserts every lazy component target exists on disk.
+- Frontend per-page logic tests: `settings-account-logic`, `settings-plan`, `settings-subscription`, `settings-general-logic`, `settings-appearance`, `settings-notifications`, `settings-work-mode`, `settings-shortcuts`, `settings-data-controls`, `settings-archive`, `settings-privacy`, `settings-help`, `settings-about` — 13 files, one per page, plus `settings-guard`, `settings-routes`, `settings-labels` for the shell. `settings-routes.test.mjs` also asserts every lazy component target exists on disk.
 - Error envelope contract: `core/api_errors.py` `ErrorEnvelopeMixin` maps `NotAuthenticated`→401 `AUTHENTICATION_REQUIRED`, `AuthenticationFailed`→401 `AUTHENTICATION_FAILED`, `PermissionDenied`→403 `PERMISSION_DENIED`, `NotFound`→404 `NOT_FOUND` (no existence leak), other `APIException`→own status with `default_code` uppercased, unexpected→500 without internals. Asserted by `tests/test_api_error_envelope.py` across billing / connectors / data-controls / archive / privacy, including "no top-level `detail` key".
 
 ## 4. Hard requirement B — token budget cannot be overspent

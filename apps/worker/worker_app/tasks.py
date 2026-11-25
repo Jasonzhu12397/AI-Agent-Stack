@@ -1,6 +1,5 @@
 # ruff: noqa: I001
 import json
-import logging
 import re
 import uuid
 from datetime import timedelta
@@ -11,39 +10,25 @@ from core.model_gateway import ModelGateway, ModelGatewayError
 from core.models import (
     AgentRun,
     AgentTeamRun,
-    AuditEvent,
     KnowledgeBase,
     KnowledgeDocument,
     ModelConfig,
-    PluginConnection,
-    PluginInstallation,
-    PluginTool,
     Task,
-    ToolApprovalRequest,
     WorkflowRun,
 )
-from core.llm_tools import parse_openai_tool_calls, to_openai_function_tools
-from core.tool_router import ToolApprovalRequired, ToolExecutionError, ToolRouter
+from core.llm_tools import parse_openai_tool_calls
+from core.tool_router import ToolApprovalRequired, ToolExecutionError
 from core.token_budget import (
     TenantTokenBudgetExceeded,
     resolve_provider_token_usage,
     settle_tenant_tokens,
 )
 from core.token_guard import RunTokenGuard
-from core.tool_approvals import (
-    consume_approved_tool_call,
-    create_pending_tool_approval,
-    expire_pending_tool_approvals,
-    validate_execution_checkpoint,
-)
 from core.agent_capability_router import (
     CapabilityResolutionError,
     invoke_capability,
-    register_invalidation_hook,
     resolve_capability,
 )
-from core.audit import record_audit_event
-from core.http_connector import register_http_tool
 from core.rag_runtime import RagRuntimeError, ingest_text, retrieve_context
 from core.workflow_engine import (
     WorkflowApprovalPending,
@@ -53,7 +38,7 @@ from core.workflow_engine import (
     expire_workflow_runs,
 )
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Q
 from django.utils import timezone
 
 
@@ -315,43 +300,6 @@ def fail_task(task_id, lease_token, error, retryable=True):
 
 
 
-TOOL_ROUTER = ToolRouter()
-logger = logging.getLogger(__name__)
-
-
-def _invalidate_installation_handlers(installation: object) -> None:
-    """Drop every in-process handler bound to the uninstalled plugin."""
-    plugin_key = getattr(getattr(installation, "plugin", None), "plugin_key", None)
-    if plugin_key:
-        TOOL_ROUTER.unregister(plugin_key)
-
-
-register_invalidation_hook(_invalidate_installation_handlers)
-
-
-def _record_connector_tool_event(task, tool, connection, outcome):
-    try:
-        record_audit_event(
-            None,
-            task.tenant,
-            "connector.tool.executed",
-            "plugin_tool",
-            tool.id,
-            project=task.project,
-            outcome=outcome,
-            metadata={
-                "plugin_key": tool.plugin.plugin_key,
-                "plugin_version": tool.plugin.version,
-                "tool_name": tool.name,
-                "risk_level": tool.risk_level,
-                "connection_id": str(connection.id) if connection else None,
-            },
-            actor=getattr(task, "created_by", None),
-        )
-    except Exception:
-        logger.exception("Unable to persist connector tool audit event")
-
-
 MAX_AGENT_TOOL_CALLS = 12
 MAX_AGENT_TOOL_RESULT_BYTES = 8192
 MAX_AGENT_RUN_TOTAL_TOKENS = 16000
@@ -522,36 +470,6 @@ def _serialize_agent_tool_result(result):
 
 
 
-def _load_agent_tools(task, config):
-    tool_ids = config.get("tool_allowlist", [])
-    if not isinstance(tool_ids, list) or len(tool_ids) > 32:
-        raise PermanentTaskError("Published agent tool allowlist is invalid")
-    if not tool_ids:
-        return [], {}
-    tools = list(
-        PluginTool.objects.filter(
-            id__in=tool_ids,
-            enabled=True,
-            plugin__tenant=task.tenant,
-            plugin__enabled=True,
-            plugin__review_status="approved",
-            plugin__installations__tenant=task.tenant,
-            plugin__installations__project=task.project,
-            plugin__installations__status=PluginInstallation.Status.INSTALLED,
-            plugin__installations__plugin_version=F("plugin__version"),
-        )
-        .select_related("plugin")
-        .distinct()
-    )
-    if len(tools) != len(set(tool_ids)):
-        raise PermanentTaskError("An allowed connector tool is no longer installed or approved")
-    for tool in tools:
-        register_http_tool(TOOL_ROUTER, tool)
-    by_name = {f"{tool.plugin.plugin_key}__{tool.name}": tool for tool in tools}
-    offered = to_openai_function_tools(tools)
-    return offered, by_name
-
-
 def _capability_tool_name(plugin_key, capability):
     """OpenAI function names allow letters, digits, underscore and dash only."""
 
@@ -628,82 +546,6 @@ def _load_agent_capabilities(task, config):
         )
     return offered, by_name
 
-
-def _execute_agent_tool(task, tool, arguments, call_id):
-    try:
-        installation = PluginInstallation.objects.select_related("plugin").get(
-            tenant=task.tenant,
-            project=task.project,
-            plugin=tool.plugin,
-            status=PluginInstallation.Status.INSTALLED,
-            plugin_version=tool.plugin.version,
-        )
-    except PluginInstallation.DoesNotExist as exc:
-        _record_connector_tool_event(
-            task,
-            tool,
-            None,
-            AuditEvent.Outcome.FAILURE,
-        )
-        raise PermanentTaskError("Connector installation is no longer active") from exc
-    connections = list(
-        PluginConnection.objects.filter(
-            installation=installation,
-            status=PluginConnection.Status.HEALTHY,
-        ).order_by("created_at")[:2]
-    )
-    if len(connections) > 1:
-        _record_connector_tool_event(
-            task,
-            tool,
-            None,
-            AuditEvent.Outcome.FAILURE,
-        )
-        raise PermanentTaskError(
-            "Multiple healthy connector connections require an explicit connection binding"
-        )
-    connection = connections[0] if connections else None
-    try:
-        approved = consume_approved_tool_call(
-            task=task,
-            tool=tool,
-            installation=installation,
-            connection=connection,
-            call_id=call_id,
-            arguments=arguments,
-        )
-    except ValueError as exc:
-        raise PermanentTaskError("Approved connector tool call failed integrity checks") from exc
-    try:
-        result = TOOL_ROUTER.execute(
-            installation=installation,
-            tool=tool,
-            arguments=arguments,
-            granted_permissions=installation.granted_permissions,
-            connection=connection,
-            approved=approved,
-        )
-    except ToolApprovalRequired as exc:
-        exc.tool = tool
-        exc.installation = installation
-        exc.connection = connection
-        exc.arguments = arguments
-        raise
-    except ToolExecutionError:
-        _record_connector_tool_event(
-            task,
-            tool,
-            connection,
-            AuditEvent.Outcome.FAILURE,
-        )
-        raise
-    _record_connector_tool_event(
-        task,
-        tool,
-        connection,
-        AuditEvent.Outcome.SUCCESS,
-    )
-    return result
 
 def _renew_agent_lease(task):
     worker_id = getattr(task, "lease_owner", None)
@@ -794,9 +636,7 @@ def execute_agent_run(task):
                     "text": str(match.get("text", ""))[:2500],
                 }
             )
-    offered_tools, tools_by_name = _load_agent_tools(task, config)
-    if not offered_tools and config.get("capability_allowlist"):
-        offered_tools, tools_by_name = _load_agent_capabilities(task, config)
+    offered_tools, tools_by_name = _load_agent_capabilities(task, config)
     if offered_tools and "tools" not in model_config.capabilities:
         raise PermanentTaskError("Selected model does not declare tools capability")
     system_prompt = (
@@ -836,7 +676,6 @@ def execute_agent_run(task):
     total_tool_calls = execution_state.get("total_tool_calls", 0)
     start_iteration = execution_state.get("next_iteration", 0)
     resume_calls = None
-    approved_call_id = None
     current_raw_tool_calls = execution_state.get("pending_raw_tool_calls")
     current_call_offset = execution_state.get("next_call_index", 0)
     if (
@@ -862,54 +701,6 @@ def execute_agent_run(task):
         if current_call_offset > len(parsed_calls):
             raise PermanentTaskError("Pending agent tool call index is invalid")
         resume_calls = parsed_calls[current_call_offset:]
-    resume_approval = (
-        ToolApprovalRequest.objects.filter(
-            task=task,
-            status=ToolApprovalRequest.Status.APPROVED,
-        )
-        .order_by("-requested_at")
-        .first()
-    )
-    if resume_approval is not None:
-        try:
-            checkpoint = validate_execution_checkpoint(resume_approval.execution_checkpoint)
-            raw_calls = checkpoint["raw_tool_calls"]
-            call_index = checkpoint["call_index"]
-            if not isinstance(raw_calls, list) or not isinstance(call_index, int):
-                raise ValueError("Invalid pending tool call checkpoint")
-            if isinstance(call_index, bool) or call_index < 0 or call_index >= len(raw_calls):
-                raise ValueError("Invalid pending tool call index")
-            if str(model_config.id) != checkpoint["model_config_id"]:
-                raise ValueError("Model configuration changed while approval was pending")
-            if checkpoint["max_iterations"] != max_iterations:
-                raise ValueError("Agent iteration policy changed while approval was pending")
-            current_raw_tool_calls = raw_calls
-            current_call_offset = call_index
-            resume_calls = parse_openai_tool_calls(
-                {"tool_calls": raw_calls},
-                offered_tools,
-            )[call_index:]
-            if not resume_calls or resume_calls[0]["id"] != resume_approval.call_id:
-                raise ValueError("Approved call does not match the execution checkpoint")
-            messages = checkpoint["messages"]
-            if not isinstance(messages, list) or not messages:
-                raise ValueError("Execution checkpoint messages are invalid")
-            input_tokens = checkpoint["input_tokens"]
-            output_tokens = checkpoint["output_tokens"]
-            latency_ms = checkpoint["latency_ms"]
-            total_tool_calls = checkpoint["total_tool_calls"]
-            start_iteration = checkpoint["iteration"]
-            if (
-                not isinstance(start_iteration, int)
-                or isinstance(start_iteration, bool)
-                or start_iteration < 0
-                or start_iteration >= max_iterations
-            ):
-                raise ValueError("Execution checkpoint iteration is invalid")
-            approved_call_id = resume_approval.call_id
-        except (KeyError, TypeError, ValueError) as exc:
-            raise PermanentTaskError("Approved agent execution checkpoint is invalid") from exc
-
     token_guard = RunTokenGuard(task=task, agent_run=agent_run)
     gateway = ModelGateway(guard=token_guard)
     for iteration in range(start_iteration, max_iterations):
@@ -1035,70 +826,21 @@ def execute_agent_run(task):
             absolute_call_index = current_call_offset + call_index
             tool = tools_by_name[call["name"]]
             _renew_agent_lease(task)
+            result = {"ok": False, "error": "Capability execution failed."}
             try:
-                if getattr(tool, "kind", "") == "capability":
-                    try:
-                        result = invoke_capability(
-                            tool.tenant_id,
-                            tool.project_id,
-                            tool.capability,
-                            call["arguments"],
-                            approved=False,
-                        )
-                    except CapabilityResolutionError as exc:
-                        result = {"ok": False, "error": str(exc), "code": exc.code}
-                    except ToolApprovalRequired:
-                        # A risk level raised after publish must fail closed;
-                        # capability approvals have no checkpoint in this run.
-                        result = {
-                            "ok": False,
-                            "error": "Capability now requires explicit approval.",
-                        }
-                else:
-                    result = _execute_agent_tool(task, tool, call["arguments"], call["id"])
-            except ToolApprovalRequired as exc:
-                checkpoint = {
-                    "version": 1,
-                    "messages": messages,
-                    "raw_tool_calls": current_raw_tool_calls,
-                    "pending_calls": calls[call_index:],
-                    "call_index": absolute_call_index,
-                    "iteration": iteration,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "latency_ms": latency_ms,
-                    "total_tool_calls": total_tool_calls,
-                    "max_iterations": max_iterations,
-                    "model_config_id": str(model_config.id),
-                }
-                _persist_agent_execution_state(
-                    agent_run,
-                    messages,
-                    iteration,
-                    input_tokens,
-                    output_tokens,
-                    latency_ms,
-                    total_tool_calls,
-                    pending_raw_tool_calls=current_raw_tool_calls,
-                    next_call_index=absolute_call_index,
+                result = invoke_capability(
+                    tool.tenant_id,
+                    tool.project_id,
+                    tool.capability,
+                    call["arguments"],
+                    approved=False,
                 )
-                try:
-                    create_pending_tool_approval(
-                        task_id=task.id,
-                        tool=exc.tool,
-                        installation=exc.installation,
-                        connection=exc.connection,
-                        call_id=call["id"],
-                        arguments=exc.arguments,
-                        execution_checkpoint=checkpoint,
-                    )
-                except (ValueError, TypeError) as checkpoint_error:
-                    raise PermanentTaskError(
-                        "Unable to persist the high-risk tool approval checkpoint"
-                    ) from checkpoint_error
-                raise TaskSuspendedForApproval(
-                    "Agent run is waiting for explicit connector tool approval"
-                ) from exc
+            except CapabilityResolutionError as exc:
+                result = {"ok": False, "error": str(exc), "code": exc.code}
+            except ToolApprovalRequired:
+                # High-risk capabilities fail closed: there is no per-call
+                # approval checkpoint in a published agent run.
+                result = {"ok": False, "error": "Capability now requires explicit approval."}
             except ToolExecutionError as exc:
                 result = {"ok": False, "error": str(exc)}
             messages.append(
@@ -1108,8 +850,6 @@ def execute_agent_run(task):
                     "content": _serialize_agent_tool_result(result),
                 }
             )
-            if call["id"] == approved_call_id:
-                approved_call_id = None
             _persist_agent_execution_state(
                 agent_run,
                 messages,
@@ -1309,7 +1049,6 @@ def process_task(task, worker_id):
 
 
 def process_once(worker_id, lease_seconds=150):
-    expire_pending_tool_approvals(limit=100)
     expire_workflow_runs(limit=100)
     task = claim_next_task(worker_id, lease_seconds=lease_seconds)
     if task is None:

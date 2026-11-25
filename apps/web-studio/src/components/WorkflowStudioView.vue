@@ -688,7 +688,7 @@ function nodeType(node: Record<string, unknown>): string {
 function nodeDetail(node: Record<string, unknown>): string {
   if (!node.config || typeof node.config !== "object" || Array.isArray(node.config)) return "";
   const config = node.config as Record<string, unknown>;
-  return String(config.tool_id ?? config.model_config_id ?? config.arguments_from ?? "");
+  return String(config.capability ?? config.model_config_id ?? config.arguments_from ?? "");
 }
 
 function edgeLabel(edge: Record<string, unknown>): string {
@@ -752,7 +752,7 @@ function insertableConfigFor(type: InsertableNodeType): Record<string, unknown> 
       },
     };
   }
-  return { tool_id: "", arguments: {} };
+  return { capability: "", arguments: {} };
 }
 
 /**
@@ -1355,17 +1355,17 @@ onUnmounted(() => {
                 </el-select>
               </label>
               <label v-if="nodeTypeDraft === 'tool'" class="workflow-field">
-                <span>Connector tool</span>
+                <span>Capability</span>
                 <el-select
-                  :model-value="String(configValue('tool_id') ?? '')"
+                  :model-value="String(configValue('capability') ?? '')"
                   size="small"
                   filterable
-                  placeholder="Select an installed tool"
-                  @update:model-value="(value: unknown) => setConfigValue('tool_id', value)"
+                  placeholder="Select an installed capability"
+                  @update:model-value="(value: unknown) => setConfigValue('capability', value)"
                 >
                   <el-option v-for="tool in catalog.tools" :key="tool.id" :label="tool.name + ' · ' + tool.plugin + ' · ' + tool.risk_level" :value="tool.id" />
                 </el-select>
-                <span v-if="catalog.tools.length === 0" class="task-note">No approved tool is installed in this project.</span>
+                <span v-if="catalog.tools.length === 0" class="task-note">No capability is installed in this project.</span>
               </label>
               <label v-if="nodeTypeDraft === 'agent'" class="workflow-field">
                 <span>Agent version</span>
@@ -1435,7 +1435,7 @@ onUnmounted(() => {
           <el-input v-model="workflowDescription" placeholder="Description" />
           <el-input v-model="definitionText" type="textarea" :rows="16" resize="vertical" spellcheck="false" />
           <p class="workflow-help">
-            Supported execution nodes: start, llm, knowledge_search, tool, condition, agent, approval, loop and end. Tool nodes reference an installed, approved project connector tool by tool_id; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
+            Supported execution nodes: start, llm, knowledge_search, tool, condition, agent, approval, loop and end. Tool nodes reference an installed project capability by name; configure arguments or arguments_from. High-risk tools are rejected until the human-approval execution gate is implemented. Knowledge search retrieves only from pinned project knowledge bases.
             Loop nodes repeat an inline llm/tool/knowledge_search/agent body up to max_iterations (2–10) and persist each iteration in the run state; a body output of exactly {"continue": false} stops early. Approval nodes suspend the run in task status waiting_approval until a project administrator approves or rejects them from the execution history. The server validates graph connectivity, cycles, model and connector scope, replay safety and credential fields before publishing.
           </p>
           <div class="workflow-actions">

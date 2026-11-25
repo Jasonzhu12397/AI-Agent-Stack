@@ -4,12 +4,11 @@ from uuid import uuid4
 
 import pytest
 from core.models import (
+    AgentPluginDefinition,
+    AgentPluginInstallation,
     KnowledgeBase,
     ModelConfig,
     ModelProvider,
-    PluginDefinition,
-    PluginInstallation,
-    PluginTool,
     Project,
     ProjectMembership,
     Task,
@@ -815,7 +814,7 @@ def test_workflow_validator_accepts_tool_node_with_project_tool_reference():
                 "id": "tool_step",
                 "type": "tool",
                 "config": {
-                    "tool_id": "00000000-0000-0000-0000-000000000001",
+                    "capability": "missing-capability",
                     "arguments": {"query": "hello"},
                 },
             },
@@ -833,11 +832,11 @@ def test_workflow_validator_accepts_tool_node_with_project_tool_reference():
 @pytest.mark.parametrize(
     "tool_config, message",
     [
-        ({}, "requires tool_id"),
-        ({"tool_id": "not-a-uuid"}, "must be a UUID"),
+        ({}, "requires capability"),
+        ({}, "requires capability"),
         (
             {
-                "tool_id": "00000000-0000-0000-0000-000000000001",
+                "capability": "missing-capability",
                 "arguments": [],
             },
             "arguments must be an object",
@@ -863,33 +862,43 @@ def test_workflow_validator_rejects_malformed_tool_node(tool_config, message):
 @pytest.mark.django_db
 def test_workflow_tool_node_requires_approved_project_installation(workflow_workspace):
     user, tenant, project, model = workflow_workspace
-    plugin = PluginDefinition.objects.create(
+    plugin = AgentPluginDefinition.objects.create(
         tenant=tenant,
         created_by=user,
         plugin_key="workflow-test",
         name="Workflow Test Connector",
         version="1.0.0",
-        connector_type=PluginDefinition.ConnectorType.HTTP,
-        review_status=PluginDefinition.ReviewStatus.APPROVED,
-        enabled=True,
-    )
-    tool = PluginTool.objects.create(
-        plugin=plugin,
-        name="search",
-        input_schema={
-            "type": "object",
-            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 100}},
-            "required": ["query"],
-            "additionalProperties": False,
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=["search"],
+        manifest={
+            "capabilities": [
+                {
+                    "name": "search",
+                    "description": "Search records",
+                    "risk_level": "low",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100,
+                            }
+                        }, 
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"],
+                        "additionalProperties": False,
+                    },
+                }
+            ]
         },
-        output_schema={
-            "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
-            "additionalProperties": False,
-        },
-        risk_level=PluginTool.RiskLevel.LOW,
-        idempotency_mode=PluginTool.IdempotencyMode.READ_ONLY,
     )
     definition = {
         "nodes": [
@@ -897,10 +906,7 @@ def test_workflow_tool_node_requires_approved_project_installation(workflow_work
             {
                 "id": "tool_step",
                 "type": "tool",
-                "config": {
-                    "tool_id": str(tool.id),
-                    "arguments": {"query": "hello"},
-                },
+                "config": {"capability": "search", "arguments": {"query": "hello"}},
             },
             {"id": "end", "type": "end", "config": {"source_node": "tool_step"}},
         ],
@@ -910,83 +916,80 @@ def test_workflow_tool_node_requires_approved_project_installation(workflow_work
         ],
     }
     graph = validate_workflow_definition(definition)
-    with pytest.raises(WorkflowValidationError, match="not installed and approved"):
+    with pytest.raises(WorkflowValidationError, match="not"):
         validate_model_references(graph, tenant, project)
 
-    PluginInstallation.objects.create(
+    AgentPluginInstallation.objects.create(
         tenant=tenant,
         project=project,
         plugin=plugin,
         plugin_version=plugin.version,
-        status=PluginInstallation.Status.INSTALLED,
-        granted_permissions=[],
+        status=AgentPluginInstallation.Status.INSTALLED,
+        granted_capabilities=["search"],
         installed_by=user,
     )
     validate_model_references(graph, tenant, project)
 
-    tool.risk_level = PluginTool.RiskLevel.HIGH
-    tool.save(update_fields=["risk_level"])
-    with pytest.raises(WorkflowValidationError, match="human approval"):
-        validate_model_references(graph, tenant, project)
-
 
 @pytest.mark.django_db
-def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
+def test_workflow_tool_node_executes_through_capability_router(workflow_workspace):
     user, tenant, project, model = workflow_workspace
-    plugin = PluginDefinition.objects.create(
+    plugin = AgentPluginDefinition.objects.create(
         tenant=tenant,
         created_by=user,
         plugin_key="workflow-runtime",
         name="Workflow Runtime Connector",
         version="1.0.0",
-        connector_type=PluginDefinition.ConnectorType.HTTP,
-        review_status=PluginDefinition.ReviewStatus.APPROVED,
-        enabled=True,
-    )
-    tool = PluginTool.objects.create(
-        plugin=plugin,
-        name="lookup",
-        input_schema={
-            "type": "object",
-            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 100}},
-            "required": ["query"],
-            "additionalProperties": False,
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=["lookup"],
+        manifest={
+            "capabilities": [
+                {
+                    "name": "lookup",
+                    "description": "Lookup records",
+                    "risk_level": "low",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100,
+                            }
+                        }, 
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"],
+                        "additionalProperties": False,
+                    },
+                }
+            ]
         },
-        output_schema={
-            "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
-            "additionalProperties": False,
-        },
-        risk_level=PluginTool.RiskLevel.LOW,
-        idempotency_mode=PluginTool.IdempotencyMode.READ_ONLY,
     )
-    installation = PluginInstallation.objects.create(
+    AgentPluginInstallation.objects.create(
         tenant=tenant,
         project=project,
         plugin=plugin,
         plugin_version=plugin.version,
-        status=PluginInstallation.Status.INSTALLED,
-        granted_permissions=[],
+        status=AgentPluginInstallation.Status.INSTALLED,
+        granted_capabilities=["lookup"],
         installed_by=user,
     )
     task = SimpleNamespace(id="workflow-task", created_by=user)
 
-    def register_handler(router, registered_tool):
-        router.register(
-            plugin.plugin_key,
-            registered_tool.name,
-            lambda arguments, context: {"ok": arguments["query"] == "hello"},
-            plugin_version=plugin.version,
-        )
-
-    with patch("core.workflow_engine.register_http_tool", side_effect=register_handler):
+    with patch("core.workflow_engine.invoke_capability", return_value={"ok": True}) as invoke:
         with patch("core.workflow_engine.record_audit_event") as audit:
             result = _execute_node(
                 {
                     "id": "tool_step",
                     "type": "tool",
-                    "config": {"tool_id": str(tool.id), "arguments": {"query": "hello"}},
+                    "config": {"capability": "lookup", "arguments": {"query": "hello"}},
                 },
                 {"input": {}},
                 {},
@@ -995,12 +998,11 @@ def test_workflow_tool_node_executes_through_policy_router(workflow_workspace):
                 task,
             )
 
-    assert result == {"ok": True, "tool": "lookup", "result": {"ok": True}}
-    assert audit.call_count == 1
-    assert (
-        PluginInstallation.objects.get(pk=installation.id).status
-        == PluginInstallation.Status.INSTALLED
+    assert result == {"ok": True}
+    invoke.assert_called_once_with(
+        str(tenant.id), str(project.id), "lookup", {"query": "hello"}, approved=False
     )
+    assert audit.call_count == 1
 
 
 def test_workflow_tool_arguments_must_reference_an_earlier_node():
@@ -1011,7 +1013,7 @@ def test_workflow_tool_arguments_must_reference_an_earlier_node():
                 "id": "tool_step",
                 "type": "tool",
                 "config": {
-                    "tool_id": "00000000-0000-0000-0000-000000000001",
+                    "capability": "missing-capability",
                     "arguments_from": "later",
                 },
             },

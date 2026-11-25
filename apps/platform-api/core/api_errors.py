@@ -200,6 +200,12 @@ def contract_exception_handler(exc, context):
         return None
     if isinstance(response.data, dict) and "error" in response.data:
         return response
+    if isinstance(exc, Http404):
+        return error_envelope_response(
+            STATUS_ERROR_CODES[404],
+            "The requested resource was not found.",
+            http_status=404,
+        )
     if isinstance(exc, APIException):
         generic = {
             "invalid",

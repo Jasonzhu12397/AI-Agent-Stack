@@ -31,7 +31,6 @@ const componentLoaders: Record<string, () => Promise<unknown>> = {
   plan: () => import("./plan/index.vue"),
   subscription: () => import("./subscription/index.vue"),
   general: () => import("./general/index.vue"),
-  connectors: () => import("./connectors/index.vue"),
   appearance: () => import("./appearance/index.vue"),
   notifications: () => import("./notifications/index.vue"),
   "work-mode": () => import("./work-mode/index.vue"),

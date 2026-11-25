@@ -61,7 +61,7 @@ def _paths(tenant, project):
         f"/api/v1/tenants/{t}/settings/work-mode/",
         f"/api/v1/tenants/{t}/settings/data-controls/",
         f"/api/v1/tenants/{t}/projects/{p}/settings/general/",
-        f"/api/v1/tenants/{t}/connectors/",
+        f"/api/v1/tenants/{t}/agent-plugins/",
         f"/api/v1/tenants/{t}/privacy/grants/",
         f"/api/v1/tenants/{t}/privacy/sessions/",
         f"/api/v1/tenants/{t}/privacy/deletion-requests/",
@@ -79,7 +79,7 @@ def _paths(tenant, project):
         f"/api/v1/tenants/{t}/projects/{p}/agent-nodes/",
         f"/api/v1/tenants/{t}/projects/{p}/cluster-deployments/",
         f"/api/v1/tenants/{t}/projects/{p}/knowledge-bases/",
-        f"/api/v1/tenants/{t}/projects/{p}/plugin-installations/",
+        f"/api/v1/tenants/{t}/projects/{p}/agent-plugin-installations/",
         f"/api/v1/tenants/{t}/projects/{p}/infrastructure-networks/",
         f"/api/v1/tenants/{t}/projects/{p}/fleet/machines/",
     ]

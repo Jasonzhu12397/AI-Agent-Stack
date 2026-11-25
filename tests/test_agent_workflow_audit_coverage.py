@@ -89,7 +89,6 @@ def _draft_config(model_id):
     return {
         "model_config_id": str(model_id),
         "system_prompt": "You are a concise assistant.",
-        "tool_allowlist": [],
         "knowledge_base_ids": [],
         "max_iterations": 1,
         "timeout_seconds": 20,

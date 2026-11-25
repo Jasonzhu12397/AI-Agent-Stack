@@ -4,11 +4,10 @@ import pytest
 from core.knowledge_models import KnowledgeBase
 from core.models import (
     AgentDefinition,
+    AgentPluginDefinition,
+    AgentPluginInstallation,
     AgentVersion,
     ModelConfig,
-    PluginDefinition,
-    PluginInstallation,
-    PluginTool,
     Project,
     ProjectMembership,
     Tenant,
@@ -51,24 +50,44 @@ def catalog_workspace(db):
         name="Runbooks",
         slug="runbooks",
     )
-    plugin = PluginDefinition.objects.create(
+    plugin = AgentPluginDefinition.objects.create(
         tenant=tenant,
         created_by=user,
         plugin_key="catalog-plugin",
         name="Catalog Connector",
         version="1.0.0",
-        connector_type=PluginDefinition.ConnectorType.HTTP,
-        review_status=PluginDefinition.ReviewStatus.APPROVED,
-        enabled=True,
+        protocol=AgentPluginDefinition.Protocol.OPEN_DATA,
+        endpoint_url="",
+        auth_required=False,
+        capabilities=["lookup"],
+        manifest={
+            "capabilities": [
+                {
+                    "name": "lookup",
+                    "description": "Look up a record",
+                    "risk_level": "low",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                }
+            ]
+        },
     )
-    tool = PluginTool.objects.create(plugin=plugin, name="lookup", enabled=True)
-    PluginInstallation.objects.create(
+    AgentPluginInstallation.objects.create(
         tenant=tenant,
         project=project,
         plugin=plugin,
         plugin_version=plugin.version,
-        status=PluginInstallation.Status.INSTALLED,
-        granted_permissions=[],
+        status=AgentPluginInstallation.Status.INSTALLED,
+        granted_capabilities=["lookup"],
         installed_by=user,
     )
     agent = AgentDefinition.objects.create(
@@ -77,7 +96,7 @@ def catalog_workspace(db):
     version = AgentVersion.objects.create(
         agent=agent, version=1, config_snapshot={"model_config_id": str(model.id)}, created_by=user
     )
-    return user, tenant, project, other_project, model, base, tool, version
+    return user, tenant, project, other_project, model, base, "lookup", version
 
 
 @pytest.mark.django_db
@@ -91,8 +110,8 @@ def test_catalog_lists_references_the_studio_requires(catalog_workspace):
     assert [item["id"] for item in body["models"]] == [str(model.id)]
     assert body["models"][0]["label"] == "Catalog Fake"
     assert [item["id"] for item in body["knowledge_bases"]] == [str(base.id)]
-    assert [item["id"] for item in body["tools"]] == [str(tool.id)]
-    assert body["tools"][0]["risk_level"] == PluginTool.RiskLevel.LOW
+    assert [item["id"] for item in body["tools"]] == ["lookup"]
+    assert body["tools"][0]["risk_level"] == "low"
     assert [item["id"] for item in body["agents"]] == [str(version.id)]
     assert body["agents"][0]["version"] == 1
 

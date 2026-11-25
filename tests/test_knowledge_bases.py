@@ -198,7 +198,6 @@ def test_agent_worker_injects_project_scoped_retrieved_context(knowledge_scope):
         config_snapshot={
             "model_config_id": str(chat_model.id),
             "system_prompt": "Answer operational questions.",
-            "tool_allowlist": [],
             "knowledge_base_ids": [str(knowledge_base.id)],
             "max_iterations": 1,
             "timeout_seconds": 30,

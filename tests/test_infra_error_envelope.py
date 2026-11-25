@@ -48,7 +48,7 @@ def console():
         "projects/{project}/agent-nodes/",
         "projects/{project}/cluster-deployments/",
         "projects/{project}/knowledge-bases/",
-        "projects/{project}/plugin-installations/",
+        "projects/{project}/agent-plugin-installations/",
     ],
 )
 def test_empty_post_returns_error_envelope(console, path):

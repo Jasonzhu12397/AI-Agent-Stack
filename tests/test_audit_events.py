@@ -97,8 +97,8 @@ def test_audit_api_is_tenant_admin_only_and_returns_chain_verification(audit_wor
     record_audit_event(
         request,
         tenant,
-        "connector.approved",
-        "plugin_definition",
+        "agent_plugin.installed",
+        "agent_plugin_definition",
         "plugin-1",
         project=project,
         metadata={"plugin_key": "sample"},
@@ -109,7 +109,7 @@ def test_audit_api_is_tenant_admin_only_and_returns_chain_verification(audit_wor
     )
     assert response.status_code == 200
     assert response.data["count"] == 1
-    assert response.data["results"][0]["event_type"] == "connector.approved"
+    assert response.data["results"][0]["event_type"] == "agent_plugin.installed"
     assert response.data["results"][0]["event_hash"]
 
     verification = client.get(
@@ -137,37 +137,3 @@ def test_audit_api_denies_non_admin_tenant_member(audit_workspace):
 
     response = client.get(f"/api/v1/tenants/{tenant.id}/audit-events/")
     assert response.status_code == 403
-
-
-@pytest.mark.django_db
-def test_worker_connector_tool_event_retains_task_actor(audit_workspace):
-    from worker_app.tasks import _record_connector_tool_event
-
-    user, tenant, project, _, _ = audit_workspace
-    task = SimpleNamespace(
-        tenant=tenant,
-        project=project,
-        created_by=user,
-    )
-    tool = SimpleNamespace(
-        id="tool-123",
-        plugin=SimpleNamespace(plugin_key="sample", version="1.0.0"),
-        name="lookup",
-        risk_level="low",
-    )
-
-    _record_connector_tool_event(
-        task,
-        tool,
-        None,
-        AuditEvent.Outcome.SUCCESS,
-    )
-
-    event = AuditEvent.objects.get(
-        tenant=tenant,
-        event_type="connector.tool.executed",
-        resource_id="tool-123",
-    )
-    assert event.actor_id == user.id
-    assert event.project_id == project.id
-    assert event.metadata["tool_name"] == "lookup"
