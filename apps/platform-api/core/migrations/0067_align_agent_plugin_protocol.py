@@ -13,6 +13,15 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='agentplugindefinition',
             name='protocol',
-            field=models.CharField(choices=[('http_json', 'HTTP JSON'), ('mcp', 'Model Context Protocol'), ('a2a', 'Agent-to-Agent'), ('openai_compatible', 'OpenAI Compatible'), ('open_data', 'Open Data (built-in)')], max_length=32),
+            field=models.CharField(
+                choices=[
+                    ('http_json', 'HTTP JSON'),
+                    ('mcp', 'Model Context Protocol'),
+                    ('a2a', 'Agent-to-Agent'),
+                    ('openai_compatible', 'OpenAI Compatible'),
+                    ('open_data', 'Open Data (built-in)'),
+                ],
+                max_length=32,
+            ),
         ),
     ]

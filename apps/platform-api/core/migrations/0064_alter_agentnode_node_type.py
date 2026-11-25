@@ -13,6 +13,13 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='agentnode',
             name='node_type',
-            field=models.CharField(choices=[('eph_node', 'EPH node'), ('target_cluster', 'Target cluster'), ('local_runner', 'Local runner')], max_length=24),
+            field=models.CharField(
+                choices=[
+                    ('eph_node', 'EPH node'),
+                    ('target_cluster', 'Target cluster'),
+                    ('local_runner', 'Local runner'),
+                ],
+                max_length=24,
+            ),
         ),
     ]
