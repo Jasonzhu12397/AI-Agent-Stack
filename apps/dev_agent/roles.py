@@ -66,7 +66,7 @@ class TestRole:
     def __init__(
         self, repair: Callable[[TestReport], bool] | None = None, max_attempts: int = 3
     ) -> None:
-        self.repair = repair
+        self.repair_callback = repair
         self.max_attempts = max_attempts
 
     def plan(self, root: Path) -> TestPlan | None:
@@ -80,9 +80,9 @@ class TestRole:
         )
 
     def repair(self, root: Path) -> RoleResult:
-        if self.repair is None:
+        if self.repair_callback is None:
             raise RuntimeError("a repair callback is required for the repair loop")
-        outcome = repair_loop(root, self.repair, max_attempts=self.max_attempts)
+        outcome = repair_loop(root, self.repair_callback, max_attempts=self.max_attempts)
         return RoleResult(
             self.name,
             "succeeded" if outcome.status == "succeeded" else "failed",

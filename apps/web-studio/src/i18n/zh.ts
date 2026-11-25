@@ -452,8 +452,8 @@ export const zhCN: Record<string, string> = {
   "Status": "状态",
   "Succeeded": "成功",
   "Successful tasks": "成功任务",
-  "Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.":
-    "支持的选项：v1.33、v1.34、v1.35 和 v1.36。应用选择会创建一个受审批门禁约束的目标智能体命令；此集成仅为模拟，不会执行真实 Kubernetes、CAPI 或 kubeadm 写入。",
+  "Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command. Simulation only renders the plan; Execute runs kubeadm, package upgrades and drain/uncordon after approval.":
+    "支持的选项：v1.33、v1.34、v1.35 和 v1.36。应用选择会创建一个受审批门禁约束的目标智能体命令。模拟模式只生成计划；执行模式在审批后运行 kubeadm、软件包升级以及 drain/uncordon。",
   "Synthesis instructions": "综合指令",
   "System prompt": "系统提示词",
   "Target": "目标",

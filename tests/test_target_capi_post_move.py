@@ -190,6 +190,21 @@ def test_provider_id_must_point_at_the_owning_metal3machine():
     assert excinfo.value.code == "CAPI_POST_MOVE_PROVIDER_ID_METAL3MACHINE_MISMATCH"
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"ready": True},
+        {"initialization": {"provisioned": True}},
+        {"ready": False, "initialization": {"provisioned": True}},
+    ],
+)
+def test_metal3machine_ready_accepts_every_capm3_status_shape(status):
+    docs = documents()
+    docs["metal3machines"]["items"][0]["status"] = status
+
+    assert verify(docs)["post_move_verified"] is True
+
+
 def test_empty_machine_list_fails_closed():
     docs = documents()
     docs["machines"]["items"] = []

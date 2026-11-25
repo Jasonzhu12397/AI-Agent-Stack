@@ -6,6 +6,22 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The EPH Agent read-only runner accepted no `stdin`, while the shared
+  `cluster.manifest.validate` and `k8s.resource.read` handlers pass a manifest
+  body through that keyword. Validation raised `TypeError` instead of parsing
+  the document; the runner now forwards `stdin` to `kubectl`.
+- `TestRole` assigned its repair callback to `self.repair`, shadowing the
+  `repair()` method. The callback is stored as `repair_callback`, so the role's
+  repair loop is callable again.
+- Post-move Metal3Machine readiness accepted only a `Ready` condition. CAPM3
+  also reports `status.ready` (v1beta1) and `status.initialization.provisioned`
+  (v1beta2), so a healthy cluster could be rejected after a provider upgrade.
+- The Target Clusters page described Kubernetes upgrades as simulation-only
+  even after Execute mode shipped; the note now states that Execute runs
+  kubeadm, package upgrades and drain/uncordon after approval.
+
 ### Added
 
 - The Target Agent now verifies a CAPI pivot after the move, not just after

@@ -70,6 +70,7 @@ class RollbackExecutor:
         self._api_wait_attempts = api_wait_attempts
         self._api_wait_interval = api_wait_interval
         self._upgrade = UpgradeExecutor(runner)
+        self._local_name = ""
         self._restore_dir = ""
         self._member_backup = ""
 

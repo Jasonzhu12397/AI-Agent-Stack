@@ -1919,7 +1919,7 @@ onUnmounted(() => {
             The backend validates the pool, ConfigMap identity, vendor, driver, RDMA flag and PCI ownership before saving.
           </p>
         </section>
-        <p class="fleet-footnote">Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command; this integration is simulation-only and does not perform live Kubernetes, CAPI or kubeadm writes.</p>
+        <p class="fleet-footnote">Supported selections: v1.33, v1.34, v1.35 and v1.36. Applying a selection creates an approval-gated Target Agent command. Simulation only renders the plan; Execute runs kubeadm, package upgrades and drain/uncordon after approval.</p>
       </section>
     </template>
 

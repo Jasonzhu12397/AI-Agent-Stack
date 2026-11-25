@@ -68,7 +68,11 @@ LOG = logging.getLogger("eph-agent")
 CAPABILITIES = sorted(EPH_ACTIONS)
 
 
-def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
+def _run_read_only(
+    command: list[str],
+    timeout: int = 20,
+    stdin: str | None = None,
+) -> dict[str, Any]:
     try:
         completed = subprocess.run(
             command,
@@ -76,6 +80,7 @@ def _run_read_only(command: list[str], timeout: int = 20) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=stdin,
             env={**os.environ, "KUBECONFIG": os.environ.get("EPH_KUBECONFIG", "")},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

@@ -55,6 +55,26 @@ def _condition_true(document: dict[str, Any], condition_type: str) -> bool:
     )
 
 
+def _metal3machine_ready(document: dict[str, Any]) -> bool:
+    """Ready across CAPM3 API versions.
+
+    v1beta1 exposed a ``status.ready`` boolean, v1beta1 later added metav1
+    conditions and v1beta2 reports ``status.initialization.provisioned``. A
+    verification that understands only one shape would reject a healthy
+    cluster after a provider upgrade.
+    """
+
+    if _condition_true(document, "Ready"):
+        return True
+    status = document.get("status")
+    if not isinstance(status, dict):
+        return False
+    if status.get("ready") is True:
+        return True
+    initialization = status.get("initialization")
+    return isinstance(initialization, dict) and initialization.get("provisioned") is True
+
+
 def _provisioning_state(bmh: dict[str, Any]) -> Any:
     status = bmh.get("status")
     if not isinstance(status, dict):
@@ -204,7 +224,7 @@ def verify_post_move(
             raise CapiPostMoveError("CAPI_POST_MOVE_METAL3MACHINE_NAME_MISSING")
         if _owner_machine(metal3machine, machines_by_uid) is not machine:
             raise CapiPostMoveError("CAPI_POST_MOVE_METAL3MACHINE_OWNER_MISMATCH")
-        if not _condition_true(metal3machine, "Ready"):
+        if not _metal3machine_ready(metal3machine):
             raise CapiPostMoveError("CAPI_POST_MOVE_METAL3MACHINE_NOT_READY")
         metal3_provider_id = _provider_id(metal3machine, "METAL3MACHINE")
         if metal3_provider_id != machine_provider_id:
