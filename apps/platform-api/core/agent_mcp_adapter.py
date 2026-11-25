@@ -222,7 +222,7 @@ def _transport_block(plugin: Any) -> dict[str, Any]:
 def _resolve_endpoint(installation: Any) -> str:
     plugin = installation.plugin
     endpoint = getattr(plugin, "endpoint_url", "")
-    return _validate_endpoint(endpoint)
+    return _validate_endpoint(endpoint, require_allowlist=False)
 
 
 def _timeout_seconds(plugin: Any, block: dict[str, Any], definition: dict[str, Any] | None) -> int:
@@ -349,9 +349,17 @@ def _invoke(
         )
 
     structured = payload.get("structuredContent")
+    text = _result_text(payload.get("content", []))
+    output_properties = (definition.get("output_schema") or {}).get("properties") or {}
+    if (plugin.manifest or {}).get("studio") and set(output_properties) == {"text"}:
+        import json
+
+        value = structured if isinstance(structured, dict) else text
+        if isinstance(value, dict):
+            value = json.dumps(value, ensure_ascii=False)[:65536]
+        return {"text": str(value)[:65536]}
     if isinstance(structured, dict):
         return {"data": structured}
-    text = _result_text(payload.get("content", []))
     return {"text": text}
 
 

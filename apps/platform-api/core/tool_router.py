@@ -55,6 +55,7 @@ class ToolContext:
     connection_auth_type: str
     credential_ref: str
     plugin_manifest: dict[str, Any]
+    allow_public_host: bool = False
 
 
 Handler = Callable[[dict[str, Any], ToolContext], Any]

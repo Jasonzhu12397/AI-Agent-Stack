@@ -38,6 +38,8 @@ export type ProviderAccount = {
   linked: boolean;
   account_label?: string;
   linked_at?: string | null;
+  credential_configured?: boolean;
+  verification?: { verified: boolean | null; reason: string };
   free_daily_tokens: number;
   used_today: number;
   remaining_today: number;
@@ -1833,6 +1835,7 @@ export type AgentPluginDefinition = {
   protocol: AgentPluginProtocol;
   endpoint_url: string;
   auth_required: boolean;
+  credential_configured?: boolean;
   capabilities: string[];
   capability_definitions?: AgentPluginManifestCapability[];
   input_schema: Record<string, unknown> | null;
@@ -1894,6 +1897,97 @@ export function getAgentPluginDefinitions(tenantId: string): Promise<AgentPlugin
   return request(
     "/api/v1/tenants/" + tenantId + "/agent-plugins/",
   );
+}
+
+export type AgentPluginStudioRequest = {
+  plugin_type: "openapi" | "mcp" | "http_api";
+  base_url: string;
+  document_url?: string;
+  auth_type: "none" | "bearer" | "api_key" | "oauth2";
+  auth_config?: Record<string, string>;
+  credential?: string;
+};
+
+export type AgentPluginStudioCapability = AgentPluginManifestCapability & {
+  source?: string;
+  remote_operation?: string;
+  remote_name?: string;
+};
+
+export type AgentPluginStudioDraft = {
+  protocol: AgentPluginProtocol;
+  endpoint_url: string;
+  manifest: Record<string, unknown> & {
+    capabilities?: AgentPluginStudioCapability[];
+    permission_policy?: {
+      approval_required?: string[];
+      blocked_methods?: string[];
+      max_risk?: string;
+    };
+  };
+  capabilities: AgentPluginStudioCapability[];
+  skipped: { method: string; path: string; reason: string }[];
+  connection: {
+    status: string;
+    http_status: number;
+    authenticated: boolean;
+    message: string;
+  };
+  auth_mode: string;
+  credential_kind: string;
+  credential_configured: boolean;
+  schema_fingerprint: string;
+  generated: Record<string, unknown>;
+};
+
+/** Discover a real service and generate its schemas without saving anything. */
+export function discoverAgentPlugin(
+  tenantId: string,
+  payload: AgentPluginStudioRequest,
+): Promise<AgentPluginStudioDraft> {
+  return request("/api/v1/tenants/" + tenantId + "/agent-plugins/studio/discover/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Re-run discovery as an explicit connection and authentication test. */
+export function testAgentPluginStudio(
+  tenantId: string,
+  payload: AgentPluginStudioRequest,
+): Promise<{ status: string; connection: AgentPluginStudioDraft["connection"]; tool_count: number }> {
+  return request("/api/v1/tenants/" + tenantId + "/agent-plugins/studio/test/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type AgentPluginStudioPublishResult = {
+  definition: AgentPluginDefinition;
+  installation: AgentPluginInstallation | null;
+  schema_fingerprint: string;
+  changed: boolean;
+  version: string;
+};
+
+/** Publish a discovered plugin and auto-install it into the current project. */
+export function publishAgentPlugin(
+  tenantId: string,
+  payload: AgentPluginStudioRequest & {
+    plugin_key: string;
+    name: string;
+    description?: string;
+    version?: string;
+    project_id?: string;
+    selected_capabilities?: string[];
+  },
+): Promise<AgentPluginStudioPublishResult> {
+  return request("/api/v1/tenants/" + tenantId + "/agent-plugins/studio/publish/", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(payload),
+  });
 }
 
 /** Register a new connector definition owned by the tenant. */

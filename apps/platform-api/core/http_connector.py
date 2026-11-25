@@ -36,7 +36,7 @@ def _reject_json_constant(value):
     raise ValueError(f"Non-standard JSON constant: {value}")
 
 
-def _validate_base_url(base_url):
+def _validate_base_url(base_url, require_allowlist=True):
     if not isinstance(base_url, str) or len(base_url) > 500:
         raise ToolExecutionError("HTTP connector base URL is invalid.")
     try:
@@ -57,9 +57,10 @@ def _validate_base_url(base_url):
     ):
         raise ToolExecutionError("HTTP connectors require an HTTPS origin on port 443.")
     host = parsed.hostname.lower().rstrip(".")
-    allowed_hosts = set(getattr(settings, "PLUGIN_HTTP_ALLOWED_HOSTS", []))
-    if host not in allowed_hosts:
-        raise ToolExecutionError("HTTP connector host is not in the platform allowlist.")
+    if require_allowlist:
+        allowed_hosts = set(getattr(settings, "PLUGIN_HTTP_ALLOWED_HOSTS", []))
+        if host not in allowed_hosts:
+            raise ToolExecutionError("HTTP connector host is not in the platform allowlist.")
     try:
         addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     except OSError as exc:
@@ -158,7 +159,9 @@ def _operation_config(context, tool):
     if not isinstance(operation, dict):
         raise ToolExecutionError("Connector HTTP operation is not configured.")
     base_url = transport.get("base_url")
-    parsed_base = _validate_base_url(base_url)
+    parsed_base = _validate_base_url(
+        base_url, require_allowlist=not getattr(context, "allow_public_host", False)
+    )
     method = operation.get("method")
     path = operation.get("path")
     if not isinstance(method, str) or method.upper() not in HTTP_METHODS:

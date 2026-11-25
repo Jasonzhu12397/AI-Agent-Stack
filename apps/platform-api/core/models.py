@@ -1055,6 +1055,9 @@ class AgentPluginDefinition(models.Model):
     protocol = models.CharField(max_length=32, choices=Protocol.choices)
     endpoint_url = models.URLField(max_length=500)
     auth_required = models.BooleanField(default=True)
+    #: Resolver reference (``plugin://<id>``) for a credential sealed by
+    #: Plugin Studio. Plaintext secrets never live on this row.
+    credential_ref = models.CharField(max_length=2048, blank=True, default="")
     capabilities = models.JSONField(default=list)
     manifest = models.JSONField(default=dict)
     input_schema = models.JSONField(default=dict)
@@ -1102,6 +1105,36 @@ class AgentPluginDefinition(models.Model):
                 AgentPluginInstallation.objects.filter(plugin=self).update(
                     revision=models.F("revision") + 1
                 )
+
+
+class AgentPluginCredential(models.Model):
+    """A Plugin Studio credential contract, sealed at rest.
+
+    The contract is JSON (bearer, header or OAuth 2.0 client credentials). Rows
+    are tenant-scoped and are referenced by ``plugin://<id>`` so an installation
+    can resolve the credential without a member ever pasting it again.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="agent_plugin_credentials",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_agent_plugin_credentials",
+    )
+    name = models.CharField(max_length=120)
+    sealed_value = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"plugin-credential:{self.id}"
 
 
 class AgentPluginInstallation(models.Model):

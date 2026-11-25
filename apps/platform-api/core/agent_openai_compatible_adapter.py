@@ -307,7 +307,7 @@ def _invoke(
         )
 
     try:
-        validated_base = _validate_endpoint(base_url)
+        validated_base = _validate_endpoint(base_url, require_allowlist=False)
         url = _compose_url(validated_base, path, query)
         with httpx.Client(
             timeout=httpx.Timeout(timeout, connect=min(timeout, 10)),

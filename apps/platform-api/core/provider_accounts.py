@@ -337,6 +337,63 @@ def active_link(user, provider) -> ProviderAccountLink | None:
 
 
 @transaction.atomic
+def verify_account_credential(provider, credential: str) -> dict:
+    """Check a pasted key against the platform before storing it.
+
+    A linked account that can never authenticate is worse than no link: the
+    console says "connected" and every chat then fails with HTTP 401. The
+    OpenAI-compatible transport every preset uses exposes ``GET /models``,
+    which validates the credential without spending a completion. A rejection
+    is final; a platform that hides that endpoint (404/405) is reported as
+    unverified rather than blocked.
+    """
+
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, build_opener
+
+    value = (credential or "").strip()
+    if not value:
+        raise ProviderAccountError(
+            "PROVIDER_ACCOUNT_CREDENTIAL_REQUIRED",
+            "A credential reference for your own account is required.",
+        )
+    if any(character.isspace() for character in value):
+        raise ProviderAccountError(
+            "PROVIDER_ACCOUNT_CREDENTIAL_INVALID",
+            "The API key contains whitespace; copy it again without spaces or newlines.",
+        )
+    if "://" in value or value.startswith("env:"):
+        # Operator-injected references are resolved at call time; validating
+        # here would turn a missing process variable into a link-time outage.
+        return {"verified": None, "reason": "reference"}
+    url = provider.base_url.rstrip("/") + "/models"
+    request = Request(
+        url,
+        headers={"Authorization": f"Bearer {value}", "Accept": "application/json"},
+    )
+    try:
+        from core.model_gateway import NoRedirectHandler
+
+        with build_opener(NoRedirectHandler()).open(request, timeout=8) as response:
+            response.read(1024 * 1024)
+    except HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise ProviderAccountError(
+                "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
+                f"{provider.name} rejected this API key (HTTP {exc.code}). "
+                "Copy a fresh key from the platform's API page and paste it again.",
+                http_status=400,
+            ) from exc
+        if exc.code in {404, 405}:
+            return {"verified": False, "reason": f"endpoint_{exc.code}"}
+        return {"verified": False, "reason": f"http_{exc.code}"}
+    except (URLError, TimeoutError, OSError):
+        # A network hiccup should not prevent a member from saving a key that
+        # they can verify later from the model test.
+        return {"verified": False, "reason": "unreachable"}
+    return {"verified": True, "reason": "models_endpoint"}
+
+
 def link_account(
     *, user, provider, credential_ref: str, account_label: str = ""
 ) -> ProviderAccountLink:
@@ -692,6 +749,9 @@ def describe_account(link: ProviderAccountLink | None) -> dict:
         "linked": True,
         "account_label": link.account_label,
         "linked_at": link.linked_at.isoformat() if link.linked_at else None,
+        # Only the presence of a credential is exposed; the key itself never
+        # leaves the sealed member secret.
+        "credential_configured": bool(link.credential_ref),
     }
 
 

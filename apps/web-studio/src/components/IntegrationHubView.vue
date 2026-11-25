@@ -7,8 +7,8 @@
  */
 import { computed, onMounted, ref, watch } from "vue";
 import { t } from "../i18n";
+import PluginStudioDialog from "./PluginStudioDialog.vue";
 import {
-  createAgentPlugin,
   getAgentPluginDefinitions,
   getAgentPluginInstallations,
   getProjectAgentCapabilities,
@@ -35,7 +35,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const error = ref("");
 const info = ref("");
-const registerOpen = ref(false);
+const studioOpen = ref(false);
 const runCapability = ref("");
 const runArgs = ref("{}");
 const runBusy = ref(false);
@@ -44,22 +44,6 @@ const runError = ref("");
 const rotateOpen = ref(false);
 const activeCategory = ref("All");
 const rotateRef = ref("");
-const registerPlaceholders = {
-  key: "example-agent",
-  endpoint: "https://agent.example.com/v1",
-  capabilities: "records.read, records.write",
-};
-const protocolOptions = ["http_json", "mcp", "a2a", "openai_compatible"];
-const registerForm = ref({
-  plugin_key: "",
-  name: "",
-  description: "",
-  version: "1.0.0",
-  protocol: "http_json" as AgentPluginDefinition["protocol"],
-  endpoint_url: "",
-  auth_required: true,
-  capabilities: "",
-});
 
 const selected = computed(
   () => definitions.value.find((item) => item.id === selectedId.value) ?? null,
@@ -185,47 +169,6 @@ async function installSelected(): Promise<void> {
     await refresh();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to install the connector.";
-  } finally {
-    submitting.value = false;
-  }
-}
-
-async function registerConnector(): Promise<void> {
-  if (!props.tenantId) return;
-  submitting.value = true;
-  error.value = "";
-  info.value = "";
-  try {
-    const capabilityNames = registerForm.value.capabilities
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const created = await createAgentPlugin(props.tenantId, {
-      plugin_key: registerForm.value.plugin_key.trim(),
-      name: registerForm.value.name.trim(),
-      description: registerForm.value.description.trim(),
-      version: registerForm.value.version.trim(),
-      protocol: registerForm.value.protocol,
-      endpoint_url: registerForm.value.endpoint_url.trim(),
-      auth_required: registerForm.value.auth_required,
-      capabilities: capabilityNames,
-    });
-    info.value = `${created.name} ${t("registered")}.`;
-    registerOpen.value = false;
-    registerForm.value = {
-      plugin_key: "",
-      name: "",
-      description: "",
-      version: "1.0.0",
-      protocol: "http_json",
-      endpoint_url: "",
-      auth_required: true,
-      capabilities: "",
-    };
-    await refresh();
-    selectedId.value = created.id;
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Unable to register the connector.";
   } finally {
     submitting.value = false;
   }
@@ -359,7 +302,7 @@ function lastInvocation(name: string): string {
       </div>
       <div class="hub-head-actions">
         <el-button plain :loading="loading" @click="refresh">{{ t("Refresh catalog") }}</el-button>
-        <el-button type="primary" plain @click="registerOpen = true">{{ t("Register connector") }}</el-button>
+        <el-button type="primary" plain @click="studioOpen = true">{{ t("Add plugin") }}</el-button>
       </div>
     </header>
 
@@ -575,11 +518,14 @@ function lastInvocation(name: string): string {
               </el-checkbox>
             </el-checkbox-group>
             <el-input
-              v-if="selected.auth_required"
+              v-if="selected.auth_required && !selected.credential_configured"
               v-model="credentialRef"
               class="hub-credential"
               :placeholder="t('Secret reference, e.g. vault://acme/wecom')"
             />
+            <p v-else-if="selected.auth_required" class="hub-hint">
+              {{ t("Credential is sealed in the plugin vault and is bound on install.") }}
+            </p>
             <p v-if="!isProvisioned(selected)" class="hub-hint">
               {{ t("This connector needs an endpoint before it can be installed.") }}
             </p>
@@ -596,44 +542,12 @@ function lastInvocation(name: string): string {
       </section>
     </div>
 
-    <el-dialog v-model="registerOpen" :title="t('Register connector')" width="520px">
-      <el-form label-position="top" class="hub-form">
-        <el-form-item :label="t('Plugin key')">
-          <el-input v-model="registerForm.plugin_key" :placeholder="registerPlaceholders.key" />
-        </el-form-item>
-        <el-form-item :label="t('Name')">
-          <el-input v-model="registerForm.name" />
-        </el-form-item>
-        <el-form-item :label="t('Description')">
-          <el-input v-model="registerForm.description" type="textarea" :rows="2" />
-        </el-form-item>
-        <div class="hub-form-row">
-          <el-form-item :label="t('Version')">
-            <el-input v-model="registerForm.version" />
-          </el-form-item>
-          <el-form-item :label="t('Protocol')">
-            <el-select v-model="registerForm.protocol">
-              <el-option v-for="option in protocolOptions" :key="option" :value="option" :label="option" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item :label="t('Endpoint')">
-          <el-input v-model="registerForm.endpoint_url" :placeholder="registerPlaceholders.endpoint" />
-        </el-form-item>
-        <el-form-item :label="t('Capabilities')">
-          <el-input v-model="registerForm.capabilities" :placeholder="registerPlaceholders.capabilities" />
-        </el-form-item>
-        <el-form-item :label="t('Credential')">
-          <el-switch v-model="registerForm.auth_required" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="registerOpen = false">{{ t("Cancel") }}</el-button>
-        <el-button type="primary" :loading="submitting" @click="registerConnector">
-          {{ t("Create") }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <PluginStudioDialog
+      :tenant-id="tenantId"
+      :project-id="projectId"
+      v-model="studioOpen"
+      @published="(pluginId: string) => { selectedId = pluginId; void refresh(); }"
+    />
 
     <section class="hub-panel hub-installations">
       <div class="hub-panel-title">

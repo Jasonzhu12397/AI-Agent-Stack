@@ -34,7 +34,7 @@ def _reject_json_constant(value):
     raise ValueError(f"Non-standard JSON constant: {value}")
 
 
-def _validate_endpoint(url):
+def _validate_endpoint(url, require_allowlist=True):
     if not isinstance(url, str) or len(url) > 500:
         raise ToolExecutionError("MCP endpoint URL is invalid.")
     try:
@@ -54,9 +54,10 @@ def _validate_endpoint(url):
     ):
         raise ToolExecutionError("MCP connectors require an HTTPS origin on port 443.")
     host = parsed.hostname.lower().rstrip(".")
-    allowed_hosts = set(getattr(settings, "PLUGIN_HTTP_ALLOWED_HOSTS", []))
-    if host not in allowed_hosts:
-        raise ToolExecutionError("MCP connector host is not in the platform allowlist.")
+    if require_allowlist:
+        allowed_hosts = set(getattr(settings, "PLUGIN_HTTP_ALLOWED_HOSTS", []))
+        if host not in allowed_hosts:
+            raise ToolExecutionError("MCP connector host is not in the platform allowlist.")
     try:
         addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     except OSError as exc:

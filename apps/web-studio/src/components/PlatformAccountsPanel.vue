@@ -38,6 +38,9 @@ const dialogPresetInfo = computed(() =>
   (catalog.value?.presets ?? []).find((item) => item.key === dialogPreset.value) ?? null,
 );
 const dialogConsoleUrl = computed(() => dialogPresetInfo.value?.console_url ?? "");
+const dialogReplacing = computed(() =>
+  platformRows.value.find((row) => row.preset.key === dialogPreset.value)?.linked ?? false,
+);
 const credential = ref("");
 const accountLabel = ref("");
 const saving = ref(false);
@@ -119,8 +122,15 @@ async function connect(): Promise<void> {
     providers.value = providers.value.map((item) =>
       item.id === provider?.id ? { ...item, account } : item,
     );
+    const verification = account.verification;
     info.value =
-      t("Account authorized. Pick a model from this platform in Control Agent chat — calls now run on your own account and free allowance.");
+      verification?.verified === true
+        ? t("Account authorized and the API key was verified against the platform.")
+        : verification?.verified === false
+          ? t(
+              "Account saved, but the platform did not confirm the key. Run a model test; if it fails with HTTP 401 replace the key from this card.",
+            )
+          : t("Account authorized. Pick a model from this platform in Control Agent chat — calls now run on your own account and free allowance.");
     dialogOpen.value = false;
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to link the account.";
@@ -276,6 +286,15 @@ defineExpose({ openPreset: openDialog });
           <el-button
             v-else
             size="small"
+            type="primary"
+            plain
+            @click="openDialog(row.preset.key)"
+          >
+            Replace key
+          </el-button>
+          <el-button
+            v-if="row.linked"
+            size="small"
             text
             @click="row.provider && disconnect(row.provider.id)"
           >
@@ -286,7 +305,11 @@ defineExpose({ openPreset: openDialog });
     </div>
     <p v-if="!catalog" class="hint">{{ loading ? "Loading…" : "No platform catalog available." }}</p>
 
-    <el-dialog v-model="dialogOpen" title="Authorize a platform account" width="460px">
+    <el-dialog
+      v-model="dialogOpen"
+      :title="dialogReplacing ? 'Replace the platform API key' : 'Authorize a platform account'"
+      width="460px"
+    >
       <el-form label-position="top">
         <el-form-item label="Platform">
           <el-input :model-value="dialogPresetInfo?.label ?? dialogPreset" disabled />
@@ -320,7 +343,7 @@ defineExpose({ openPreset: openDialog });
       <template #footer>
         <el-button @click="dialogOpen = false">Cancel</el-button>
         <el-button type="primary" :loading="saving" :disabled="!credential.trim()" @click="connect">
-          Authorize
+          {{ dialogReplacing ? "Replace key" : "Authorize" }}
         </el-button>
       </template>
     </el-dialog>

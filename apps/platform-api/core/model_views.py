@@ -318,6 +318,7 @@ class ModelProviderAccountView(APIView):
                 code="PROVIDER_ACCOUNT_INPUT_INVALID",
             )
         try:
+            verification = provider_accounts.verify_account_credential(provider, credential_ref)
             link = provider_accounts.link_account(
                 user=request.user,
                 provider=provider,
@@ -336,6 +337,7 @@ class ModelProviderAccountView(APIView):
         )
         payload = provider_accounts.describe_account(link)
         payload.update(provider_accounts.quota_snapshot(request.user, provider))
+        payload["verification"] = verification
         return Response(payload, status=status.HTTP_201_CREATED)
 
     def delete(self, request, tenant_id, provider_id):

@@ -293,7 +293,7 @@ def discover_card(installation: Any) -> list[dict[str, Any]]:
 
     plugin = installation.plugin
     block = _transport_block(plugin)
-    endpoint = _validate_endpoint(getattr(plugin, "endpoint_url", ""))
+    endpoint = _validate_endpoint(getattr(plugin, "endpoint_url", ""), require_allowlist=False)
     card_path = block.get("agent_card_path", _DEFAULT_CARD_PATH)
     timeout = _clamp_timeout(block.get("timeout_seconds", plugin.timeout_seconds), 60)
     headers, _query = _auth(installation)
@@ -404,7 +404,7 @@ def _invoke(
 ) -> dict[str, Any]:
     plugin = installation.plugin
     block = _transport_block(plugin)
-    endpoint = _validate_endpoint(getattr(plugin, "endpoint_url", ""))
+    endpoint = _validate_endpoint(getattr(plugin, "endpoint_url", ""), require_allowlist=False)
     timeout = _clamp_timeout(
         block.get("timeout_seconds", definition.get("timeout_seconds", plugin.timeout_seconds)), 60
     )

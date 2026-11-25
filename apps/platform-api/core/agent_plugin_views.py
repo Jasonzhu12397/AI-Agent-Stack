@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core import agent_plugin_manifest
+from core import plugin_studio
 from core.agent_a2a_adapter import discover_card as discover_a2a
 from core.agent_capability_router import (
     CapabilityResolutionError,
@@ -43,6 +44,8 @@ from core.models import (
     TenantMembership,
 )
 from core.api_errors import legacy_error_response
+
+plugin_studio.register_credential_provider()
 
 
 _CAPABILITY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
@@ -209,6 +212,7 @@ def _definition_data(plugin):
         "protocol": plugin.protocol,
         "endpoint_url": plugin.endpoint_url,
         "auth_required": plugin.auth_required,
+        "credential_configured": bool(plugin.credential_ref),
         "capabilities": names,
         "capability_definitions": declarations,
         "manifest": manifest,
@@ -403,6 +407,288 @@ class AgentPluginCatalogView(APIView):
         return Response(_definition_data(plugin), status=201)
 
 
+class AgentPluginStudioDiscoverView(APIView):
+    """Discover a remote plugin surface and generate its technical contract.
+
+    The caller supplies only real connection information. OpenAPI documents and
+    MCP tool lists are fetched server-side, bounded and validated; the response
+    contains the generated manifest, per-tool schemas, dynamic form shape and
+    permission policy. No definition and no credential are stored here, so an
+    abandoned wizard leaves nothing behind.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        if not _is_tenant_admin(request.user, tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
+        payload = request.data if isinstance(request.data, dict) else {}
+        try:
+            discovered = plugin_studio.discover_plugin(payload)
+        except plugin_studio.PluginStudioError as exc:
+            return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
+        result = {key: value for key, value in discovered.items() if key != "contract"}
+        result["schema_fingerprint"] = _studio_fingerprint(discovered["manifest"])
+        return Response(result)
+
+
+def _studio_fingerprint(manifest: dict) -> str:
+    import hashlib
+    import json
+
+    stable = {key: value for key, value in manifest.items() if key != "studio"}
+    encoded = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _next_version(previous: str) -> str:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", previous or "")
+    if not match:
+        return f"{previous}.1" if previous else "1.0.0"
+    major, minor, patch = (int(part) for part in match.groups())
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _studio_manifest_subset(manifest: dict, selected: list[str]) -> dict:
+    capabilities = [
+        entry
+        for entry in manifest.get("capabilities", [])
+        if isinstance(entry, dict) and entry.get("name") in selected
+    ]
+    result = {**manifest, "capabilities": capabilities}
+    transport = result.get("http")
+    if isinstance(transport, dict):
+        operations = {
+            name: operation
+            for name, operation in (transport.get("operations") or {}).items()
+            if name in selected
+        }
+        result["http"] = {**transport, "operations": operations}
+    block = result.get("mcp")
+    if isinstance(block, dict) and isinstance(block.get("discovery"), dict):
+        discovery = dict(block["discovery"])
+        discovery["tools"] = [name for name in discovery.get("tools", []) if name in selected]
+        discovery["tool_count"] = len(discovery["tools"])
+        result["mcp"] = {**block, "discovery": discovery}
+    policy = result.get("permission_policy")
+    if isinstance(policy, dict):
+        result["permission_policy"] = {
+            **policy,
+            "approval_required": [
+                name for name in policy.get("approval_required", []) if name in selected
+            ],
+        }
+    return result
+
+
+class AgentPluginStudioPublishView(APIView):
+    """Publish a discovered contract as a versioned definition plus installation.
+
+    The discovery is re-run at publish time so the stored schema comes from the
+    service as it is right now, not from an earlier wizard response. A changed
+    surface creates a new version instead of overwriting the version a live
+    project already calls.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        if not _is_tenant_admin(request.user, tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
+        data = request.data if isinstance(request.data, dict) else {}
+        plugin_key = data.get("plugin_key")
+        name = data.get("name")
+        if not isinstance(plugin_key, str) or not _PLUGIN_KEY_PATTERN.fullmatch(plugin_key):
+            return legacy_error_response(
+                "plugin_key must be a lowercase hyphenated identifier.", http_status=400
+            )
+        if not isinstance(name, str) or not name.strip() or len(name) > 120:
+            return legacy_error_response(
+                "name is required and must be at most 120 characters.", http_status=400
+            )
+        description = data.get("description", "")
+        if not isinstance(description, str) or len(description) > 4000:
+            return legacy_error_response("description must be at most 4,000 characters.", 400)
+
+        try:
+            discovered = plugin_studio.discover_plugin(data)
+        except plugin_studio.PluginStudioError as exc:
+            return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
+
+        all_names = [entry["name"] for entry in discovered["capabilities"]]
+        selected = data.get("selected_capabilities")
+        if selected is None:
+            selected = all_names
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or len(selected) > agent_plugin_manifest.MAX_CAPABILITIES
+            or any(not isinstance(item, str) or item not in all_names for item in selected)
+        ):
+            return legacy_error_response(
+                "selected_capabilities must be a non-empty subset of discovered tools.",
+                http_status=400,
+            )
+        selected = list(dict.fromkeys(selected))
+        manifest = _studio_manifest_subset(discovered["manifest"], selected)
+        manifest["studio"]["auth_mode"] = discovered["credential_kind"]
+        manifest["studio"]["schema_fingerprint"] = _studio_fingerprint(manifest)
+        if len(str(manifest).encode("utf-8")) > agent_plugin_manifest.MAX_MANIFEST_BYTES:
+            return legacy_error_response(
+                "The generated manifest exceeds 32 KiB; select fewer capabilities.",
+                http_status=400,
+                code="PLUGIN_SCHEMA_TOO_LARGE",
+            )
+        if _contains_sensitive_key(manifest):
+            return legacy_error_response(
+                "The generated manifest contains credential-like field names.", http_status=400
+            )
+        manifest_error = agent_plugin_manifest.validate_manifest(
+            manifest, discovered["protocol"], endpoint_url=discovered["endpoint_url"]
+        )
+        if manifest_error:
+            return legacy_error_response(manifest_error, http_status=400)
+
+        fingerprint = manifest["studio"]["schema_fingerprint"]
+        project = None
+        project_id = data.get("project_id")
+        if project_id is not None:
+            if not isinstance(project_id, str) or not project_id:
+                return legacy_error_response("project_id is invalid.", http_status=400)
+            project = _project_for_user(request, tenant, project_id)
+
+        latest = (
+            AgentPluginDefinition.objects.filter(tenant=tenant, plugin_key=plugin_key)
+            .order_by("-created_at")
+            .first()
+        )
+        unchanged = latest is not None and _studio_fingerprint(latest.manifest or {}) == fingerprint
+        if unchanged:
+            plugin = latest
+        else:
+            requested_version = data.get("version")
+            if requested_version is not None and (
+                not isinstance(requested_version, str) or not requested_version.strip()
+            ):
+                return legacy_error_response("version must be a non-empty string.", 400)
+            version = (
+                requested_version.strip()
+                if isinstance(requested_version, str) and requested_version.strip()
+                else _next_version(latest.version if latest else "")
+            )
+            if AgentPluginDefinition.objects.filter(
+                tenant=tenant, plugin_key=plugin_key, version=version
+            ).exists():
+                version = _next_version(version)
+            credential_ref = plugin_studio.seal_credential(
+                tenant, request.user, name, discovered["contract"]
+            )
+            try:
+                with transaction.atomic():
+                    plugin = AgentPluginDefinition.objects.create(
+                        tenant=tenant,
+                        created_by=request.user,
+                        plugin_key=plugin_key,
+                        name=name.strip(),
+                        description=description,
+                        version=version,
+                        protocol=discovered["protocol"],
+                        endpoint_url=discovered["endpoint_url"],
+                        auth_required=bool(credential_ref),
+                        credential_ref=credential_ref,
+                        capabilities=selected,
+                        manifest=manifest,
+                        input_schema={},
+                        output_schema={},
+                        timeout_seconds=30,
+                        max_concurrency=4,
+                    )
+            except IntegrityError:
+                return legacy_error_response(
+                    "An agent plugin with this key and version already exists.", http_status=409
+                )
+            record_audit_event(
+                request,
+                tenant,
+                "agent_plugin.published",
+                "agent_plugin_definition",
+                plugin.id,
+                project=project,
+                metadata={
+                    "plugin_key": plugin.plugin_key,
+                    "version": plugin.version,
+                    "protocol": plugin.protocol,
+                    "capabilities": len(selected),
+                    "fingerprint": fingerprint,
+                },
+            )
+
+        installation = None
+        if project is not None:
+            installation = AgentPluginInstallation.objects.filter(
+                tenant=tenant, project=project, plugin=plugin
+            ).first()
+            if installation is None:
+                installation = AgentPluginInstallation.objects.create(
+                    tenant=tenant,
+                    project=project,
+                    plugin=plugin,
+                    plugin_version=plugin.version,
+                    granted_capabilities=selected,
+                    credential_ref=plugin.credential_ref,
+                    installed_by=request.user,
+                )
+            else:
+                installation.status = AgentPluginInstallation.Status.INSTALLED
+                installation.plugin_version = plugin.version
+                installation.granted_capabilities = selected
+                installation.credential_ref = plugin.credential_ref
+                installation.save()
+
+        return Response(
+            {
+                "definition": _definition_data(plugin),
+                "installation": _installation_data(installation) if installation else None,
+                "schema_fingerprint": fingerprint,
+                "changed": not unchanged,
+                "version": plugin.version,
+            },
+            status=201 if not unchanged else 200,
+        )
+
+
+class AgentPluginStudioTestView(APIView):
+    """Re-run discovery as a connection test without storing anything."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        if not _is_tenant_admin(request.user, tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
+        payload = request.data if isinstance(request.data, dict) else {}
+        try:
+            discovered = plugin_studio.discover_plugin(payload)
+        except plugin_studio.PluginStudioError as exc:
+            return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
+        return Response(
+            {
+                "status": "success",
+                "connection": discovered["connection"],
+                "tool_count": len(discovered["capabilities"]),
+                "protocol": discovered["protocol"],
+            }
+        )
+
+
 class AgentPluginDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -492,6 +778,10 @@ class AgentPluginInstallationListCreateView(APIView):
         credential_ref = request.data.get("credential_ref", "")
         if not isinstance(credential_ref, str):
             credential_ref = ""
+        if not credential_ref and plugin.credential_ref:
+            # Plugin Studio sealed the credential when the definition was
+            # published, so installation only binds the reference.
+            credential_ref = plugin.credential_ref
         if credential_ref:
             failure = _credential_reference_error(credential_ref)
             if failure is not None:

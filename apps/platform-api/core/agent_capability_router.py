@@ -299,11 +299,15 @@ def _http_adapter(
 ) -> dict[str, Any]:
     plugin = installation.plugin
     capability_name = definition["name"]
+    operation = ((plugin.manifest or {}).get("http") or {}).get("operations", {}).get(
+        capability_name, {}
+    )
+    side_effect = isinstance(operation, dict) and operation.get("read_only") is False
     tool = SimpleNamespace(
         name=capability_name,
         timeout_seconds=definition.get("timeout_seconds", plugin.timeout_seconds),
         risk_level=definition.get("risk_level", "low"),
-        idempotency_mode="read_only",
+        idempotency_mode="none" if side_effect else "read_only",
         enabled=True,
     )
     context = ToolContext(
@@ -318,9 +322,17 @@ def _http_adapter(
         connection_auth_type="none" if not plugin.auth_required else "credential",
         credential_ref=installation.credential_ref,
         plugin_manifest=dict(plugin.manifest or {}),
+        allow_public_host=True,
     )
     try:
-        return execute_http_operation(arguments, context, tool)
+        result = execute_http_operation(arguments, context, tool)
+        output_properties = (definition.get("output_schema") or {}).get("properties") or {}
+        if (plugin.manifest or {}).get("studio") and set(output_properties) == {"text"}:
+            import json
+
+            text = json.dumps(result, ensure_ascii=False)[:65536]
+            return {"text": text}
+        return result
     except ToolExecutionError as exc:
         raise CapabilityResolutionError(
             _HTTP_FAULT_CODES.get(exc.code, CAPABILITY_INVOCATION_FAILED),
