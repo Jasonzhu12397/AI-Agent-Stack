@@ -282,8 +282,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     if ([502, 503, 504].includes(response.status) && payload === null) {
       throw new ApiError(
-        `The platform gateway returned HTTP ${response.status} before the API answered. ` +
-          "The upstream model service may be unavailable; retry in a moment or check the provider status.",
+        `The public gateway returned HTTP ${response.status} without an API error response. ` +
+          "The request did not receive a response from the application API. Check the Cloudflare Tunnel or Codespaces port forwarding and confirm that the API process is running. This error alone does not indicate a model-provider outage.",
         { status: response.status },
         response.status,
       );
