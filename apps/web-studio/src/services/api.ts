@@ -1809,6 +1809,23 @@ export function verifyAuditChain(tenantId: string): Promise<AuditChainVerificati
   return request("/api/v1/tenants/" + tenantId + "/audit-events/verify/");
 }
 
+export type GlobalAuditEvent = Omit<AuditEvent, "tenant_id"> & { tenant_id: null };
+
+export function getGlobalAuditEvents(
+  limit = 100,
+  offset = 0,
+): Promise<{ count: number; limit: number; offset: number; results: GlobalAuditEvent[] }> {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return request("/api/v1/audit-events/global/?" + query.toString());
+}
+
+export function verifyGlobalAuditChain(): Promise<AuditChainVerification> {
+  return request("/api/v1/audit-events/global/verify/");
+}
+
 
 export function retryKnowledgeDocument(documentId: string): Promise<KnowledgeDocument> {
   return request("/api/v1/knowledge-documents/" + documentId + "/retry/", {

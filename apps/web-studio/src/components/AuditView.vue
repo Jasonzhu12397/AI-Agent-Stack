@@ -5,8 +5,12 @@ import {
   getAgentNodes,
   getAuditEvents,
   verifyAuditChain,
+  getGlobalAuditEvents,
+  verifyGlobalAuditChain,
+  ApiError,
   type AuditEvent,
   type AuditChainVerification,
+  type GlobalAuditEvent,
   getClusterDeployments,
   getTasks,
   type AgentCommand,
@@ -22,6 +26,10 @@ const deployments = ref<ClusterDeployment[]>([]);
 const tasks = ref<Task[]>([]);
 const auditEvents = ref<AuditEvent[]>([]);
 const chainVerification = ref<AuditChainVerification | null>(null);
+const globalAuditEvents = ref<GlobalAuditEvent[]>([]);
+const globalChainVerification = ref<AuditChainVerification | null>(null);
+const globalAuditAvailable = ref(false);
+const globalAuditError = ref("");
 const auditError = ref("");
 const loading = ref(false);
 const error = ref("");
@@ -46,6 +54,8 @@ const activities = computed<Activity[]>(() => [
 async function refresh(): Promise<void> {
   if (!props.tenantId || !props.projectId) {
     nodes.value = []; commands.value = []; deployments.value = []; tasks.value = []; auditEvents.value = []; chainVerification.value = null;
+    globalAuditEvents.value = []; globalChainVerification.value = null;
+    globalAuditAvailable.value = false; globalAuditError.value = "";
     return;
   }
   loading.value = true;
@@ -62,6 +72,7 @@ async function refresh(): Promise<void> {
     const commandPages = await Promise.all(nodes.value.map((node) => getAgentCommands(node.id)));
     commands.value = commandPages.flatMap((page) => page.results);
     auditError.value = "";
+    globalAuditError.value = "";
     try {
       const [auditPage, verification] = await Promise.all([
         getAuditEvents(props.tenantId, props.projectId),
@@ -73,6 +84,23 @@ async function refresh(): Promise<void> {
       auditEvents.value = [];
       chainVerification.value = null;
       auditError.value = cause instanceof Error ? cause.message : "Audit access is unavailable.";
+    }
+    globalAuditAvailable.value = false;
+    globalAuditEvents.value = [];
+    globalChainVerification.value = null;
+    try {
+      const [globalPage, globalVerification] = await Promise.all([
+        getGlobalAuditEvents(),
+        verifyGlobalAuditChain(),
+      ]);
+      globalAuditEvents.value = globalPage.results;
+      globalChainVerification.value = globalVerification;
+      globalAuditAvailable.value = true;
+    } catch (cause) {
+      if (!(cause instanceof ApiError && cause.status === 403)) {
+        globalAuditError.value =
+          cause instanceof Error ? cause.message : "Global audit access is unavailable.";
+      }
     }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load operational history.";
@@ -124,6 +152,28 @@ onMounted(() => void refresh());
       <el-empty v-if="!loading && !auditEvents.length && !auditError" description="No security audit events recorded yet" :image-size="56" />
       <p class="operations-note">The per-tenant hash chain detects event alteration or removal within the retained chain. Current event coverage includes tenant member changes, Agent node enrollment/revocation, command queue/approval, connector approval/installation/status changes and cluster deployment create/cancel/handoff. A hash chain detects alteration and middle-of-chain deletion; deletion of the latest tail requires an externally anchored head hash. Backup, retention and external WORM export are still required for production-grade immutability.</p>
     </div>
+    <div v-if="globalAuditAvailable" class="operations-panel">
+      <div class="operations-panel-heading"><h4>Platform authentication chain</h4><span>PLATFORM ADMIN · GLOBAL</span></div>
+      <el-alert v-if="globalChainVerification?.valid" type="success" :closable="false" show-icon :title="'Global authentication chain verified: ' + globalChainVerification.verified_count + ' events.'" />
+      <el-alert v-else-if="globalChainVerification && !globalChainVerification.valid" type="error" :closable="false" show-icon :title="'Global authentication chain integrity failure at event ' + globalChainVerification.invalid_event_id" />
+      <el-table :data="globalAuditEvents" size="small" class="task-table">
+        <el-table-column label="Time" min-width="165">
+          <template #default="scope">{{ new Date(scope.row.created_at).toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column prop="actor_username" label="Actor" min-width="120" />
+        <el-table-column prop="event_type" label="Event" min-width="210" />
+        <el-table-column prop="resource_type" label="Resource" min-width="140" />
+        <el-table-column label="Outcome" min-width="100">
+          <template #default="scope"><el-tag :type="scope.row.outcome === 'success' ? 'success' : scope.row.outcome === 'denied' ? 'warning' : 'danger'" size="small">{{ scope.row.outcome }}</el-tag></template>
+        </el-table-column>
+        <el-table-column label="Event hash" min-width="150">
+          <template #default="scope"><code>{{ scope.row.event_hash.slice(0, 16) }}</code></template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!loading && !globalAuditEvents.length" description="No global authentication events recorded yet" :image-size="56" />
+      <p class="operations-note">Authentication success, failure and sign-out events are recorded before a tenant is known, so they live in a separate global hash chain. This chain is read-only and visible only to platform administrators.</p>
+    </div>
+    <el-alert v-if="globalAuditError" :title="globalAuditError" type="warning" show-icon :closable="true" @close="globalAuditError = ''" />
     <div class="operations-panel">
       <div class="operations-panel-heading"><h4>Recent activity</h4><span>LAST 100 RECORDS</span></div>
       <el-table :data="activities" size="small" class="task-table">

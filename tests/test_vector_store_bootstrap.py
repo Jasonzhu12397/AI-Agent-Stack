@@ -195,3 +195,49 @@ def test_for_model_binds_a_copy_to_the_derived_collection(monkeypatch):
     assert scoped.collection != store.collection
     assert scoped.base_url == store.base_url
     assert scoped.api_key == "secret-key"
+
+
+def test_list_collections_validates_the_qdrant_payload(monkeypatch):
+    store, _ = _store(monkeypatch)
+    monkeypatch.setattr(
+        QdrantVectorStore,
+        "_request",
+        staticmethod(
+            lambda method, path, body=None, allow_missing=False: {
+                "result": {
+                    "collections": [
+                        {"name": "agent_knowledge"},
+                        {"name": "agent_knowledge__bge-m3-1024"},
+                    ]
+                }
+            }
+        ),
+    )
+    assert store.list_collections() == [
+        "agent_knowledge",
+        "agent_knowledge__bge-m3-1024",
+    ]
+
+    monkeypatch.setattr(
+        QdrantVectorStore,
+        "_request",
+        staticmethod(lambda *args, **kwargs: {"result": {"collections": "bad"}}),
+    )
+    with pytest.raises(VectorStoreError, match="collection list"):
+        store.list_collections()
+
+
+def test_delete_collection_rejects_path_like_names(monkeypatch):
+    store, calls = _store(monkeypatch)
+
+    def fake_request(method, path, body=None, allow_missing=False):
+        calls.append((method, path, body, allow_missing))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(QdrantVectorStore, "_request", staticmethod(fake_request))
+    assert store.delete_collection("agent_knowledge__old-768")["deleted"] is True
+    assert calls[0][:2] == ("DELETE", "/collections/agent_knowledge__old-768")
+    with pytest.raises(VectorStoreError, match="name is invalid"):
+        store.delete_collection("../secrets")
+    with pytest.raises(VectorStoreError, match="name is invalid"):
+        store.delete_collection("agent_knowledge/other")

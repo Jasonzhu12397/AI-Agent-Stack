@@ -81,6 +81,43 @@ class QdrantVectorStore:
             raise VectorStoreError("Embedding vector contains non-finite values.")
         return values
 
+    @staticmethod
+    def _validate_collection_name(name):
+        if (
+            not isinstance(name, str)
+            or not 1 <= len(name) <= 200
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+        ):
+            raise VectorStoreError("Qdrant collection name is invalid.")
+        return name
+
+    def list_collections(self):
+        """Return the collection names the configured Qdrant service exposes."""
+
+        payload = self._request("GET", "/collections")
+        result = payload.get("result")
+        collections = result.get("collections") if isinstance(result, dict) else None
+        if not isinstance(collections, list):
+            raise VectorStoreError("Vector database returned an invalid collection list.")
+        names = []
+        for item in collections:
+            name = item.get("name") if isinstance(item, dict) else None
+            if not isinstance(name, str) or not name:
+                raise VectorStoreError("Vector database returned an invalid collection entry.")
+            names.append(name)
+        return sorted(names)
+
+    def delete_collection(self, name, allow_missing=False):
+        """Delete one collection; missing collections are optional to tolerate."""
+
+        safe_name = self._validate_collection_name(name)
+        payload = self._request(
+            "DELETE",
+            f"/collections/{safe_name}",
+            allow_missing=allow_missing,
+        )
+        return {"deleted": payload is not None, "collection": safe_name}
+
     def ensure_collection(self, vector_size, distance="Cosine"):
         """Create the configured collection when it does not exist yet."""
 
