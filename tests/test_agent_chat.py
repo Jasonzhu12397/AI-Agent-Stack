@@ -295,6 +295,37 @@ def test_turn_falls_back_to_another_real_model_when_selected_key_is_rejected(
 
 
 @pytest.mark.django_db
+def test_provider_rate_limit_is_returned_as_429_without_fallback(chat_workspace, monkeypatch):
+    user, tenant, project, model, _installation = chat_workspace
+    client = APIClient()
+    client.force_authenticate(user=user)
+    thread = _thread(client, tenant, project, model)
+
+    from core import chat_runtime, chat_views
+
+    def rate_limited(*args, **kwargs):
+        raise chat_runtime.ChatRuntimeError(
+            "MODEL_PROVIDER_RATE_LIMITED",
+            "The model provider reached its rate limit or account quota (HTTP 429).",
+            429,
+        )
+
+    def unexpected_fallback(*args, **kwargs):
+        pytest.fail("A provider 429 must not trigger an unbounded fallback chain")
+
+    monkeypatch.setattr(chat_runtime, "run_turn", rate_limited)
+    monkeypatch.setattr(chat_views, "_fallback_candidates", unexpected_fallback)
+    response = client.post(
+        f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
+        {"content": "hello"},
+        format="json",
+    )
+
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "MODEL_PROVIDER_RATE_LIMITED"
+    assert "rate limit" in response.json()["error"]["message"].lower()
+
+@pytest.mark.django_db
 def test_linked_personal_model_is_recommended_over_the_local_echo(chat_workspace):
     user, tenant, project, fake_model, _installation = chat_workspace
     from core.models import ProviderAccountLink
