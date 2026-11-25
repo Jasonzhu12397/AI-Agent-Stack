@@ -1362,4 +1362,5 @@ export const zhCN: Record<string, string> = {
     "{from} 拒绝了你的 API Key，请到集成中心替换密钥；本次回答已临时改用 {provider}。",
   "The tool ran, but no model answer could be generated.":
     "工具已执行完成，但模型没能生成回答。",
+  "Demo": "演示模型",
 };

@@ -252,6 +252,19 @@ class AgentChatMessageListCreateView(APIView):
             or thread.model_config
             or _default_model_config(thread.tenant, request.user)
         )
+        if (
+            model_config is not None
+            and model_config.provider.provider_type == ModelProvider.ProviderType.FAKE
+        ):
+            # A browser tab can still hold the demo model id from before the
+            # picker started hiding it. Never let that stale id run the turn
+            # when the member has a real model available.
+            replacement = _default_model_config(thread.tenant, request.user)
+            if (
+                replacement is not None
+                and replacement.provider.provider_type != ModelProvider.ProviderType.FAKE
+            ):
+                model_config = replacement
         if model_config is not None and thread.model_config_id is None:
             # Remember the model this conversation settled on so later turns
             # keep answering with the same one.
@@ -384,10 +397,22 @@ def _available_models(request, tenant):
         )
         .order_by("provider__name", "model_name")
     )
+    models = list(queryset)
+    # The local echo provider is a demo fallback, not a model a member should
+    # chat with once a real provider is configured. Leaving it in the picker
+    # let a "GPT-5.6" demo config shadow the linked OpenAI model and answer
+    # every greeting with a raw tool transcript.
+    has_real_model = any(
+        model.provider.provider_type != ModelProvider.ProviderType.FAKE
+        for model in models
+    )
     items = []
-    for model in queryset:
+    for model in models:
         provider = model.provider
+        if provider.provider_type == ModelProvider.ProviderType.FAKE and has_real_model:
+            continue
         account = None
+        link = None
         if provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT:
             link = provider_accounts.active_link(request.user, provider)
             snapshot = provider_accounts.quota_snapshot(request.user, provider) if link else None
@@ -402,6 +427,7 @@ def _available_models(request, tenant):
                 "model_name": model.model_name,
                 "display_name": model.display_name,
                 "provider_name": provider.name,
+                "provider_type": provider.provider_type,
                 "auth_mode": provider.auth_mode,
                 "account": account,
                 #: False only for a shared-pool model whose operator key is
@@ -409,6 +435,8 @@ def _available_models(request, tenant):
                 "ready": (
                     provider_accounts.platform_env_configured(provider.preset_key)
                     if provider.auth_mode == ModelProvider.AuthMode.PLATFORM_POOL
+                    else link is not None
+                    if provider.auth_mode == ModelProvider.AuthMode.USER_ACCOUNT
                     else True
                 ),
             }

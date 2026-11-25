@@ -323,9 +323,11 @@ function openSheet(name: SheetName): void {
 }
 
 const scopeLabel = computed(() => context.value?.project.name ?? t("Project"));
-const currentModelLabel = computed(
-  () => context.value?.models.find((model) => model.id === selectedModelId.value)?.display_name ?? t("Model"),
-);
+const currentModelLabel = computed(() => {
+  const model = context.value?.models.find((item) => item.id === selectedModelId.value);
+  if (!model) return t("Model");
+  return model.provider_type === "fake" ? `${model.display_name} · ${t("Demo")}` : model.display_name;
+});
 const SHEET_TITLES: Record<Exclude<SheetName, "">, () => string> = {
   scope: () => t("Workspace"),
   skills: () => t("Skills"),

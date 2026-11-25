@@ -71,8 +71,12 @@ def test_each_member_only_sees_their_own_platform_accounts(two_members):
         tenant=tenant,
         created_by=user_a,
         name="Tenant shared",
-        provider_type=ModelProvider.ProviderType.FAKE,
+        # The shared model is a real remote provider: the composer hides the
+        # local echo model once any real model is configured.
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
         auth_mode=ModelProvider.AuthMode.TENANT_SECRET,
+        base_url="https://shared.example.com/v1",
+        credential_ref="env:SHARED_TEST_KEY",
     )
     ModelConfig.objects.create(
         provider=shared,

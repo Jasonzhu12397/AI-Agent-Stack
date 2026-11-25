@@ -2298,6 +2298,7 @@ export type ChatModelOption = {
   model_name: string;
   display_name: string;
   provider_name: string;
+  provider_type: string;
   auth_mode: "tenant_secret" | "user_account" | "platform_pool";
   account: { linked: boolean; remaining_today: number } | null;
   ready?: boolean;

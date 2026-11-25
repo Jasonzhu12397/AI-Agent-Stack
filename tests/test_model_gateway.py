@@ -410,3 +410,33 @@ def test_fake_model_reads_the_intent_of_the_instruction():
     assert _intent_tool(offered, "查一下西安天气") == "weather.current"
     assert _intent_tool(offered, "西安到咸阳怎么走") == "map.route.plan"
     assert _intent_tool(offered, "read issue 42") is None
+
+
+@pytest.mark.django_db
+def test_fake_model_does_not_pick_a_tool_for_a_greeting(model_tenant):
+    """A greeting must receive prose, not the first offered tool's transcript."""
+
+    _, _, provider, model = model_tenant
+    provider.config = {"response": "fake model ready", "tool_call": True}
+    provider.save(update_fields=["config"])
+    model.capabilities = ["chat", "tools"]
+    model.save(update_fields=["capabilities"])
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "platform.list_nodes",
+                "description": "List cluster nodes",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    result = ModelGateway(guard=_StubGuard()).complete(
+        model,
+        [{"role": "user", "content": "你好"}],
+        tools=tools,
+    )
+
+    assert result.tool_calls == []
+    assert result.content == "fake model ready"

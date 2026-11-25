@@ -104,6 +104,7 @@ def _intent_tool(offered: list[str], instruction: str) -> str | None:
         ("weather", ("天气", "气温", "下雨", "weather", "temperature")),
         ("route", ("路线", "怎么走", "导航", "多久", "route", "directions")),
         ("place", ("地点", "在哪", "地图", "附近", "place")),
+        ("node", ("节点", "集群", "主机", "服务器", "node", "cluster", "host")),
     )
     for token, keywords in groups:
         if not any(keyword in text for keyword in keywords):
@@ -292,7 +293,6 @@ class ModelGateway:
                 ):
                     functions = [item.get("function", {}) for item in tools]
                     offered = [item.get("name") for item in functions]
-                    preferred = provider.config.get("tool_name")
                     intent = next(
                         (
                             str(message.get("content") or "")
@@ -301,66 +301,61 @@ class ModelGateway:
                         ),
                         "",
                     )
-                    if preferred in offered:
-                        chosen = preferred
-                    elif match := _intent_tool(offered, intent):
-                        # The offline demo should exercise the connector the
-                        # instruction is about, not whichever plugin is listed
-                        # first, so a weather question calls the weather tool.
-                        chosen = match
-                    else:
-                        # Prefer tools that run where the member aimed the turn:
-                        # the local runner first, then an installed plugin, so
-                        # the demo exercises something beyond the control plane.
-                        for prefix in ("[local]", "[plugin]"):
-                            scoped = [
-                                item.get("name")
+                    # Only call a tool when the instruction actually names a
+                    # capability. The demo used to fall back to the first
+                    # offered tool, so "你好" listed cluster nodes and the turn
+                    # returned a raw tool transcript instead of an answer.
+                    chosen = _intent_tool(offered, intent)
+                    if chosen is None:
+                        content = (
+                            provider.config.get("answer")
+                            or provider.config.get("response")
+                            or "Hello! Ask me about a cluster, a route or the weather."
+                        )
+                        if not isinstance(content, str):
+                            raise ModelGatewayError(
+                                "INVALID_FAKE_RESPONSE",
+                                "Fake provider answer must be a string.",
+                            )
+                    if chosen is not None:
+                        # Fill the required arguments from the user's own turn
+                        # so schema validation runs against realistic values.
+                        parameters = next(
+                            (
+                                item.get("parameters") or {}
                                 for item in functions
-                                if str(item.get("description", "")).startswith(prefix)
-                            ]
-                            if scoped:
-                                chosen = scoped[0]
-                                break
-                        else:
-                            chosen = offered[0]
-                    # Fill the required arguments from the user's own turn so
-                    # schema validation runs against realistic values.
-                    parameters = next(
-                        (
-                            item.get("parameters") or {}
-                            for item in functions
-                            if item.get("name") == chosen
-                        ),
-                        {},
-                    )
-                    instruction = next(
-                        (
-                            str(message.get("content") or "")
-                            for message in reversed(messages)
-                            if message.get("role") == "user"
-                        ),
-                        "",
-                    )[:200]
-                    arguments = {}
-                    for key in parameters.get("required") or []:
-                        declared = (parameters.get("properties") or {}).get(key) or {}
-                        if declared.get("type") == "integer":
-                            arguments[key] = 1
-                        elif declared.get("type") == "boolean":
-                            arguments[key] = True
-                        else:
-                            arguments[key] = instruction or "demo"
-                    fake_tool_calls = [
-                        {
-                            "id": "call_fake_0",
-                            "type": "function",
-                            "function": {
-                                "name": chosen,
-                                "arguments": json.dumps(arguments),
-                            },
-                        }
-                    ]
-                    content = ""
+                                if item.get("name") == chosen
+                            ),
+                            {},
+                        )
+                        instruction = next(
+                            (
+                                str(message.get("content") or "")
+                                for message in reversed(messages)
+                                if message.get("role") == "user"
+                            ),
+                            "",
+                        )[:200]
+                        arguments = {}
+                        for key in parameters.get("required") or []:
+                            declared = (parameters.get("properties") or {}).get(key) or {}
+                            if declared.get("type") == "integer":
+                                arguments[key] = 1
+                            elif declared.get("type") == "boolean":
+                                arguments[key] = True
+                            else:
+                                arguments[key] = instruction or "demo"
+                        fake_tool_calls = [
+                            {
+                                "id": "call_fake_0",
+                                "type": "function",
+                                "function": {
+                                    "name": chosen,
+                                    "arguments": json.dumps(arguments),
+                                },
+                            }
+                        ]
+                        content = ""
                 resolved_input, resolved_output = 0, 0
                 response = ModelResponse(
                     content=content,

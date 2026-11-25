@@ -311,7 +311,54 @@ def test_linked_personal_model_is_recommended_over_the_local_echo(chat_workspace
     ).json()
     by_id = {row["id"]: row for row in context["models"]}
     assert by_id[str(personal_model.id)]["recommended"] is True
-    assert by_id[str(fake_model.id)]["recommended"] is False
+    # The local echo provider disappears once a real provider is configured,
+    # so the picker cannot present a fake model as if it were the linked one.
+    assert str(fake_model.id) not in by_id
 
     thread = _thread(client, tenant, project)
     assert thread["model_config_id"] == str(personal_model.id)
+
+
+@pytest.mark.django_db
+def test_stale_demo_model_id_is_replaced_by_a_real_model(chat_workspace, monkeypatch):
+    """A tab holding the old demo id must not bypass the picker's real models."""
+
+    from core import chat_runtime, provider_accounts
+
+    user, tenant, project, fake_model, _installation = chat_workspace
+    personal = ModelProvider.objects.create(
+        tenant=tenant,
+        created_by=user,
+        name="OpenAI (my account)",
+        provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+        auth_mode=ModelProvider.AuthMode.USER_ACCOUNT,
+        preset_key="openai",
+        base_url="https://api.openai.com/v1",
+    )
+    real_model = ModelConfig.objects.create(
+        provider=personal,
+        model_name="gpt-5.6",
+        display_name="GPT-5.6",
+        capabilities=["chat"],
+    )
+    provider_accounts.link_account(
+        user=user, provider=personal, credential_ref="env:OPENAI_TEST_KEY"
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    thread = _thread(client, tenant, project, fake_model)
+    seen = {}
+
+    def fake_run(thread_arg, model_config, **kwargs):
+        seen["model_id"] = str(model_config.id)
+        return "A real answer", {}, []
+
+    monkeypatch.setattr(chat_runtime, "run_turn", fake_run)
+    response = client.post(
+        f"/api/v1/agent-chat/threads/{thread['id']}/messages/",
+        {"content": "你好", "model_config_id": str(fake_model.id)},
+        format="json",
+    )
+    assert response.status_code == 201, response.content
+    assert response.json()["assistant"]["content"] == "A real answer"
+    assert seen["model_id"] == str(real_model.id)
