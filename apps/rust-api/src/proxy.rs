@@ -204,6 +204,20 @@ pub fn router(state: AppState) -> Router {
                 get(crate::agent_api::get_agent_run),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-chat/threads/",
+                get(crate::chat_api::list_threads).post(crate::chat_api::create_thread),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-chat/context/",
+                get(crate::chat_api::chat_context),
+            )
+            .route(
+                "/api/v1/agent-chat/threads/{thread_id}/",
+                get(crate::chat_api::get_thread)
+                    .patch(crate::chat_api::update_thread)
+                    .delete(crate::chat_api::delete_thread),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/",
                 get(crate::plugin_api::list_plugins),
             )
