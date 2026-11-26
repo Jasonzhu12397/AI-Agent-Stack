@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::ws::{CloseCode, CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -7,7 +8,9 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode as UpstreamCloseCode;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame as UpstreamCloseFrame;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
@@ -38,6 +41,14 @@ pub async fn forward(
     ws: WebSocketUpgrade,
     request: Request<Body>,
 ) -> Response {
+    let permit = match state.websocket_slots.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(serde_json::json!({
+                "error": {"code": "WEBSOCKET_CAPACITY_EXCEEDED", "message": "WebSocket capacity is temporarily exhausted."}
+            }))).into_response();
+        }
+    };
     let path_and_query = request
         .uri()
         .path_and_query()
@@ -77,6 +88,7 @@ pub async fn forward(
                 .collect()
         })
         .unwrap_or_default();
+    let ws = ws.max_message_size(1_048_576).max_frame_size(1_048_576);
     let ws = if offered.is_empty() {
         ws
     } else {
@@ -84,6 +96,7 @@ pub async fn forward(
     };
 
     ws.on_upgrade(move |client| async move {
+        let _permit = permit;
         relay(client, target, headers, peer).await;
     })
     .into_response()
@@ -99,14 +112,28 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
         }
     };
 
-    let upstream = match tokio_tungstenite::connect_async(upstream_request).await {
-        Ok((socket, response)) => {
+    let websocket_config = WebSocketConfig {
+        max_message_size: Some(1_048_576),
+        max_frame_size: Some(1_048_576),
+        ..WebSocketConfig::default()
+    };
+    let upstream_result = tokio::time::timeout(
+        Duration::from_secs(10),
+        connect_async_with_config(upstream_request, Some(websocket_config), false),
+    ).await;
+    let upstream = match upstream_result {
+        Ok(Ok((socket, response))) => {
             tracing::info!(%target, status = response.status().as_u16(), "rust api edge upgraded the websocket upstream");
             socket
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::warn!(%target, %error, "rust api edge could not reach the websocket upstream");
             close_client(client, 1011, "websocket upstream unavailable").await;
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(%target, "rust api edge websocket upstream handshake timed out");
+            close_client(client, 1011, "websocket upstream timed out").await;
             return;
         }
     };
