@@ -327,21 +327,28 @@ async fn forward(
                 .unwrap_or_else(|_| HeaderValue::from_static("missing-request-id")),
         );
     }
-    let forwarded_for = match outbound.get("x-forwarded-for") {
-        Some(existing) => format!("{}, {}", existing.to_str().unwrap_or_default(), peer.ip()),
-        None => peer.ip().to_string(),
+    for name in [
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "x-real-ip",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+    ] {
+        outbound.remove(name);
+    }
+    if let Ok(value) = HeaderValue::from_str(&peer.ip().to_string()) {
+        outbound.insert(HeaderName::from_static("x-forwarded-for"), value);
+    }
+    let forwarded_proto = if state.config.external_scheme == "https" {
+        HeaderValue::from_static("https")
+    } else {
+        HeaderValue::from_static("http")
     };
-    if !forwarded_for.is_empty() {
-        if let Ok(value) = HeaderValue::from_str(&forwarded_for) {
-            outbound.insert(HeaderName::from_static("x-forwarded-for"), value);
-        }
-    }
-    if !outbound.contains_key("x-forwarded-proto") {
-        outbound.insert(
-            HeaderName::from_static("x-forwarded-proto"),
-            HeaderValue::from_static("http"),
-        );
-    }
+    outbound.insert(
+        HeaderName::from_static("x-forwarded-proto"),
+        forwarded_proto,
+    );
     builder = builder.headers(outbound);
 
     let content_length = incoming_headers
