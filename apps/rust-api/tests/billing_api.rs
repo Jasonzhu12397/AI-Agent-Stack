@@ -11,6 +11,8 @@ use tower::ServiceExt;
 const SECRET: &str = "local-only-change-before-production";
 const TENANT: &str = "11111111-1111-1111-1111-111111111111";
 const SESSION: &str = "billing-session";
+const TRIAL_TENANT: &str = "33333333-3333-3333-3333-333333333333";
+const SETTLE_TENANT: &str = "44444444-4444-4444-4444-444444444444";
 
 async fn state() -> AppState {
     let path = std::env::temp_dir().join(format!("rust-billing-{}.sqlite3", uuid::Uuid::new_v4()));
@@ -23,7 +25,7 @@ async fn state() -> AppState {
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_tenant (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
-        "CREATE TABLE core_plan (id TEXT PRIMARY KEY, code VARCHAR(64) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, interval VARCHAR(16) NOT NULL, price_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, token_quota_daily INTEGER NOT NULL, token_quota_monthly INTEGER NOT NULL, features TEXT NOT NULL, region_scope VARCHAR(16) NOT NULL, active BOOLEAN NOT NULL)",
+        "CREATE TABLE core_plan (id TEXT PRIMARY KEY, code VARCHAR(64) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, interval VARCHAR(16) NOT NULL, price_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, token_quota_daily INTEGER NOT NULL, token_quota_monthly INTEGER NOT NULL, token_quota_daily_expired INTEGER NOT NULL, token_quota_monthly_expired INTEGER NOT NULL, trial_days INTEGER NOT NULL, features TEXT NOT NULL, region_scope VARCHAR(16) NOT NULL, active BOOLEAN NOT NULL)",
         "CREATE TABLE core_subscription (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME, current_period_start DATETIME, current_period_end DATETIME, cancel_at_period_end BOOLEAN NOT NULL, renewal_mode VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_paymentchannelsecret (id TEXT PRIMARY KEY, channel VARCHAR(32) NOT NULL, slot VARCHAR(64) NOT NULL, sealed_value TEXT NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenanttokenbudget (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL UNIQUE, daily_limit INTEGER NOT NULL, monthly_limit INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
@@ -40,12 +42,20 @@ async fn state() -> AppState {
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES (?, ?, 1, 'owner', datetime('now'))")
         .bind(uuid::Uuid::new_v4().to_string()).bind(TENANT).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_plan (id, code, name, description, interval, price_cents, currency, token_quota_daily, token_quota_monthly, features, region_scope, active) VALUES ('plan-1', 'starter', 'Starter', 'Entry plan', 'monthly', 9900, 'CNY', 200000, 4000000, '[\"3 projects\"]', 'domestic', 1)")
+    sqlx::query("INSERT INTO core_plan (id, code, name, description, interval, price_cents, currency, token_quota_daily, token_quota_monthly, token_quota_daily_expired, token_quota_monthly_expired, trial_days, features, region_scope, active) VALUES ('plan-1', 'starter', 'Starter', 'Entry plan', 'monthly', 9900, 'CNY', 200000, 4000000, 0, 0, 14, '[\"3 projects\"]', 'domestic', 1)")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_plan (id, code, name, description, interval, price_cents, currency, token_quota_daily, token_quota_monthly, features, region_scope, active) VALUES ('plan-2', 'archived', 'Archived', 'Old plan', 'monthly', 19900, 'CNY', 1, 1, '[]', 'domestic', 0)")
+    sqlx::query("INSERT INTO core_plan (id, code, name, description, interval, price_cents, currency, token_quota_daily, token_quota_monthly, token_quota_daily_expired, token_quota_monthly_expired, trial_days, features, region_scope, active) VALUES ('plan-2', 'archived', 'Archived', 'Old plan', 'monthly', 19900, 'CNY', 1, 1, 0, 0, 0, '[]', 'domestic', 0)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_subscription (id, tenant_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, renewal_mode, created_at, updated_at) VALUES ('sub-1', ?, 'plan-1', 'active', datetime('now'), datetime('now'), datetime('now', '+30 days'), 0, 'manual', datetime('now'), datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
+    for tenant in [TRIAL_TENANT, SETTLE_TENANT] {
+        sqlx::query("INSERT INTO core_tenant (id, name, slug, created_at) VALUES (?, 'Other', 'other', datetime('now'))")
+            .bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES (?, ?, 1, 'owner', datetime('now'))")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(tenant).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO core_subscription (id, tenant_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, renewal_mode, created_at, updated_at) VALUES ('sub-due', ?, 'plan-1', 'active', datetime('now', '-60 days'), datetime('now', '-60 days'), datetime('now', '-1 day'), 1, 'manual', datetime('now', '-60 days'), datetime('now', '-60 days'))")
+        .bind(SETTLE_TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenanttokenbudget (id, tenant_id, daily_limit, monthly_limit, created_at, updated_at) VALUES ('budget-1', ?, 1000, 5000, datetime('now'), datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenanttokenusage (id, tenant_id, status, reserved_tokens, consumed_tokens, expires_at, settled_at, scope_ref) VALUES ('usage-1', ?, 'settled', 0, 18, datetime('now'), datetime('now'), 'agent-chat:thread-1')")
@@ -249,4 +259,78 @@ async fn seals_and_reports_payment_channel_credentials() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "INVALID_CREDENTIALS");
+}
+
+#[tokio::test]
+async fn runs_subscription_trial_cancel_resume_and_settlement() {
+    let state = state().await;
+    let trial_uri = format!("/api/v1/tenants/{TRIAL_TENANT}/billing/subscription/trial/");
+    let (status, body) = request(
+        &state,
+        "POST",
+        &trial_uri,
+        Some(json!({"plan_code": "starter"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["subscription"]["status"], "trialing");
+    assert_eq!(body["subscription"]["plan"], "starter");
+    assert!(body["subscription"]["current_period_end"].is_string());
+
+    let (status, body) = request(
+        &state,
+        "POST",
+        &trial_uri,
+        Some(json!({"plan_code": "starter"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "SUBSCRIPTION_ALREADY_ACTIVE");
+
+    let cancel_uri = format!("/api/v1/tenants/{TENANT}/billing/subscription/cancel/");
+    let (status, body) = request(
+        &state,
+        "POST",
+        &cancel_uri,
+        Some(json!({"mode": "period_end"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["subscription"]["cancel_at_period_end"], true);
+    assert!(body["subscription"]["cancel_effective_at"].is_string());
+
+    let resume_uri = format!("/api/v1/tenants/{TENANT}/billing/subscription/resume/");
+    let (status, body) = request(&state, "POST", &resume_uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["subscription"]["cancel_at_period_end"], false);
+
+    let (status, body) = request(&state, "POST", &resume_uri, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"]["code"],
+        "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCEL"
+    );
+
+    let (status, body) = request(
+        &state,
+        "POST",
+        &cancel_uri,
+        Some(json!({"mode": "immediate"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["subscription"]["status"], "cancelled");
+
+    let settle_uri = format!("/api/v1/tenants/{SETTLE_TENANT}/billing/subscription/settle/");
+    let (status, body) = request(&state, "POST", &settle_uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["settled"][0]["status"], "cancelled");
+    let (_, budget) = call(
+        &state,
+        &format!("/api/v1/tenants/{SETTLE_TENANT}/billing/usage/"),
+    )
+    .await;
+    assert_eq!(budget["daily_limit"], 0);
+    assert_eq!(budget["monthly_limit"], 0);
 }

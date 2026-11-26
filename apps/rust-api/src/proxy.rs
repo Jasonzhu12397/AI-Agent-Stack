@@ -228,6 +228,22 @@ pub fn router(state: AppState) -> Router {
                 get(crate::billing_api::get_order),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/billing/subscription/trial/",
+                axum::routing::post(crate::billing_api::start_subscription_trial),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/subscription/cancel/",
+                axum::routing::post(crate::billing_api::cancel_subscription),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/subscription/resume/",
+                axum::routing::post(crate::billing_api::resume_subscription),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/subscription/settle/",
+                axum::routing::post(crate::billing_api::settle_subscriptions),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/billing/payments/credentials/{channel}/",
                 get(crate::billing_api::get_payment_credentials)
                     .put(crate::billing_api::put_payment_credentials),

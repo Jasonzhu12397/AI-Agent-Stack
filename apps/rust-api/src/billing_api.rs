@@ -667,6 +667,671 @@ async fn upsert_secret(
         .map_err(|error| error.to_string())
 }
 
+pub async fn start_subscription_trial(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return admin_required();
+    }
+    let Json(payload) = match body {
+        Ok(body) => body,
+        Err(_) => {
+            return subscription_error(
+                "SUBSCRIPTION_PLAN_REQUIRED",
+                "plan_code is required.",
+                400,
+                json!({}),
+            )
+        }
+    };
+    let plan_code = payload
+        .get("plan_code")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if plan_code.is_empty() {
+        return subscription_error(
+            "SUBSCRIPTION_PLAN_REQUIRED",
+            "plan_code is required.",
+            400,
+            json!({}),
+        );
+    }
+    let plan = match plan_row(pool, &plan_code).await {
+        Ok(plan) => plan,
+        Err(response) => return response,
+    };
+    let Some(plan) = plan else {
+        return not_found();
+    };
+    if !plan.active {
+        return subscription_error(
+            "SUBSCRIPTION_PLAN_UNAVAILABLE",
+            "The selected plan is not available.",
+            400,
+            json!({}),
+        );
+    }
+    if plan.trial_days <= 0 {
+        return subscription_error(
+            "SUBSCRIPTION_PLAN_NO_TRIAL",
+            "The selected plan does not offer a free trial.",
+            400,
+            json!({"plan_code": plan.code}),
+        );
+    }
+    let active = sqlx::query_scalar::<_, String>(
+        "SELECT CAST(id AS TEXT) FROM core_subscription WHERE CAST(tenant_id AS TEXT) = ? \
+         AND status IN ('trialing', 'active', 'past_due') ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .fetch_optional(pool)
+    .await;
+    match active {
+        Ok(Some(existing)) => {
+            let existing_status = sqlx::query_scalar::<_, String>(
+                "SELECT status FROM core_subscription WHERE CAST(id AS TEXT) = ? LIMIT 1",
+            )
+            .bind(&existing)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+            return subscription_error(
+                "SUBSCRIPTION_ALREADY_ACTIVE",
+                "The tenant already has an active subscription.",
+                409,
+                json!({"existing_subscription": existing, "existing_status": existing_status}),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => return database_error(error.to_string()),
+    }
+    let now = chrono::Utc::now();
+    let start = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let end = (now + chrono::Duration::days(plan.trial_days))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let subscription_id = uuid::Uuid::new_v4().to_string();
+    let insert = if is_postgres(&state) {
+        "INSERT INTO core_subscription (id, tenant_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, renewal_mode, created_at, updated_at) VALUES (?::uuid, ?::uuid, ?::uuid, 'trialing', ?::timestamptz, ?::timestamptz, ?::timestamptz, FALSE, 'manual', NOW(), NOW())"
+    } else {
+        "INSERT INTO core_subscription (id, tenant_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, renewal_mode, created_at, updated_at) VALUES (?, ?, ?, 'trialing', ?, ?, ?, 0, 'manual', datetime('now'), datetime('now'))"
+    };
+    if let Err(error) = sqlx::query(insert)
+        .bind(&subscription_id)
+        .bind(&tenant_id)
+        .bind(&plan.id)
+        .bind(&start)
+        .bind(&start)
+        .bind(&end)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    if let Err(response) =
+        set_budget_limits(&state, &tenant_id, plan.quota_daily, plan.quota_monthly).await
+    {
+        return response;
+    }
+    let metadata = json!({"plan_code": plan.code, "trial_days": plan.trial_days});
+    if let Err(response) = append_billing_audit(
+        &state,
+        &tenant_id,
+        "billing.subscription.trial_started",
+        "subscription",
+        &subscription_id,
+        user.id,
+        metadata,
+    )
+    .await
+    {
+        return response;
+    }
+    match subscription_payload(&state, pool, &subscription_id).await {
+        Ok(Value::Null) => not_found(),
+        Ok(value) => (StatusCode::CREATED, Json(json!({"subscription": value}))).into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn cancel_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return admin_required();
+    }
+    let mode = body
+        .ok()
+        .and_then(|Json(value)| {
+            value
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|mode| !mode.is_empty())
+        .unwrap_or_else(|| "period_end".to_string());
+    if mode != "immediate" && mode != "period_end" {
+        return subscription_error(
+            "SUBSCRIPTION_CANCEL_MODE_INVALID",
+            "Cancel mode must be 'immediate' or 'period_end'.",
+            400,
+            json!({"mode": [mode]}),
+        );
+    }
+    let subscription = match latest_subscription(&state, pool, &tenant_id).await {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    if subscription.status == "cancelled" || subscription.status == "expired" {
+        return subscription_error(
+            "SUBSCRIPTION_INVALID_TRANSITION",
+            &format!(
+                "Subscription in status {} cannot be cancelled.",
+                subscription.status
+            ),
+            409,
+            json!({"status": subscription.status}),
+        );
+    }
+    let now_expr = if is_postgres(&state) {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    if mode == "immediate" {
+        let sql = format!(
+            "UPDATE core_subscription SET status = 'cancelled', updated_at = {now_expr} \
+             WHERE CAST(id AS TEXT) = ?"
+        );
+        if let Err(error) = sqlx::query(&sql).bind(&subscription.id).execute(pool).await {
+            return database_error(error.to_string());
+        }
+    } else {
+        let sql = format!(
+            "UPDATE core_subscription SET cancel_at_period_end = {} , updated_at = {now_expr} \
+             WHERE CAST(id AS TEXT) = ?",
+            if is_postgres(&state) { "TRUE" } else { "1" }
+        );
+        if let Err(error) = sqlx::query(&sql).bind(&subscription.id).execute(pool).await {
+            return database_error(error.to_string());
+        }
+    }
+    let event_type = if mode == "immediate" {
+        "billing.subscription.cancelled_immediately"
+    } else {
+        "billing.subscription.cancel_at_period_end"
+    };
+    let metadata = if mode == "immediate" {
+        json!({"plan_code": subscription.plan_code})
+    } else {
+        json!({"plan_code": subscription.plan_code, "effective_at": subscription.current_period_end})
+    };
+    if let Err(response) = append_billing_audit(
+        &state,
+        &tenant_id,
+        event_type,
+        "subscription",
+        &subscription.id,
+        user.id,
+        metadata,
+    )
+    .await
+    {
+        return response;
+    }
+    match subscription_payload(&state, pool, &subscription.id).await {
+        Ok(Value::Null) => not_found(),
+        Ok(value) => Json(json!({"subscription": value})).into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn resume_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return admin_required();
+    }
+    let subscription = match latest_subscription(&state, pool, &tenant_id).await {
+        Ok(Some(subscription)) => subscription,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    if subscription.status == "cancelled" || subscription.status == "expired" {
+        return subscription_error(
+            "SUBSCRIPTION_INVALID_TRANSITION",
+            &format!(
+                "Subscription in status {} cannot be resumed.",
+                subscription.status
+            ),
+            409,
+            json!({"status": subscription.status}),
+        );
+    }
+    if !subscription.cancel_at_period_end {
+        return subscription_error(
+            "SUBSCRIPTION_NOT_SCHEDULED_FOR_CANCEL",
+            "This subscription is not scheduled for cancellation.",
+            409,
+            json!({"status": subscription.status}),
+        );
+    }
+    let now_expr = if is_postgres(&state) {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    let sql = format!(
+        "UPDATE core_subscription SET cancel_at_period_end = {}, updated_at = {now_expr} \
+         WHERE CAST(id AS TEXT) = ?",
+        if is_postgres(&state) { "FALSE" } else { "0" }
+    );
+    if let Err(error) = sqlx::query(&sql).bind(&subscription.id).execute(pool).await {
+        return database_error(error.to_string());
+    }
+    let metadata = json!({"plan_code": subscription.plan_code, "current_period_end": subscription.current_period_end});
+    if let Err(response) = append_billing_audit(
+        &state,
+        &tenant_id,
+        "billing.subscription.resume_scheduled_cancel",
+        "subscription",
+        &subscription.id,
+        user.id,
+        metadata,
+    )
+    .await
+    {
+        return response;
+    }
+    match subscription_payload(&state, pool, &subscription.id).await {
+        Ok(Value::Null) => not_found(),
+        Ok(value) => Json(json!({"subscription": value})).into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn settle_subscriptions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return admin_required();
+    }
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let rows = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(plan_id AS TEXT) AS plan_id, status, \
+         CAST(cancel_at_period_end AS INTEGER) AS cancel_int FROM core_subscription \
+         WHERE CAST(tenant_id AS TEXT) = ? AND status IN ('trialing', 'active', 'past_due') \
+         AND current_period_end <= ? ORDER BY created_at ASC",
+    )
+    .bind(&tenant_id)
+    .bind(&now)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let mut settled = Vec::new();
+    for row in rows {
+        let id: String = row.try_get("id").unwrap_or_default();
+        let plan_id: String = row.try_get("plan_id").unwrap_or_default();
+        let cancel = row.try_get::<i64, _>("cancel_int").unwrap_or(0) != 0;
+        let target = if cancel { "cancelled" } else { "expired" };
+        let plan = match plan_limits(pool, &plan_id).await {
+            Ok(Some(plan)) => plan,
+            Ok(None) => continue,
+            Err(error) => return database_error(error),
+        };
+        if let Err(response) = set_budget_limits(
+            &state,
+            &tenant_id,
+            plan.quota_daily_expired,
+            plan.quota_monthly_expired,
+        )
+        .await
+        {
+            return response;
+        }
+        let update = format!(
+            "UPDATE core_subscription SET status = '{}', updated_at = {} WHERE CAST(id AS TEXT) = ?",
+            target,
+            if is_postgres(&state) { "NOW()" } else { "datetime('now')" }
+        );
+        if let Err(error) = sqlx::query(&update).bind(&id).execute(pool).await {
+            return database_error(error.to_string());
+        }
+        let event_type = if cancel {
+            "billing.subscription.cancelled_at_period_end"
+        } else {
+            "billing.subscription.expired"
+        };
+        let metadata = json!({"plan_code": plan.code});
+        if let Err(response) = append_billing_audit(
+            &state,
+            &tenant_id,
+            event_type,
+            "subscription",
+            &id,
+            user.id,
+            metadata,
+        )
+        .await
+        {
+            return response;
+        }
+        if let Ok(value) = subscription_payload(&state, pool, &id).await {
+            settled.push(value);
+        }
+    }
+    Json(json!({"count": settled.len(), "settled": settled})).into_response()
+}
+
+struct PlanRow {
+    id: String,
+    code: String,
+    active: bool,
+    trial_days: i64,
+    quota_daily: i64,
+    quota_monthly: i64,
+}
+
+struct PlanLimits {
+    code: String,
+    quota_daily_expired: i64,
+    quota_monthly_expired: i64,
+}
+
+struct SubscriptionRow {
+    id: String,
+    plan_code: String,
+    status: String,
+    cancel_at_period_end: bool,
+    current_period_end: Option<String>,
+}
+
+async fn plan_row(pool: &AnyPool, code: &str) -> Result<Option<PlanRow>, Response> {
+    let row = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, code, CAST(active AS INTEGER) AS active_int, trial_days, \
+         token_quota_daily, token_quota_monthly FROM core_plan WHERE code = ? LIMIT 1",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?;
+    Ok(row.map(|row| PlanRow {
+        id: row.try_get::<String, _>("id").unwrap_or_default(),
+        code: row.try_get::<String, _>("code").unwrap_or_default(),
+        active: row.try_get::<i64, _>("active_int").unwrap_or(0) != 0,
+        trial_days: row.try_get::<i64, _>("trial_days").unwrap_or(0),
+        quota_daily: row.try_get::<i64, _>("token_quota_daily").unwrap_or(0),
+        quota_monthly: row.try_get::<i64, _>("token_quota_monthly").unwrap_or(0),
+    }))
+}
+
+async fn plan_limits(pool: &AnyPool, plan_id: &str) -> Result<Option<PlanLimits>, String> {
+    let row = sqlx::query(
+        "SELECT code, token_quota_daily_expired, token_quota_monthly_expired FROM core_plan \
+         WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(plan_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| PlanLimits {
+        code: row.try_get::<String, _>("code").unwrap_or_default(),
+        quota_daily_expired: row
+            .try_get::<i64, _>("token_quota_daily_expired")
+            .unwrap_or(0),
+        quota_monthly_expired: row
+            .try_get::<i64, _>("token_quota_monthly_expired")
+            .unwrap_or(0),
+    }))
+}
+
+async fn latest_subscription(
+    state: &AppState,
+    pool: &AnyPool,
+    tenant_id: &str,
+) -> Result<Option<SubscriptionRow>, String> {
+    let period_end = timestamp(state, "subscription", "current_period_end");
+    let sql = format!(
+        "SELECT CAST(subscription.id AS TEXT) AS id, plan.code AS plan_code, subscription.status, \
+         CAST(subscription.cancel_at_period_end AS INTEGER) AS cancel_int, \
+         {period_end} AS period_end FROM core_subscription subscription \
+         JOIN core_plan plan ON CAST(plan.id AS TEXT) = CAST(subscription.plan_id AS TEXT) \
+         WHERE CAST(subscription.tenant_id AS TEXT) = ? ORDER BY subscription.created_at DESC LIMIT 1"
+    );
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| SubscriptionRow {
+        id: row.try_get::<String, _>("id").unwrap_or_default(),
+        plan_code: row.try_get::<String, _>("plan_code").unwrap_or_default(),
+        status: row.try_get::<String, _>("status").unwrap_or_default(),
+        cancel_at_period_end: row.try_get::<i64, _>("cancel_int").unwrap_or(0) != 0,
+        current_period_end: raw_timestamp(&row, "period_end"),
+    }))
+}
+
+async fn subscription_payload(
+    state: &AppState,
+    pool: &AnyPool,
+    id: &str,
+) -> Result<Value, Response> {
+    let started = timestamp(state, "subscription", "started_at");
+    let period_start = timestamp(state, "subscription", "current_period_start");
+    let period_end = timestamp(state, "subscription", "current_period_end");
+    let sql = format!(
+        "SELECT CAST(subscription.id AS TEXT) AS id, plan.code AS plan_code, subscription.status, \
+         {started} AS started, {period_start} AS period_start, {period_end} AS period_end, \
+         CAST(subscription.cancel_at_period_end AS INTEGER) AS cancel_int, \
+         subscription.renewal_mode FROM core_subscription subscription \
+         JOIN core_plan plan ON CAST(plan.id AS TEXT) = CAST(subscription.plan_id AS TEXT) \
+         WHERE CAST(subscription.id AS TEXT) = ? LIMIT 1"
+    );
+    let row = sqlx::query(&sql)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+    let Some(row) = row else {
+        return Ok(Value::Null);
+    };
+    let started_at: Option<String> = row.try_get("started").ok();
+    let period_start_at: Option<String> = row.try_get("period_start").ok();
+    let period_end_at: Option<String> = row.try_get("period_end").ok();
+    let cancel = row.try_get::<i64, _>("cancel_int").unwrap_or(0) != 0;
+    Ok(json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "plan": row.try_get::<String, _>("plan_code").unwrap_or_default(),
+        "status": row.try_get::<String, _>("status").unwrap_or_default(),
+        "started_at": started_at.as_deref().map(normalize_timestamp),
+        "current_period_start": period_start_at.as_deref().map(normalize_timestamp),
+        "current_period_end": period_end_at.as_deref().map(normalize_timestamp),
+        "cancel_at_period_end": cancel,
+        "renewal_mode": row.try_get::<String, _>("renewal_mode").unwrap_or_default(),
+        "cancel_effective_at": if cancel { period_end_at.as_deref().map(normalize_timestamp) } else { None },
+    }))
+}
+
+fn raw_timestamp(row: &sqlx::any::AnyRow, column: &str) -> Option<String> {
+    row.try_get::<Option<String>, _>(column).ok().flatten()
+}
+
+async fn set_budget_limits(
+    state: &AppState,
+    tenant_id: &str,
+    daily: i64,
+    monthly: i64,
+) -> Result<(), Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let now_expr = if is_postgres(state) {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    let update = format!(
+        "UPDATE core_tenanttokenbudget SET daily_limit = ?, monthly_limit = ?, updated_at = {now_expr} \
+         WHERE CAST(tenant_id AS TEXT) = ?"
+    );
+    let updated = sqlx::query(&update)
+        .bind(daily)
+        .bind(monthly)
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?
+        .rows_affected();
+    if updated > 0 {
+        return Ok(());
+    }
+    let insert = format!(
+        "INSERT INTO core_tenanttokenbudget (id, tenant_id, daily_limit, monthly_limit, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, {now_expr}, {now_expr})"
+    );
+    sqlx::query(&insert)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(tenant_id)
+        .bind(daily)
+        .bind(monthly)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|error| database_error(error.to_string()))
+}
+
+async fn append_billing_audit(
+    state: &AppState,
+    tenant_id: &str,
+    event_type: &str,
+    resource_type: &str,
+    resource_id: &str,
+    actor_id: i64,
+    metadata: Value,
+) -> Result<(), Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let Some(database_url) = state.config.database_url.as_deref() else {
+        return Ok(());
+    };
+    let event = crate::audit::AuditEvent {
+        tenant_id: Some(tenant_id),
+        project_id: None,
+        event_type,
+        resource_type,
+        resource_id,
+        outcome: "success",
+        actor_id: Some(actor_id),
+        request_id: "",
+        remote_addr: None,
+        user_agent: "",
+        metadata,
+    };
+    crate::audit::record_event(pool, database_url, event)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "rust billing api could not append the subscription audit event");
+            unavailable()
+        })
+}
+
+fn admin_required() -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({"error": {"code": "TENANT_ADMIN_REQUIRED", "message": "Tenant owner or admin role is required to change payment credentials.", "details": {}}}))).into_response()
+}
+
+fn subscription_error(code: &str, message: &str, http_status: u16, details: Value) -> Response {
+    (
+        StatusCode::from_u16(http_status).unwrap_or(StatusCode::BAD_REQUEST),
+        Json(json!({"error": {"code": code, "message": message, "details": details}})),
+    )
+        .into_response()
+}
+
 async fn ensure_budget(state: &AppState, tenant_id: &str) -> Result<(i64, i64), Response> {
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
