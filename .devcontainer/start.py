@@ -72,7 +72,12 @@ def _cargo() -> str | None:
             return candidate
     log("installing the Rust toolchain for the native edge")
     installer = subprocess.run(
-        ["sh", "-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"],
+        [
+            "sh",
+            "-c",
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | "
+            "sh -s -- -y --profile minimal",
+        ],
         capture_output=True,
         text=True,
     )
@@ -299,9 +304,10 @@ def main() -> None:
         )
     # The edge serves the console bundle through Django, so the public port
     # stays single-origin while native routes run in Rust.
-    PID_FILE.write_text(
-        json.dumps([backend, edge, worker] + ([local] if local else []) + [watchdog] + ([edge_watchdog] if edge_watchdog else []))
-    )
+    pids = [backend, edge, worker] + ([local] if local else []) + [watchdog]
+    if edge_watchdog is not None:
+        pids.append(edge_watchdog)
+    PID_FILE.write_text(json.dumps(pids))
     print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
     subprocess.run(
