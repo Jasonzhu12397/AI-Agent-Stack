@@ -1415,4 +1415,11 @@ export const zhCN: Record<string, string> = {
   "The tool ran, but no model answer could be generated.":
     "工具已执行完成，但模型没能生成回答。",
   "Demo": "演示模型",
+  "Worker Scale": "工作节点扩缩容",
+  "Desired workers": "目标工作节点数",
+  "MachineDeployment (blank = auto-detect)": "MachineDeployment（留空自动识别）",
+  "Patches spec.replicas only after approving; scale-out also requires enough available BareMetalHosts.":
+    "审批通过后才修改 spec.replicas；扩容还需要足够的可用 BareMetalHost。",
+  "Execute waits for status.replicas, ready replicas and observedGeneration to match.":
+    "执行模式会等待 status.replicas、就绪副本数和 observedGeneration 全部匹配。",
 };

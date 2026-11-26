@@ -66,6 +66,7 @@ from packages.agent_transport import (
 )
 
 from .capi_pivot import execute_capi_pivot
+from .cluster_scale import ClusterScaleError, ClusterScaleExecutionError, execute_cluster_scale
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
 from .etcd_backup_exec import EtcdBackupExecutor
 from .handoff import (
@@ -128,6 +129,7 @@ CAPABILITIES = [
     "target.eph.cleanup",
     "target.worker.provision",
     "target.network.apply",
+    "cluster.scale",
 ]
 
 
@@ -1779,6 +1781,42 @@ def execute(
             "output": report,
             "side_effects": False,
         }
+    if action == "cluster.scale":
+        try:
+            payload = _command_payload(command)
+            if payload.get("execution_mode") == "execute":
+                verify_write_permissions(
+                    "cluster.scale",
+                    runner=_kubectl,
+                    namespace=payload.get("target_namespace"),
+                    lease_lost_event=lease_lost_event,
+                )
+            result = execute_cluster_scale(
+                payload,
+                _kubectl,
+                lease_lost_event,
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": result,
+                "side_effects": bool(result.get("side_effects")),
+            }
+        except (ClusterScaleExecutionError, ClusterScaleError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": getattr(exc, "code", "CLUSTER_SCALE_FAILED"),
+                "output": {"detail": getattr(exc, "detail", str(exc))},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
+        except (HandoffError, WritePermissionError, TypeError, AttributeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": str(exc) or "CLUSTER_SCALE_FAILED",
+                "output": {},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
     if action == "cluster.kubernetes.version.upgrade":
         try:
             request = validate_kubernetes_upgrade(

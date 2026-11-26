@@ -122,6 +122,11 @@ const rollbackSnapshots = ref<Record<string, string>>({});
 const rollbackBusy = ref<string | null>(null);
 const rollbackMessages = ref<Record<string, string>>({});
 const versionApplyBusy = ref<string | null>(null);
+const scaleCounts = ref<Record<string, string>>({});
+const scaleMachineDeployments = ref<Record<string, string>>({});
+const selectedScaleModes = ref<Record<string, "simulation" | "execute">>({});
+const scaleBusy = ref<string | null>(null);
+const scaleMessages = ref<Record<string, string>>({});
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
 const networkMachine = ref<FleetMachine | null>(null);
@@ -941,6 +946,59 @@ async function applyKubernetesVersion(deployment: ClusterDeployment): Promise<vo
     versionApplyMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request Kubernetes version change.";
   } finally {
     versionApplyBusy.value = null;
+  }
+}
+
+function scaleMode(deployment: ClusterDeployment): "simulation" | "execute" {
+  return selectedScaleModes.value[deployment.id] ?? "simulation";
+}
+
+function setScaleMode(deploymentId: string, mode: "simulation" | "execute"): void {
+  selectedScaleModes.value[deploymentId] = mode;
+}
+
+function desiredWorkerCount(deployment: ClusterDeployment): number | null {
+  const raw = scaleCounts.value[deployment.id];
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= 2500 ? value : null;
+}
+
+async function applyWorkerScale(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    scaleMessages.value[deployment.id] = "A Target Agent must be assigned before scaling workers.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    scaleMessages.value[deployment.id] = "The Target Agent must be online before scaling workers.";
+    return;
+  }
+  const desired = desiredWorkerCount(deployment);
+  if (!desired) {
+    scaleMessages.value[deployment.id] = "Desired workers must be an integer from 1 to 2500.";
+    return;
+  }
+  scaleBusy.value = deployment.id;
+  scaleMessages.value[deployment.id] = "";
+  try {
+    const command = await createAgentCommand(targetAgent.id, "cluster.scale", {
+      target_cluster_name: deployment.cluster_name,
+      machine_deployment: (scaleMachineDeployments.value[deployment.id] ?? "").trim() || null,
+      target_namespace: "default",
+      desired_workers: desired,
+      execution_mode: scaleMode(deployment),
+      reason: "Day-2 worker scale from the fleet console",
+    });
+    scaleMessages.value[deployment.id] =
+      scaleMode(deployment) === "execute"
+        ? "Scale to " + desired + " workers requested (" + command.status + "); approval is required before replicas change."
+        : "Scale plan for " + desired + " workers created (" + command.status + "); approval is required and no replicas change in simulation.";
+    await refreshData();
+  } catch (cause) {
+    scaleMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request worker scaling.";
+  } finally {
+    scaleBusy.value = null;
   }
 }
 
@@ -1849,6 +1907,47 @@ onUnmounted(() => {
                 Rollback restores the pre-upgrade etcd snapshot. Single control-plane only; approval required.
               </small>
               <small v-if="rollbackMessages[scope.row.id]" class="fleet-version-message">{{ rollbackMessages[scope.row.id] }}</small>
+            </template>
+          </el-table-column>
+          <el-table-column label="Worker Scale" min-width="250">
+            <template #default="scope">
+              <div class="fleet-version-control">
+                <el-input
+                  v-model="scaleCounts[scope.row.id]"
+                  size="small"
+                  placeholder="Desired workers"
+                  style="width: 116px"
+                />
+                <el-select
+                  :model-value="scaleMode(scope.row)"
+                  size="small"
+                  style="width: 108px"
+                  @change="(value: string) => setScaleMode(scope.row.id, value as 'simulation' | 'execute')"
+                >
+                  <el-option v-for="mode in upgradeModes" :key="mode" :label="mode" :value="mode" />
+                </el-select>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="scaleBusy === scope.row.id"
+                  :disabled="!targetAgentOnline(scope.row) || !desiredWorkerCount(scope.row)"
+                  @click="applyWorkerScale(scope.row)"
+                >Apply</el-button>
+              </div>
+              <el-input
+                v-model="scaleMachineDeployments[scope.row.id]"
+                size="small"
+                placeholder="MachineDeployment (blank = auto-detect)"
+                style="margin-top: 6px"
+              />
+              <small class="fleet-version-current">
+                Patches spec.replicas only after approving; scale-out also requires enough available BareMetalHosts.
+              </small>
+              <small v-if="scaleMode(scope.row) === 'execute'" class="readiness-blocked">
+                Execute waits for status.replicas, ready replicas and observedGeneration to match.
+              </small>
+              <small v-if="scaleMessages[scope.row.id]" class="fleet-version-message">{{ scaleMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">

@@ -34,6 +34,10 @@ from packages.agent_contracts.agent_commands import (
     EPH_AGENT_COMMANDS,
     TARGET_AGENT_COMMANDS,
 )
+from packages.agent_contracts.cluster_scale import (
+    ClusterScaleError,
+    validate_request as validate_cluster_scale,
+)
 from packages.agent_contracts.host_network_verify import verify_host_networks
 from packages.agent_contracts.infra_networks import InfraNetworkError
 from packages.agent_contracts.kubernetes_rollback import (
@@ -116,6 +120,7 @@ MUTATING_COMMANDS = {
     "target.capi.pivot",
     "target.worker.provision",
     "target.eph.cleanup",
+    "cluster.scale",
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
     # A recurring snapshot writes files on the host, so it is treated as
@@ -160,11 +165,13 @@ def _policy_snapshot_directory(node) -> str:
 POST_CHANGE_BACKUP_COMMANDS = {
     "cluster.kubernetes.version.upgrade": "upgrade_performed",
     "cluster.kubernetes.version.rollback": "rolled_back",
+    "cluster.scale": "scale_performed",
 }
 
 APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
+    "cluster.scale",
 }
 
 
@@ -454,6 +461,49 @@ def _validate_kubernetes_rollback_result(command, result):
         "/var/lib/etcd/member.pre-rollback-"
     ):
         return "A rollback must keep the previous etcd data directory on disk."
+    return None
+
+
+def _validate_cluster_scale_result(command, result):
+    if command.command_type != "cluster.scale":
+        return None
+    if not isinstance(result, dict):
+        return "Cluster scale result must be an object."
+    expected = {
+        "cluster_name": command.payload.get("target_cluster_name"),
+        "desired_workers": command.payload.get("desired_workers"),
+    }
+    if any(result.get(key) != value for key, value in expected.items()):
+        return "Cluster scale result does not match the approved command."
+    if not isinstance(result.get("machine_deployment"), str) or not result["machine_deployment"]:
+        return "Cluster scale result must name the MachineDeployment it scaled."
+    requested_md = command.payload.get("machine_deployment")
+    if requested_md and result["machine_deployment"] != requested_md:
+        return "Cluster scale result does not match the approved MachineDeployment."
+    mode = command.payload.get("execution_mode")
+    if mode == "execute":
+        if result.get("scale_simulated") is not False:
+            return "An executed scale cannot report a simulation."
+        if result.get("scale_performed") is True:
+            if result.get("side_effects") is not True:
+                return "An executed scale must report side effects."
+            status = result.get("controller_status")
+            if not isinstance(status, dict):
+                return "An executed scale must report controller status."
+            if result.get("controller_replicas") != expected["desired_workers"]:
+                return "The controller did not reach the requested replica count."
+        elif result.get("side_effects") is not False:
+            return "A no-op scale cannot report side effects."
+        return None
+    if (
+        result.get("approval_required") is not True
+        or result.get("scale_simulated") is not True
+        or result.get("scale_performed") is not False
+        or result.get("side_effects") is not False
+    ):
+        return "A scale plan must be simulation-only until approved."
+    if result.get("bmh_capacity_sufficient") is not True:
+        return "A scale plan must show sufficient BareMetalHost capacity."
     return None
 
 
@@ -2544,6 +2594,15 @@ class AgentNodeCommandListCreateView(APIView):
                 validate_kubernetes_upgrade(payload, cluster_name=node.cluster_name)
             except KubernetesUpgradeError as exc:
                 return legacy_error_response(exc.detail, http_status=400, code=exc.code)
+        if command_type == "cluster.scale":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return legacy_error_response(
+                    "Cluster scaling requires a Target Cluster Agent.", http_status=400
+                )
+            try:
+                payload = validate_cluster_scale(payload, cluster_name=node.cluster_name)
+            except ClusterScaleError as exc:
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         if command_type == "cluster.kubernetes.version.rollback":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
                 return legacy_error_response(
@@ -3077,8 +3136,10 @@ class AgentRuntimeResultView(APIView):
                     http_status=409,
                     code="AGENT_CONTROL_OWNERSHIP_FENCED",
                 )
-            result_error = _validate_kubernetes_upgrade_result(command, result) or (
-                _validate_kubernetes_rollback_result(command, result)
+            result_error = (
+                _validate_kubernetes_upgrade_result(command, result)
+                or _validate_kubernetes_rollback_result(command, result)
+                or _validate_cluster_scale_result(command, result)
             )
             if outcome == "succeeded" and result_error:
                 return legacy_error_response(result_error, http_status=409)
