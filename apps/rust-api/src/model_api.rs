@@ -3,13 +3,17 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chrono::{SecondsFormat, Utc};
+use base64::Engine as _;
+use chrono::{Duration, SecondsFormat, Utc};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{AnyPool, Row};
 use url::Url;
 
@@ -1439,4 +1443,555 @@ fn sqlx_error(error: sqlx::Error) -> Response {
 fn database_error_message(message: String) -> Response {
     tracing::error!(%message, "rust model api database operation failed");
     unavailable()
+}
+
+const OAUTH_STATE_TTL_SECONDS: i64 = 600;
+const OAUTH_VERIFIER_SCOPE: &str = "provider-oauth-verifier";
+const MEMBER_SECRET_SCOPE: &str = "member-credential-secret";
+
+fn oauth_error(code: &str, message: &str, status: StatusCode) -> Response {
+    (status, Json(json!({"code": code, "detail": message}))).into_response()
+}
+
+fn oauth_config(preset_key: &str) -> Option<&'static Value> {
+    preset(preset_key)?.get("oauth")
+}
+
+fn random_token() -> String {
+    let first = uuid::Uuid::new_v4().simple().to_string();
+    let second = uuid::Uuid::new_v4().simple().to_string();
+    format!("{first}{second}")
+}
+
+fn code_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn seal_value(secret_key: &str, plaintext: &str, scope: &str) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{scope}:{secret_key}").as_bytes());
+    let key = hasher.finalize();
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid key".to_string())?;
+    let uuid = uuid::Uuid::new_v4();
+    let nonce_bytes = &uuid.as_bytes()[..12];
+    let encrypted = cipher
+        .encrypt(
+            Nonce::from_slice(nonce_bytes),
+            aes_gcm::aead::Payload {
+                msg: plaintext.as_bytes(),
+                aad: scope.as_bytes(),
+            },
+        )
+        .map_err(|_| "seal failed".to_string())?;
+    let mut sealed = nonce_bytes.to_vec();
+    sealed.extend(encrypted);
+    Ok(base64::engine::general_purpose::URL_SAFE.encode(sealed))
+}
+
+fn unseal_value(secret_key: &str, sealed: &str, scope: &str) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{scope}:{secret_key}").as_bytes());
+    let key = hasher.finalize();
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| "invalid key".to_string())?;
+    let raw = base64::engine::general_purpose::URL_SAFE
+        .decode(sealed)
+        .map_err(|_| "invalid sealed value".to_string())?;
+    if raw.len() < 12 {
+        return Err("invalid sealed value".to_string());
+    }
+    let plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(&raw[..12]),
+            aes_gcm::aead::Payload {
+                msg: &raw[12..],
+                aad: scope.as_bytes(),
+            },
+        )
+        .map_err(|_| "unseal failed".to_string())?;
+    String::from_utf8(plaintext).map_err(|_| "unseal failed".to_string())
+}
+
+/// Issue an authorization URL for a platform that grants credentials itself.
+pub async fn oauth_start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, preset_key)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    }
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    let Some(oauth) = oauth_config(&preset_key) else {
+        return oauth_error(
+            "OAUTH_PRESET_UNSUPPORTED",
+            &format!(
+                "{preset_key} does not offer an authorization flow; paste an API key instead."
+            ),
+            StatusCode::BAD_REQUEST,
+        );
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let redirect_uri = payload
+        .get("redirect_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !(redirect_uri.starts_with("http://") || redirect_uri.starts_with("https://")) {
+        return oauth_error(
+            "OAUTH_REDIRECT_INVALID",
+            "The callback URL must be an absolute http(s) address.",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let verifier = random_token();
+    let challenge = code_challenge(&verifier);
+    let state_token = uuid::Uuid::new_v4().simple().to_string();
+    let sealed = match seal_value(secret_key, &verifier, OAUTH_VERIFIER_SCOPE) {
+        Ok(sealed) => sealed,
+        Err(_) => return unavailable(),
+    };
+    let now = Utc::now();
+    let expires = (now + Duration::seconds(OAUTH_STATE_TTL_SECONDS))
+        .to_rfc3339_opts(SecondsFormat::Micros, false);
+    let now_text = now.to_rfc3339_opts(SecondsFormat::Micros, false);
+    if let Err(error) = sqlx::query(
+        "INSERT INTO core_provideroauthstate (id, preset_key, state, sealed_verifier, redirect_uri, \
+         expires_at, consumed_at, created_at, updated_at, tenant_id, user_id) \
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(&preset_key)
+    .bind(&state_token)
+    .bind(&sealed)
+    .bind(&redirect_uri)
+    .bind(&expires)
+    .bind(&now_text)
+    .bind(&now_text)
+    .bind(&tenant_id)
+    .bind(user.id)
+    .execute(pool)
+    .await
+    {
+        return database_error_message(error.to_string());
+    }
+    let Some(authorize_url) = oauth.get("authorize_url").and_then(Value::as_str) else {
+        return oauth_error(
+            "OAUTH_PRESET_UNSUPPORTED",
+            "The platform preset has no authorization endpoint.",
+            StatusCode::BAD_REQUEST,
+        );
+    };
+    let mut url = match Url::parse(authorize_url) {
+        Ok(url) => url,
+        Err(_) => return unavailable(),
+    };
+    url.query_pairs_mut()
+        .append_pair("callback_url", &redirect_uri)
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256");
+    (
+        StatusCode::CREATED,
+        Json(json!({"authorization_url": url.to_string(), "state": state_token})),
+    )
+        .into_response()
+}
+
+/// Redeem an authorization code exactly once and record the account link.
+pub async fn oauth_exchange(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, preset_key)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    }
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    let Some(oauth) = oauth_config(&preset_key) else {
+        return oauth_error(
+            "OAUTH_PRESET_UNSUPPORTED",
+            &format!(
+                "{preset_key} does not offer an authorization flow; paste an API key instead."
+            ),
+            StatusCode::BAD_REQUEST,
+        );
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let code = payload
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let state_token = payload
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if code.is_empty() || state_token.is_empty() {
+        return oauth_error(
+            "OAUTH_CODE_MISSING",
+            "The authorization response is missing its code or state.",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let attempt = match sqlx::query(
+        "SELECT sealed_verifier FROM core_provideroauthstate \
+         WHERE user_id = ? AND preset_key = ? AND state = ?",
+    )
+    .bind(user.id)
+    .bind(&preset_key)
+    .bind(&state_token)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return oauth_error(
+                "OAUTH_STATE_UNKNOWN",
+                "This authorization attempt is unknown or already used. Start again.",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let consumed = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_provideroauthstate WHERE user_id = ? AND preset_key = ? \
+         AND state = ? AND consumed_at IS NOT NULL",
+    )
+    .bind(user.id)
+    .bind(&preset_key)
+    .bind(&state_token)
+    .fetch_one(pool)
+    .await;
+    match consumed {
+        Ok(0) => {}
+        Ok(_) => {
+            return oauth_error(
+                "OAUTH_STATE_UNKNOWN",
+                "This authorization attempt is unknown or already used. Start again.",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+        Err(error) => return database_error_message(error.to_string()),
+    }
+    let expired = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_provideroauthstate WHERE user_id = ? AND preset_key = ? \
+         AND state = ? AND expires_at <= CURRENT_TIMESTAMP",
+    )
+    .bind(user.id)
+    .bind(&preset_key)
+    .bind(&state_token)
+    .fetch_one(pool)
+    .await;
+    match expired {
+        Ok(0) => {}
+        Ok(_) => {
+            return oauth_error(
+                "OAUTH_STATE_EXPIRED",
+                "The authorization attempt expired. Start again.",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+        Err(error) => return database_error_message(error.to_string()),
+    }
+    let sealed = attempt
+        .try_get::<String, _>("sealed_verifier")
+        .unwrap_or_default();
+    let verifier = match unseal_value(secret_key, &sealed, OAUTH_VERIFIER_SCOPE) {
+        Ok(verifier) => verifier,
+        Err(_) => {
+            return oauth_error(
+                "OAUTH_STATE_INVALID",
+                "The authorization attempt could not be read. Start again.",
+                StatusCode::BAD_REQUEST,
+            )
+        }
+    };
+    let Some(key_endpoint) = oauth.get("key_endpoint").and_then(Value::as_str) else {
+        return oauth_error(
+            "OAUTH_PRESET_UNSUPPORTED",
+            "The platform preset has no key exchange endpoint.",
+            StatusCode::BAD_REQUEST,
+        );
+    };
+    let mut request_body = json!({"code": code, "code_verifier": verifier});
+    if let Some(label) = oauth.get("key_label").and_then(Value::as_str) {
+        request_body["key_label"] = json!(label);
+    }
+    let response = state
+        .client
+        .post(key_endpoint)
+        .timeout(std::time::Duration::from_secs(20))
+        .json(&request_body)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(_) => {
+            return oauth_error(
+                "OAUTH_EXCHANGE_UNREACHABLE",
+                "The platform could not be reached to finish the authorization.",
+                StatusCode::BAD_GATEWAY,
+            )
+        }
+    };
+    if !response.status().is_success() {
+        let status = response.status();
+        return oauth_error(
+            "OAUTH_EXCHANGE_REFUSED",
+            &format!(
+                "The platform refused the authorization code (HTTP {}). Try again.",
+                status.as_u16()
+            ),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let document: Value = match response.json().await {
+        Ok(document) => document,
+        Err(_) => {
+            return oauth_error(
+                "OAUTH_KEY_MISSING",
+                "The platform did not return a key for this authorization.",
+                StatusCode::BAD_GATEWAY,
+            )
+        }
+    };
+    let Some(key) = document.get("key").and_then(Value::as_str).map(str::trim) else {
+        return oauth_error(
+            "OAUTH_KEY_MISSING",
+            "The platform did not return a key for this authorization.",
+            StatusCode::BAD_GATEWAY,
+        );
+    };
+    if key.is_empty() {
+        return oauth_error(
+            "OAUTH_KEY_MISSING",
+            "The platform did not return a key for this authorization.",
+            StatusCode::BAD_GATEWAY,
+        );
+    }
+    let account_label = document
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect::<String>();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let provider_id = uuid::Uuid::new_v4().simple().to_string();
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let existing_provider = match sqlx::query_scalar::<_, String>(
+        "SELECT CAST(id AS TEXT) FROM core_modelprovider WHERE CAST(tenant_id AS TEXT) = ? \
+         AND created_by_id = ? AND preset_key = ? AND auth_mode = 'user_account' LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(user.id)
+    .bind(&preset_key)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(provider) => provider,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let provider_id = match existing_provider {
+        Some(provider_id) => provider_id,
+        None => {
+            let Some(platform) = preset(&preset_key) else {
+                return oauth_error(
+                    "OAUTH_PRESET_UNSUPPORTED",
+                    "The platform preset is no longer available.",
+                    StatusCode::BAD_REQUEST,
+                );
+            };
+            let label = platform
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(&preset_key);
+            let base_name = format!("{label} (my account)");
+            let mut name = base_name.clone();
+            let mut suffix = 2;
+            loop {
+                let taken = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM core_modelprovider WHERE CAST(tenant_id AS TEXT) = ? AND name = ?",
+                )
+                .bind(&tenant_id)
+                .bind(&name)
+                .fetch_one(&mut *transaction)
+                .await;
+                match taken {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        name = format!("{base_name} {suffix}");
+                        suffix += 1;
+                    }
+                    Err(error) => return database_error_message(error.to_string()),
+                }
+            }
+            let base_url = platform
+                .get("base_url")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if let Err(error) = sqlx::query(
+                "INSERT INTO core_modelprovider (id, name, provider_type, base_url, credential_ref, \
+                 config, enabled, created_at, updated_at, created_by_id, tenant_id, deployment_region, \
+                 auth_mode, preset_key) VALUES (?, ?, 'openai_compatible', ?, '', '{}', 1, ?, ?, ?, ?, '', \
+                 'user_account', ?)",
+            )
+            .bind(&provider_id)
+            .bind(&name)
+            .bind(base_url)
+            .bind(&now)
+            .bind(&now)
+            .bind(user.id)
+            .bind(&tenant_id)
+            .bind(&preset_key)
+            .execute(&mut *transaction)
+            .await
+            {
+                return database_error_message(error.to_string());
+            }
+            let postgres = is_postgres(&state);
+            if let Err(error) =
+                seed_preset_models(&mut transaction, postgres, &provider_id, &preset_key).await
+            {
+                return database_error_message(error);
+            }
+            provider_id
+        }
+    };
+    let sealed_key = match seal_value(secret_key, key, MEMBER_SECRET_SCOPE) {
+        Ok(sealed) => sealed,
+        Err(_) => return unavailable(),
+    };
+    let secret_id = uuid::Uuid::new_v4().simple().to_string();
+    if let Err(error) = sqlx::query(
+        "INSERT INTO core_membercredentialsecret (id, sealed_value, created_at, updated_at, user_id) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&secret_id)
+    .bind(&sealed_key)
+    .bind(&now)
+    .bind(&now)
+    .bind(user.id)
+    .execute(&mut *transaction)
+    .await
+    {
+        return database_error_message(error.to_string());
+    }
+    let credential_ref = format!("member://{secret_id}");
+    let existing_link = match sqlx::query_scalar::<_, String>(
+        "SELECT CAST(id AS TEXT) FROM core_provideraccountlink WHERE user_id = ? \
+         AND CAST(provider_id AS TEXT) = ? AND status = 'linked' LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(&provider_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(link) => link,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let linked = if let Some(link_id) = existing_link {
+        sqlx::query(
+            "UPDATE core_provideraccountlink SET credential_ref = ?, account_label = ?, linked_at = ?, \
+             updated_at = ? WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&credential_ref)
+        .bind(&account_label)
+        .bind(&now)
+        .bind(&now)
+        .bind(&link_id)
+        .execute(&mut *transaction)
+        .await
+    } else {
+        sqlx::query(
+            "INSERT INTO core_provideraccountlink (id, status, account_label, credential_ref, linked_at, \
+             revoked_at, updated_at, provider_id, user_id) VALUES (?, 'linked', ?, ?, ?, NULL, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().simple().to_string())
+        .bind(&account_label)
+        .bind(&credential_ref)
+        .bind(&now)
+        .bind(&now)
+        .bind(&provider_id)
+        .bind(user.id)
+        .execute(&mut *transaction)
+        .await
+    };
+    if let Err(error) = linked {
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE core_provideroauthstate SET consumed_at = ?, updated_at = ? WHERE state = ?",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(&state_token)
+    .execute(&mut *transaction)
+    .await
+    {
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error_message(error.to_string());
+    }
+    let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error_message(error),
+    };
+    let Some(row) = rows.first() else {
+        return not_found();
+    };
+    let provider = match provider_json(pool, &state, row, user.id).await {
+        Ok(provider) => provider,
+        Err(error) => return database_error_message(error),
+    };
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "provider": provider,
+            "account": {
+                "linked": true,
+                "account_label": account_label,
+                "linked_at": now,
+            }
+        })),
+    )
+        .into_response()
 }
