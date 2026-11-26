@@ -44,6 +44,9 @@ jobs:
         run: cargo test --locked
       - name: Release build
         run: cargo build --release --locked
+      - name: Container build
+        working-directory: .
+        run: docker build -f apps/rust-api/Dockerfile -t ai-agent-stack-api-edge:ci .
 
   # ---------------- Stage 1: static quality bars ----------------
   static:
