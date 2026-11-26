@@ -130,6 +130,14 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/workflows/{workflow_id}/",
                 get(crate::workflows::get_workflow).patch(crate::workflows::update_workflow),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/workflow-catalog/",
+                get(crate::workflow_reads::catalog),
+            )
+            .route(
+                "/api/v1/workflows/{workflow_id}/runs/",
+                get(crate::workflow_reads::list_runs).post(crate::workflow_reads::create_run),
             );
     }
     router.fallback(forward).with_state(state)

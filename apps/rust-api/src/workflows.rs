@@ -14,18 +14,18 @@ use crate::context::{authenticate, AuthError};
 use crate::proxy::AppState;
 use crate::tenancy::{is_postgres, normalize_timestamp, project_access, tenant_role};
 
-struct WorkflowRecord {
-    id: String,
-    tenant_id: String,
-    project_id: String,
-    name: String,
-    slug: String,
-    description: String,
-    draft_definition: Value,
-    current_version: i64,
-    is_archived: bool,
-    created_at: Option<String>,
-    updated_at: Option<String>,
+pub(crate) struct WorkflowRecord {
+    pub(crate) id: String,
+    pub(crate) tenant_id: String,
+    pub(crate) project_id: String,
+    pub(crate) name: String,
+    pub(crate) slug: String,
+    pub(crate) description: String,
+    pub(crate) draft_definition: Value,
+    pub(crate) current_version: i64,
+    pub(crate) is_archived: bool,
+    pub(crate) created_at: Option<String>,
+    pub(crate) updated_at: Option<String>,
 }
 
 impl WorkflowRecord {
@@ -464,7 +464,7 @@ impl WorkflowRecord {
     }
 }
 
-async fn workflow_access(
+pub(crate) async fn workflow_access(
     pool: &AnyPool,
     state: &AppState,
     workflow_id: &str,

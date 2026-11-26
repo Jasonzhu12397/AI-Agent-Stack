@@ -119,3 +119,9 @@ Workflow draft CRUD (Rust native)
 - GET/PATCH /api/v1/workflows/{workflow_id}/
 - Verified by cargo test --test workflows (3 tests): create/list/detail,
   slug uniqueness, editor-rights rejection and archived read-only conflict.
+
+Workflow catalog and runs (Rust native)
+- GET /api/v1/tenants/{tenant_id}/projects/{project_id}/workflow-catalog/
+- GET/POST /api/v1/workflows/{workflow_id}/runs/
+- Verified by cargo test --test workflow_reads (2 tests): model knowledge-base
+  tool and agent visibility, run creation, duplicate 200, conflicting 409.

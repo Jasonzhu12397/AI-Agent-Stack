@@ -56,6 +56,13 @@ domain model, permissions, audit and realtime code in the Django service.
   administrator or project admin/editor rights, enforce project-scoped slug
   uniqueness and the 128 KiB draft ceiling, keep archived drafts read-only,
   and append `workflow.created` / `workflow.updated` in the same transaction.
+- Owns the workflow catalog and run surface: bound models, knowledge bases,
+  installed tools and published agents for the studio, plus run listing with
+  per-step records and idempotent run creation. Run creation requires a
+  published non-archived draft, a JSON object input under 64 KiB, a
+  `deadline_seconds` in 60..604800 and an `Idempotency-Key`; replays with the
+  same payload return 200 and the original run, conflicting payloads 409, and
+  every new run appends `workflow.run.created`.
 
 All other business routes still live in Django during this stage. The Rust
 handlers share the same schema, so a rollback is a single routing change.
@@ -122,7 +129,7 @@ The edge is the stable seam for moving routes into Rust:
    projects, both membership scopes and task list/create/detail/cancel now run
    in Rust against the shared session, RBAC and audit tables, together with
    audit listing, hash-chain verification, tenant token budgets and workflow
-   draft CRUD. Model gateway moves next.
+   draft CRUD, catalog reads and workflow runs. Model gateway moves next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.
