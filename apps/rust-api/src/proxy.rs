@@ -100,6 +100,22 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/tasks/{task_id}/cancel/",
                 post(crate::tasks::cancel_task),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/audit-events/",
+                get(crate::audit_api::list_tenant_events),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/audit-events/verify/",
+                get(crate::audit_api::verify_tenant_events),
+            )
+            .route(
+                "/api/v1/audit-events/global/",
+                get(crate::audit_api::list_global_events),
+            )
+            .route(
+                "/api/v1/audit-events/global/verify/",
+                get(crate::audit_api::verify_global_events),
             );
     }
     router.fallback(forward).with_state(state)

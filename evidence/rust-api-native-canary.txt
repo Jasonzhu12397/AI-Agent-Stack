@@ -100,3 +100,9 @@ logout and the CSRF rejection without audit noise.
 - Cancel implements queued/running/waiting-approval state transitions and writes
   task.created/task.cancelled into the tenant audit chain.
 - Tests: tests/tasks.rs 2 passed; full suite 21 passed; clippy -D warnings clean.
+
+2026-11-26 audit API batch
+- Native routes: tenant audit list/verify, global audit list/verify.
+- Verification recomputes the Django canonical SHA-256 chain and detects a
+  tampered metadata row; tenant admins only, global chain staff only.
+- Tests: tests/audit_api.rs 2 passed; full suite 23 passed; clippy clean.

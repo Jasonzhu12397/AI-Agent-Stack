@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod audit_api;
 pub mod auth;
 pub mod config;
 pub mod context;
