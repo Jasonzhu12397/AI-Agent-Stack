@@ -73,7 +73,7 @@ async fn call(state: &AppState, method: &str, session: &str, body: Value) -> (St
             Request::builder()
                 .method(method)
                 .uri(uri)
-                .header("cookie", format!("sessionid={session}"))
+                .header("x-session-token", session)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
