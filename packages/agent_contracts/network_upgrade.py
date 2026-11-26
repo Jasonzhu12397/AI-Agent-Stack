@@ -13,6 +13,7 @@ from typing import Any
 
 UPGRADE_ACTION = "target.network.upgrade"
 ROLLBACK_ACTION = "target.network.rollback"
+REVISIONS_ACTION = "target.network.revisions"
 PLUGINS = ("calico", "multus", "ovs", "sriov", "dpdk")
 EXECUTION_MODES = ("simulation", "execute")
 MAX_DOCUMENT_CHARS = 60000
@@ -90,6 +91,17 @@ def validate_upgrade_request(payload: Any, *, cluster_name: str | None) -> dict[
         **request,
         "target_version": target_version,
         "documents": documents,
+    }
+
+
+def validate_revisions_request(payload: Any, *, cluster_name: str | None) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        payload = {**payload, "execution_mode": "simulation"}
+    request = _common(payload, cluster_name)
+    return {
+        "target_cluster_name": request["target_cluster_name"],
+        "target_namespace": request["target_namespace"],
+        "plugin": request["plugin"],
     }
 
 

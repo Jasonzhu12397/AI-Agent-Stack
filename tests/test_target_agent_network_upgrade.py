@@ -8,7 +8,9 @@ import pytest
 import yaml
 
 from apps.target_agent.network_upgrade import (
+    NetworkUpgradeError,
     NetworkUpgradeExecutionError,
+    execute_network_revisions,
     execute_network_rollback,
     execute_network_upgrade,
 )
@@ -54,6 +56,22 @@ class FakeKubectl:
 
     def __call__(self, arguments, **kwargs):
         self.calls.append((list(arguments), kwargs))
+        if arguments[0] == "get" and arguments[1] == "configmaps":
+            selector = ""
+            if "--selector" in arguments:
+                selector = arguments[arguments.index("--selector") + 1]
+            items = []
+            for configmap in self.configmaps.values():
+                labels = configmap.get("metadata", {}).get("labels", {})
+                if selector and any(
+                    f"{key}={value}" == selector for key, value in labels.items()
+                ):
+                    items.append(configmap)
+            return {
+                "available": True,
+                "returncode": 0,
+                "stdout": json.dumps({"kind": "ConfigMapList", "items": items}),
+            }
         if arguments[0] == "get":
             kind, name = arguments[1], arguments[2]
             namespace = ""
@@ -271,3 +289,57 @@ def test_revision_collision_gets_a_unique_history_name(monkeypatch):
     assert first["revision"] == "20261126T000000Z"
     assert second["revision"] == "20261126T000000Z-2"
     assert second["revision_config_map"].endswith("20261126t000000z-2")
+
+
+def test_revision_listing_reports_history_newest_first():
+    kubectl = FakeKubectl()
+    first = execute_network_upgrade(
+        _upgrade_payload("execute"), kubectl, cluster_name="cluster-1"
+    )
+    second = execute_network_upgrade(
+        {**_upgrade_payload("execute"), "target_version": "1.2.0"},
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    listing = execute_network_revisions(
+        {
+            "target_cluster_name": "cluster-1",
+            "target_namespace": "default",
+            "plugin": "calico",
+        },
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    revisions = [row["revision"] for row in listing["revisions"]]
+    assert listing["revision_count"] == 2
+    assert listing["latest_revision"] == second["revision"]
+    assert revisions[0] == second["revision"]
+    assert first["revision"] in revisions
+    assert all(row["object_count"] == 1 for row in listing["revisions"])
+
+
+def test_revision_listing_is_empty_before_any_upgrade():
+    listing = execute_network_revisions(
+        {
+            "target_cluster_name": "cluster-1",
+            "target_namespace": "default",
+            "plugin": "calico",
+        },
+        FakeKubectl(),
+        cluster_name="cluster-1",
+    )
+    assert listing["revision_count"] == 0
+    assert listing["latest_revision"] is None
+    assert listing["side_effects"] is False
+
+
+def test_rollback_revision_must_be_a_captured_id():
+    kubectl = FakeKubectl()
+    with pytest.raises(NetworkUpgradeError) as caught:
+        execute_network_rollback(
+            {**_rollback_payload(), "revision": "../other-configmap"},
+            kubectl,
+            cluster_name="cluster-1",
+        )
+    assert caught.value.code == "NETWORK_UPGRADE_REQUEST_INVALID"
+    assert kubectl.mutations == 0

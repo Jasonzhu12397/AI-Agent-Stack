@@ -136,6 +136,17 @@ const networkVersion = ref("");
 const networkDocuments = ref("");
 const networkUpgradeMode = ref<"simulation" | "execute">("simulation");
 const networkRevision = ref("");
+const networkRevisions = ref<
+  Array<{
+    revision: string;
+    config_map: string;
+    previous_version: string | null;
+    target_version: string | null;
+    object_count: number;
+  }>
+>([]);
+const networkRevisionBusy = ref(false);
+const networkRevisionMessage = ref("");
 const networkUpgradeBusy = ref(false);
 const networkUpgradeMessage = ref("");
 const versionApplyMessages = ref<Record<string, string>>({});
@@ -1051,9 +1062,74 @@ function openNetworkUpgrade(deployment: ClusterDeployment): void {
   networkVersion.value = "";
   networkDocuments.value = "";
   networkRevision.value = "";
+  networkRevisions.value = [];
+  networkRevisionMessage.value = "";
   networkUpgradeMode.value = "simulation";
   networkUpgradeMessage.value = "";
   networkUpgradeVisible.value = true;
+}
+
+async function loadNetworkRevisions(): Promise<void> {
+  const deployment = networkUpgradeDeployment.value;
+  if (!deployment || !deployment.target_node_id) {
+    networkRevisionMessage.value = "A Target Agent must be assigned first.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    networkRevisionMessage.value = "The Target Agent must be online.";
+    return;
+  }
+  networkRevisionBusy.value = true;
+  networkRevisionMessage.value = "";
+  try {
+    const submitted = await createAgentCommand(targetAgent.id, "target.network.revisions", {
+      target_cluster_name: deployment.cluster_name,
+      target_namespace: "default",
+      plugin: networkPlugin.value,
+    });
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      if (!selectedTenantId.value || !selectedProjectId.value) break;
+      const page = await getProjectAgentCommands(selectedTenantId.value, selectedProjectId.value, {
+        nodeId: targetAgent.id,
+        commandType: "target.network.revisions",
+        limit: 10,
+      });
+      const command = page.results.find((entry) => entry.id === submitted.id);
+      if (command?.status === "failed") {
+        networkRevisionMessage.value = "The Target Agent could not read the revision history.";
+        return;
+      }
+      const result = command?.result as
+        | {
+            revisions?: Array<{
+              revision: string;
+              config_map: string;
+              previous_version: string | null;
+              target_version: string | null;
+              object_count: number;
+            }>;
+            latest_revision?: string | null;
+          }
+        | null
+        | undefined;
+      if (result?.revisions) {
+        networkRevisions.value = result.revisions;
+        networkRevision.value = result.latest_revision ?? result.revisions[0]?.revision ?? "";
+        networkRevisionMessage.value = result.revisions.length
+          ? "Captured revisions loaded. Select an older id to roll back further."
+          : "No captured revision exists yet for this plugin.";
+        return;
+      }
+    }
+    networkRevisionMessage.value = "The revision lookup is still running; reload status in a moment.";
+  } catch (cause) {
+    networkRevisionMessage.value = cause instanceof Error ? cause.message : "Unable to read revision history.";
+  } finally {
+    networkRevisionBusy.value = false;
+  }
 }
 
 async function submitNetworkUpgrade(rollback: boolean): Promise<void> {
@@ -1082,7 +1158,7 @@ async function submitNetworkUpgrade(rollback: boolean): Promise<void> {
       reason: rollback ? "Network plugin rollback from the fleet console" : "Network plugin upgrade from the fleet console",
     };
     const payload = rollback
-      ? { ...base, revision: networkRevision.value.trim() || null }
+      ? { ...base, revision: (networkRevision.value ?? "").trim() || null }
       : { ...base, target_version: networkVersion.value.trim(), documents: networkDocuments.value };
     const command = await createAgentCommand(
       targetAgent.id,
@@ -2487,7 +2563,32 @@ onUnmounted(() => {
         placeholder="Paste one or more Kubernetes YAML documents. The current bundle is captured first; rollback replays it."
         style="margin-top: 10px"
       />
-      <el-input v-model="networkRevision" size="small" placeholder="Optional rollback revision; blank uses the latest captured revision" style="margin-top: 10px" />
+      <div class="fleet-version-control" style="margin-top: 10px">
+        <el-select
+          v-if="networkRevisions.length"
+          v-model="networkRevision"
+          size="small"
+          clearable
+          placeholder="Optional rollback revision; blank uses the latest captured revision"
+          style="min-width: 360px"
+        >
+          <el-option
+            v-for="revision in networkRevisions"
+            :key="revision.revision"
+            :label="revision.revision + ' · ' + (revision.target_version || 'unknown') + ' · ' + revision.object_count + ' objects'"
+            :value="revision.revision"
+          />
+        </el-select>
+        <el-input
+          v-else
+          v-model="networkRevision"
+          size="small"
+          placeholder="Optional rollback revision; blank uses the latest captured revision"
+          style="max-width: 420px"
+        />
+        <el-button size="small" :loading="networkRevisionBusy" @click="loadNetworkRevisions">Load captured revisions</el-button>
+      </div>
+      <small v-if="networkRevisionMessage" class="fleet-version-message">{{ networkRevisionMessage }}</small>
       <small class="fleet-version-current">
         Upgrade dry-runs the bundle, writes an immutable revision, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created. Enter an older captured revision to roll back further.
       </small>

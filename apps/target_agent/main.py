@@ -97,6 +97,7 @@ from .network_stack_adapter import (
 )
 from .network_upgrade import (
     NetworkUpgradeExecutionError,
+    execute_network_revisions,
     execute_network_rollback,
     execute_network_upgrade,
 )
@@ -137,6 +138,7 @@ CAPABILITIES = [
     "target.network.apply",
     "target.network.upgrade",
     "target.network.rollback",
+    "target.network.revisions",
     "cluster.scale",
     "cluster.worker.repair",
 ]
@@ -1790,6 +1792,27 @@ def execute(
             "output": report,
             "side_effects": False,
         }
+    if action == "target.network.revisions":
+        try:
+            result = execute_network_revisions(
+                _command_payload(command),
+                _kubectl,
+                lease_lost_event,
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": result,
+                "side_effects": False,
+            }
+        except NetworkUpgradeExecutionError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": False,
+            }
     if action in ("target.network.upgrade", "target.network.rollback"):
         upgrade = action == "target.network.upgrade"
         try:

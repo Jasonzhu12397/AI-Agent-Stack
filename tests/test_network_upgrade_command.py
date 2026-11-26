@@ -3,7 +3,10 @@
 from types import SimpleNamespace
 
 import pytest
-from core.agent_node_views import _validate_network_upgrade_result
+from core.agent_node_views import (
+    _validate_network_revisions_result,
+    _validate_network_upgrade_result,
+)
 from core.models import AgentCommand, Project, ProjectMembership, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
@@ -176,3 +179,80 @@ def test_a_consistent_executed_upgrade_is_accepted():
         "ready_workloads": [{"kind": "Deployment", "name": "calico-node"}],
     }
     assert _validate_network_upgrade_result(_command("execute"), result) is None
+
+
+@pytest.mark.django_db
+def test_network_revision_history_is_a_read_only_target_command(network_workspace):
+    tenant, project, client = network_workspace
+    enrolled = client.post(
+        f"/api/v1/tenants/{tenant.id}/projects/{project.id}/agent-nodes/",
+        {"name": "network-history", "node_type": "target_cluster", "cluster_name": "edge-lab"},
+        format="json",
+    )
+    response = client.post(
+        f"/api/v1/agent-nodes/{enrolled.data['id']}/commands/",
+        {
+            "command_type": "target.network.revisions",
+            "payload": {
+                "target_cluster_name": "edge-lab",
+                "target_namespace": "default",
+                "plugin": "calico",
+            },
+        },
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="network-revisions-calico",
+    )
+    assert response.status_code == 202
+    assert response.data["status"] == AgentCommand.Status.QUEUED
+    assert response.data["payload"]["target_namespace"] == "default"
+
+
+def _revision_command():
+    return SimpleNamespace(
+        command_type="target.network.revisions",
+        payload={
+            "target_cluster_name": "edge-lab",
+            "target_namespace": "default",
+            "plugin": "calico",
+        },
+    )
+
+
+def test_revision_list_must_be_a_read_only_observation():
+    result = {
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+        "plugin": "calico",
+        "latest_revision": "20261126T000000Z",
+        "revision_count": 1,
+        "revisions": [
+            {
+                "revision": "20261126T000000Z",
+                "config_map": "ai-agent-stack-netrev-calico-20261126t000000z",
+                "object_count": 1,
+            }
+        ],
+        "approval_required": False,
+        "side_effects": True,
+    }
+    assert _validate_network_revisions_result(_revision_command(), result) is not None
+
+
+def test_a_consistent_revision_list_is_accepted():
+    result = {
+        "cluster_name": "edge-lab",
+        "namespace": "default",
+        "plugin": "calico",
+        "latest_revision": "20261126T000000Z",
+        "revision_count": 1,
+        "revisions": [
+            {
+                "revision": "20261126T000000Z",
+                "config_map": "ai-agent-stack-netrev-calico-20261126t000000z",
+                "object_count": 1,
+            }
+        ],
+        "approval_required": False,
+        "side_effects": False,
+    }
+    assert _validate_network_revisions_result(_revision_command(), result) is None

@@ -20,10 +20,12 @@ from typing import Any
 import yaml
 
 from packages.agent_contracts.network_upgrade import (
+    REVISIONS_ACTION,
     UPGRADE_ACTION,
     NetworkUpgradeError,
     rollback_plan,
     upgrade_plan,
+    validate_revisions_request,
     validate_rollback_request,
     validate_upgrade_request,
 )
@@ -343,7 +345,10 @@ def _snapshot_manifest(
         "metadata": {
             "name": name,
             "namespace": request["target_namespace"],
-            "labels": {MANAGED_BY_LABEL: "target-agent"},
+            "labels": {
+                MANAGED_BY_LABEL: "target-agent",
+                PLUGIN_ANNOTATION: request["plugin"],
+            },
             "annotations": {
                 PLUGIN_ANNOTATION: request["plugin"],
                 VERSION_ANNOTATION: request["target_version"],
@@ -430,6 +435,110 @@ def _read_revision(runner, request: dict[str, Any], lease_lost_event) -> dict[st
             "No captured revision exists for this network plugin.",
         )
     return _snapshot_from(document, requested)
+
+
+
+
+def _revision_summary(document: dict[str, Any]) -> dict[str, Any] | None:
+    data = document.get("data")
+    raw = data.get("snapshot") if isinstance(data, dict) else None
+    if not isinstance(raw, str):
+        return None
+    try:
+        snapshot = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    revision = snapshot.get("revision")
+    objects = snapshot.get("objects")
+    if not isinstance(revision, str) or not revision or not isinstance(objects, list):
+        return None
+    metadata = document.get("metadata")
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    return {
+        "revision": revision,
+        "config_map": name,
+        "previous_version": snapshot.get("previous_version"),
+        "target_version": snapshot.get("target_version"),
+        "object_count": len(objects),
+    }
+
+
+def execute_network_revisions(
+    payload: dict[str, Any],
+    runner: Callable[..., dict[str, Any]],
+    lease_lost_event: Any = None,
+    *,
+    cluster_name: str | None = None,
+) -> dict[str, Any]:
+    """List captured revisions for one plugin, newest first.
+
+    The label selector returns immutable history ConfigMaps. The mutable latest
+    pointer is read separately so a deployment created before revision history
+    still reports the one revision it can roll back to.
+    """
+
+    request = validate_revisions_request(payload, cluster_name=cluster_name)
+    result = _run(
+        runner,
+        [
+            "get",
+            "configmaps",
+            "--namespace",
+            request["target_namespace"],
+            "--selector",
+            f"{PLUGIN_ANNOTATION}={request['plugin']}",
+            "-o",
+            "json",
+        ],
+        lease_lost_event=lease_lost_event,
+        timeout=60,
+    )
+    try:
+        listing = json.loads(result.get("stdout", ""))
+    except (TypeError, ValueError) as exc:
+        raise NetworkUpgradeExecutionError(
+            "NETWORK_UPGRADE_REVISION_INVALID", "kubectl returned invalid ConfigMap JSON."
+        ) from exc
+    items = listing.get("items") if isinstance(listing, dict) else None
+    if not isinstance(items, list):
+        raise NetworkUpgradeExecutionError(
+            "NETWORK_UPGRADE_REVISION_INVALID", "kubectl returned no ConfigMap items."
+        )
+    rows: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if isinstance(item, dict):
+            summary = _revision_summary(item)
+            if summary is not None:
+                rows.setdefault(summary["revision"], summary)
+    pointer = _get(
+        runner,
+        "ConfigMap",
+        _revision_name(request["plugin"]),
+        request["target_namespace"],
+        lease_lost_event,
+    )
+    latest = None
+    if pointer is not None:
+        data = pointer.get("data")
+        if isinstance(data, dict) and isinstance(data.get("latest_revision"), str):
+            latest = data["latest_revision"]
+        summary = _revision_summary(pointer)
+        if summary is not None:
+            rows.setdefault(summary["revision"], summary)
+    ordered = sorted(rows.values(), key=lambda row: row["revision"], reverse=True)
+    return {
+        "action": REVISIONS_ACTION,
+        "cluster_name": request["target_cluster_name"],
+        "namespace": request["target_namespace"],
+        "plugin": request["plugin"],
+        "latest_revision": latest or (ordered[0]["revision"] if ordered else None),
+        "revision_count": len(ordered),
+        "revisions": ordered[:20],
+        "approval_required": False,
+        "side_effects": False,
+    }
 
 
 def execute_network_upgrade(
@@ -593,7 +702,9 @@ def execute_network_rollback(
 
 __all__ = [
     "NetworkUpgradeExecutionError",
+    "REVISIONS_ACTION",
     "UPGRADE_ACTION",
+    "execute_network_revisions",
     "execute_network_rollback",
     "execute_network_upgrade",
 ]

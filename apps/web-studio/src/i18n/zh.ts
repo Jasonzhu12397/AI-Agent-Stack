@@ -1434,6 +1434,7 @@ export const zhCN: Record<string, string> = {
     "粘贴一个或多个 Kubernetes YAML 文档。系统会先捕获当前对象，回滚时重放该修订。",
   "Optional rollback revision; blank uses the latest captured revision":
     "可选回滚修订号；留空使用最近一次捕获的修订",
+  "Load captured revisions": "读取修订历史",
   "Upgrade dry-runs the bundle, writes a revision ConfigMap, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created.":
     "升级会先服务端 dry-run，写入修订 ConfigMap，再应用新对象并等待工作负载就绪。回滚会重放捕获的对象，并删除升级新增的对象。",
   "Upgrade dry-runs the bundle, writes an immutable revision, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created. Enter an older captured revision to roll back further.":

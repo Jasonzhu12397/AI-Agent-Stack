@@ -36,6 +36,7 @@ from packages.agent_contracts.agent_commands import (
 )
 from packages.agent_contracts.network_upgrade import (
     NetworkUpgradeError,
+    validate_revisions_request as validate_network_revisions,
     validate_rollback_request as validate_network_rollback,
     validate_upgrade_request as validate_network_upgrade,
 )
@@ -543,6 +544,43 @@ def _validate_network_upgrade_result(command, result):
         or result.get("side_effects") is not False
     ):
         return "An upgrade plan must be simulation-only until approved."
+    return None
+
+
+def _validate_network_revisions_result(command, result):
+    if command.command_type != "target.network.revisions":
+        return None
+    if not isinstance(result, dict):
+        return "Network revision list must be an object."
+    expected = {
+        "cluster_name": command.payload.get("target_cluster_name"),
+        "namespace": command.payload.get("target_namespace") or "default",
+        "plugin": command.payload.get("plugin"),
+    }
+    if any(result.get(key) != value for key, value in expected.items()):
+        return "Network revision list does not match the requested scope."
+    if result.get("approval_required") is not False or result.get("side_effects") is not False:
+        return "A revision list is a read-only observation."
+    revisions = result.get("revisions")
+    if not isinstance(revisions, list):
+        return "A revision list must report a revisions array."
+    latest = result.get("latest_revision")
+    if latest is not None and not isinstance(latest, str):
+        return "The latest revision must be a string or null."
+    for revision in revisions:
+        if not isinstance(revision, dict):
+            return "Every revision entry must be an object."
+        if not isinstance(revision.get("revision"), str) or not revision["revision"]:
+            return "Every revision entry must name its revision."
+        if not isinstance(revision.get("config_map"), str) or not revision["config_map"]:
+            return "Every revision entry must name its ConfigMap."
+        count = revision.get("object_count")
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            return "Every revision entry must report a positive object count."
+    if latest is not None and revisions and latest not in {
+        revision["revision"] for revision in revisions
+    }:
+        return "The latest revision must appear in the revisions array."
     return None
 
 
@@ -2729,6 +2767,15 @@ class AgentNodeCommandListCreateView(APIView):
                 payload = validate_cluster_scale(payload, cluster_name=node.cluster_name)
             except ClusterScaleError as exc:
                 return legacy_error_response(exc.detail, http_status=400, code=exc.code)
+        if command_type == "target.network.revisions":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return legacy_error_response(
+                    "Network revision history requires a Target Cluster Agent.", http_status=400
+                )
+            try:
+                payload = validate_network_revisions(payload, cluster_name=node.cluster_name)
+            except NetworkUpgradeError as exc:
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         if command_type in {"target.network.upgrade", "target.network.rollback"}:
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
                 return legacy_error_response(
@@ -3289,6 +3336,7 @@ class AgentRuntimeResultView(APIView):
                 or _validate_cluster_scale_result(command, result)
                 or _validate_cluster_repair_result(command, result)
                 or _validate_network_upgrade_result(command, result)
+                or _validate_network_revisions_result(command, result)
             )
             if outcome == "succeeded" and result_error:
                 return legacy_error_response(result_error, http_status=409)
