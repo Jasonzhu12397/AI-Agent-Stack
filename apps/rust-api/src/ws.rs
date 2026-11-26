@@ -112,11 +112,9 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
         }
     };
 
-    let websocket_config = WebSocketConfig {
-        max_message_size: Some(1_048_576),
-        max_frame_size: Some(1_048_576),
-        ..WebSocketConfig::default()
-    };
+    let mut websocket_config = WebSocketConfig::default();
+    websocket_config.max_message_size = Some(1_048_576);
+    websocket_config.max_frame_size = Some(1_048_576);
     let upstream_result = tokio::time::timeout(
         Duration::from_secs(10),
         connect_async_with_config(upstream_request, Some(websocket_config), false),
@@ -124,7 +122,10 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
     .await;
     let upstream = match upstream_result {
         Ok(Ok((socket, response))) => {
-            tracing::info!(status = response.status().as_u16(), "rust api edge upgraded the websocket upstream");
+            tracing::info!(
+                status = response.status().as_u16(),
+                "rust api edge upgraded the websocket upstream"
+            );
             socket
         }
         Ok(Err(error)) => {

@@ -28,9 +28,24 @@ async fn state() -> AppState {
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(120) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(64) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr TEXT, user_agent VARCHAR(256) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE (project_id, slug))",
+        "CREATE TABLE core_agentversion (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, config_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL, UNIQUE (agent_id, version))",
+        "CREATE TABLE core_task (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, task_type VARCHAR(120) NOT NULL, payload TEXT NOT NULL, result TEXT, error TEXT, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, available_at DATETIME NOT NULL, lease_owner TEXT, lease_token TEXT, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE (tenant_id, idempotency_key))",
+        "CREATE TABLE core_modelprovider (id TEXT PRIMARY KEY, tenant_id TEXT, created_by_id INTEGER, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, auth_mode VARCHAR(32) NOT NULL, enabled BOOLEAN NOT NULL)",
+        "CREATE TABLE core_modelconfig (id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, name VARCHAR(160) NOT NULL, capabilities TEXT NOT NULL, max_output_tokens INTEGER NOT NULL, enabled BOOLEAN NOT NULL, version INTEGER NOT NULL)",
+        "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentplugindefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, capabilities TEXT NOT NULL, enabled BOOLEAN NOT NULL)",
+        "CREATE TABLE core_agentrun (id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, agent_version_id TEXT NOT NULL, input_text TEXT NOT NULL, output_text TEXT NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, provider_name VARCHAR(120) NOT NULL, model_name VARCHAR(160) NOT NULL, latency_ms INTEGER NOT NULL, execution_state TEXT NOT NULL, created_at DATETIME NOT NULL, finished_at DATETIME)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
+    sqlx::query("INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, slug, auth_mode, enabled) VALUES ('provider-1', NULL, NULL, 'Platform', 'platform', 'platform_pool', 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_modelconfig (id, provider_id, name, capabilities, max_output_tokens, enabled, version) VALUES ('bbbbbbbb-1111-1111-1111-111111111111', 'provider-1', 'Echo', '[\"chat\",\"tools\"]', 4096, 1, 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
         .execute(&pool)
         .await
@@ -165,4 +180,65 @@ async fn creates_lists_and_patches_agent_drafts() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["name"], "Helper v2");
     assert_eq!(body["draft_config"]["system_prompt"], "Be precise.");
+
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        &detail,
+        Some(json!({"draft_config": {"model_config_id": "bbbbbbbb-1111-1111-1111-111111111111", "system_prompt": "Be precise."}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["current_version"], 0);
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agents/{agent}/publish/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["version"], 1);
+    assert_eq!(body["config_snapshot"]["max_iterations"], 4);
+    assert!(body["published_at"].as_str().is_some());
+
+    let runs = format!("/api/v1/agents/{agent}/runs/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &runs,
+        Some(json!({"input": "Summarise the fleet"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(&runs)
+        .header("cookie", format!("sessionid={SESSION}"))
+        .header("content-type", "application/json")
+        .header("idempotency-key", "agent-run-1")
+        .body(Body::from(
+            json!({"input": "Summarise the fleet"}).to_string(),
+        ))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let run: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(run["task_status"], "queued");
+    assert_eq!(run["output_text"], "");
+    let run_id = run["id"].as_str().unwrap().to_string();
+
+    let (status, body) = call(&state, "GET", &format!("/api/v1/runs/{run_id}/"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["input_text"], "Summarise the fleet");
+
+    let (status, body) = call(&state, "GET", &runs, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 1);
 }

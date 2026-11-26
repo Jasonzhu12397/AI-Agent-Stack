@@ -191,6 +191,18 @@ pub fn router(state: AppState) -> Router {
                 get(crate::agent_api::get_agent).patch(crate::agent_api::update_agent),
             )
             .route(
+                "/api/v1/agents/{agent_id}/publish/",
+                post(crate::agent_api::publish_agent),
+            )
+            .route(
+                "/api/v1/agents/{agent_id}/runs/",
+                get(crate::agent_api::list_agent_runs).post(crate::agent_api::create_agent_run),
+            )
+            .route(
+                "/api/v1/runs/{run_id}/",
+                get(crate::agent_api::get_agent_run),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/knowledge-bases/",
                 get(crate::knowledge_api::list_knowledge_bases)
                     .post(crate::knowledge_api::create_knowledge_base),
@@ -267,7 +279,12 @@ async fn info(State(state): State<AppState>) -> Json<EdgeInfo> {
     Json(EdgeInfo {
         service: "rust-api-edge",
         version: env!("CARGO_PKG_VERSION"),
-        upstream: state.config.upstream.host_str().unwrap_or("configured").to_string(),
+        upstream: state
+            .config
+            .upstream
+            .host_str()
+            .unwrap_or("configured")
+            .to_string(),
         websocket: true,
         server_sent_events: true,
     })
