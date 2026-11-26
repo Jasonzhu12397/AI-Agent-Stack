@@ -1,3 +1,5 @@
+import { drainSseFrames, type StreamFrame } from "../domain/realtimeEvents";
+
 // Empty base means same-origin: the API serves the console bundle, and the
 // dev server proxies /api, so both modes need no cross-origin configuration.
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -362,6 +364,81 @@ export function getTasks(tenantId: string, projectId: string): Promise<Page<Task
   return request<Page<Task>>(
     `/api/v1/tenants/${tenantId}/projects/${projectId}/tasks/?limit=50&offset=0`,
   );
+}
+
+
+export type ProjectStreamHandlers = {
+  onEvent: (frame: StreamFrame) => void;
+  onOpen?: () => void;
+  onError?: (error: unknown) => void;
+};
+
+/**
+ * Subscribe to project task/audit events over SSE. Uses fetch rather than
+ * EventSource so the session token header travels exactly like every other
+ * API call. Reconnects with the last event id; if the connection never
+ * opened, it resumes from the original cursor instead of skipping events.
+ */
+export function subscribeProjectEvents(
+  tenantId: string,
+  projectId: string,
+  handlers: ProjectStreamHandlers,
+): () => void {
+  let stopped = false;
+  let controller: AbortController | null = null;
+  let lastEventId = "";
+  const since = new Date().toISOString();
+  let retryMs = 1000;
+
+  const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+  async function run(): Promise<void> {
+    while (!stopped) {
+      controller = new AbortController();
+      const headers = new Headers({ Accept: "text/event-stream" });
+      const token = storedSessionToken();
+      if (token) headers.set("X-Session-Token", token);
+      if (lastEventId) headers.set("Last-Event-ID", lastEventId);
+      const query = lastEventId ? "" : `?since=${encodeURIComponent(since)}`;
+      try {
+        const response = await fetch(
+          `${apiBase}/api/v1/tenants/${tenantId}/projects/${projectId}/events/stream/${query}`,
+          { headers, credentials: "include", signal: controller.signal },
+        );
+        if (!response.ok || !response.body) {
+          throw new Error(`Event stream failed with status ${response.status}.`);
+        }
+        retryMs = 1000;
+        handlers.onOpen?.();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const drained = drainSseFrames(buffer);
+          buffer = drained.rest;
+          for (const frame of drained.frames) {
+            if (frame.id) lastEventId = frame.id;
+            handlers.onEvent(frame);
+          }
+        }
+      } catch (error) {
+        if (stopped) return;
+        handlers.onError?.(error);
+      }
+      if (stopped) return;
+      await sleep(retryMs);
+      retryMs = Math.min(retryMs * 2, 15000);
+    }
+  }
+
+  void run();
+  return () => {
+    stopped = true;
+    controller?.abort();
+  };
 }
 
 export function createEchoTask(

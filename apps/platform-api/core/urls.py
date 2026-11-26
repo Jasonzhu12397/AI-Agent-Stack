@@ -102,6 +102,7 @@ from core.membership_views import (
     TenantMemberListCreateView,
 )
 from core.mcp_server import McpServerView
+from core.realtime_views import ProjectEventStreamView
 from core.provider_oauth_views import (
     ProviderOAuthExchangeView,
     ProviderOAuthStartView,
@@ -534,6 +535,11 @@ urlpatterns = [
     ),
     path("health/live", liveness, name="health-live"),
     path("health/ready", readiness, name="health-ready"),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/events/stream/",
+        ProjectEventStreamView.as_view(),
+        name="project-event-stream",
+    ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/mcp/",
         McpServerView.as_view(),

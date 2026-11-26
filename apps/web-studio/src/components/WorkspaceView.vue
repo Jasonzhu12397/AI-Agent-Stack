@@ -23,6 +23,7 @@ import {
   getProjects,
   getTasks,
   getTenants,
+  subscribeProjectEvents,
   type Project,
   type Task,
   type Tenant,
@@ -50,6 +51,7 @@ const showProjectForm = ref(false);
 const loading = ref(false);
 const submitting = ref(false);
 const error = ref("");
+let closeEvents: (() => void) | undefined;
 let refreshTimer: number | undefined;
 
 async function loadTenants(): Promise<void> {
@@ -160,15 +162,44 @@ async function stopTask(taskId: string): Promise<void> {
   }
 }
 
+function scheduleTaskRefresh(): void {
+  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = undefined;
+    void loadTasks();
+  }, 200);
+}
+
+function connectProjectEvents(): void {
+  closeEvents?.();
+  closeEvents = undefined;
+  if (!selectedTenantId.value || !selectedProjectId.value) return;
+  closeEvents = subscribeProjectEvents(
+    selectedTenantId.value,
+    selectedProjectId.value,
+    {
+      // A reconnect is the only moment events can have been missed, so refresh
+      // the list once on open and then update it from each pushed task event.
+      onOpen: () => scheduleTaskRefresh(),
+      onEvent: (frame) => {
+        if (frame.event === "task" || frame.event === "audit") scheduleTaskRefresh();
+      },
+    },
+  );
+}
+
 watch(selectedTenantId, (tenantId) => void loadProjects(tenantId));
-watch(selectedProjectId, () => void loadTasks());
+watch(selectedProjectId, () => {
+  void loadTasks();
+  connectProjectEvents();
+});
 
 onMounted(() => {
   void loadTenants();
-  refreshTimer = window.setInterval(() => void loadTasks(), 5000);
 });
 onUnmounted(() => {
-  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
+  closeEvents?.();
+  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
 });
 </script>
 

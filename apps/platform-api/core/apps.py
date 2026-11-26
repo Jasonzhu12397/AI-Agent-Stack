@@ -24,6 +24,9 @@ class CoreConfig(AppConfig):
         # SQLite (development console) needs WAL and a busy timeout so the API
         # and the worker can write to the same file without "database is locked".
         from core import (
+            realtime,
             session_activity,  # noqa: F401
             sqlite_tuning,  # noqa: F401
         )
+
+        realtime.connect()

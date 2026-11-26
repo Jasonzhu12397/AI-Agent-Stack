@@ -28,7 +28,7 @@
 | 分层 | 目标组件 | 真实代码位置 | 现状 |
 |---|---|---|---|
 | 用户入口 | Web UI / Chat / Workflow / Agent 管理 / 插件市场 / 运维控制台 | `apps/web-studio/src/components/`、`src/services/api.ts` | 【基础】页面与 API 接线已存在；逐交互验收待核对（见 §6） |
-| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/` | 【基础】大部分模块有实现；实时推送、模型路由降级等待开发（见 §3） |
+| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/` | 【基础】大部分模块有实现；任务页实时 SSE 已落地，模型路由降级等待开发（见 §3） |
 | 基础设施 Agent 控制面 | Cloud Control / EPH / Target 三 Agent | `apps/cloud_control_agent/`、`apps/eph_agent/`、`apps/target_agent/` | 【基础】三 Agent 独立入口、协议与状态机已存在；真实裸金属链路待验证（见 §4） |
 | Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/` | 【基础】契约与传输已实现（见 §7） |
 | 执行层 | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | 由三 Agent 内 skill / adapter 模块调用 `kubectl` / `clusterctl` / Ironic HTTP 客户端 | 【待验证】执行适配器以只读观察 + fail-closed 校验为主；真实安装/迁移/数据面转发待验收（见 §5） |
@@ -47,7 +47,7 @@
 | Token Budget | 预算预留、用量结算、防超额消耗 | `core/token_budget.py`、`core/token_budget_views.py`：租户级预算预留、结算、幂等、超额保护；含回归测试 | 【待验证】 | 多轮修复后本地测试全绿；需在并发 worker 与真实模型上报用量下复核结算一致性 |
 | Task Queue / Scheduler | 缓存、任务队列、异步执行 | `apps/worker/worker_app/main.py` 轮询 `process_once`；任务认领与租约基于 PostgreSQL 记录；依赖含 `redis`，`settings.py` 仅定义 `REDIS_URL` | 【基础】（DB 队列） | 【待开发】Redis 实际作为缓存 / 队列 / 协调通道：代码中未见 `CACHES`、channel_layer 或 redis 客户端调用；队列故障恢复、积压与重放需继续验证 |
 | Audit / RBAC | 权限、租户隔离、操作记录 | `core/membership_views.py`：tenant/project 成员与角色（admin/editor/viewer）；视图经 `memberships__user` 限定租户、非管理员按 project membership 二次过滤；`core/audit.py`：租户链与全局链两套链式哈希（`verify_audit_chain` / `verify_global_audit_chain`），`tenant` 可空以承载无租户上下文的认证事件（迁移 `0024_audit_event_nullable_tenant`）；`core/auth_views.py` 登录成功 / 登录失败 / 登出三类事件写入全局链；落库覆盖 agent-node / agent-plugin / cluster-deployment / membership / plugin / tool-approval / model / knowledge / agent / workflow / task / token-budget / tenant / project 写接口 + 认证事件 | 【基础】 | 平台侧写接口与认证事件均已入链；全局链 list / verify 已提供（`GET /api/v1/audit-events/global/` 与 `/verify/`，仅平台管理员只读）；前端 Audit 页已展示全局认证链及校验结果，非平台管理员静默隐藏；更细粒度资源/工具策略闭环待完整覆盖 |
-| Realtime Logs / Events | Agent、Workflow、部署过程实时日志 | 前端 `api.ts` 以请求拉取为主；代码中未见 channels consumer / `group_send` / channel_layer 实现 | 【待开发】 | 实时推送通道（WebSocket/SSE）尚未落地；当前为轮询体验 |
+| Realtime Logs / Events | Agent、Workflow、部署过程实时日志 | 后端 `core/realtime.py`：Task / AuditEvent `post_save` 后通过 PostgreSQL `pg_notify` 发布项目事件；SSE `GET /api/v1/tenants/<tenant>/projects/<project>/events/stream/`（`core/realtime_views.py`），PostgreSQL 用 LISTEN 唤醒，SQLite 用有界查询回退；前端 `subscribeProjectEvents` 用 fetch 读取 SSE、带 `Last-Event-ID` 重连，任务列表已改为事件驱动 | 【基础】 | 任务/审计事件已实时；Agent、Workflow、部署过程日志需继续接入同一事件通道，其他页面仍以请求拉取为主 |
 | Multi-Agent 接入 | 外部 AI Agent 以插件方式接入协同工作 | 现有接入形态：第三方能力封装为连接器工具（HTTP / OpenAPI schema / MCP 远端工具），经 tool router 权限/审批后由 Agent/Workflow 调用；MCP 工具可经 `sync-tools` 发现导入后人工启用 | 【基础】（工具级接入，含 MCP 工具导入） | 【待开发】把外部 AI Agent 作为可编排节点、可返回结构化结果并参与状态流转的完整接入协议；MCP Agent 的会话级接入（A2A 类协议）待设计 |
 
 ### 3.1 计划支持的插件与模型接入（当前真实状态）
@@ -209,6 +209,7 @@
 - Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录。
 - `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 - 全局审计链（认证事件）的只读对外接口：`GET /api/v1/audit-events/global/`（分页列表）与 `GET /api/v1/audit-events/global/verify/`（链校验），仅平台管理员（`is_staff` / `is_superuser`）可读。
+- 项目级实时事件：Task / AuditEvent 提交后 `pg_notify`，SSE 端点与前端任务列表消费；SQLite 下为有界轮询回退，PostgreSQL 下为空闲时不轮询。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 
