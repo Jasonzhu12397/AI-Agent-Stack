@@ -14,6 +14,7 @@ pub struct Config {
     pub database_url: Option<String>,
     pub django_secret_key: Option<String>,
     pub secure_cookies: bool,
+    pub external_scheme: String,
 }
 
 impl Config {
@@ -79,6 +80,7 @@ impl Config {
             database_url: None,
             django_secret_key: None,
             secure_cookies: false,
+            external_scheme: "http".into(),
         })
     }
 
@@ -103,6 +105,13 @@ impl Config {
             .map(|value| value.eq_ignore_ascii_case("production"))
             .unwrap_or(false);
         self.secure_cookies = parse_bool("RUST_API_SECURE_COOKIES", production)?;
+        let default_scheme = if production { "https" } else { "http" };
+        let external_scheme =
+            env::var("RUST_API_EXTERNAL_SCHEME").unwrap_or_else(|_| default_scheme.into());
+        if !matches!(external_scheme.as_str(), "http" | "https") {
+            return Err("RUST_API_EXTERNAL_SCHEME must be http or https".into());
+        }
+        self.external_scheme = external_scheme;
         Ok(self)
     }
 
