@@ -141,3 +141,29 @@ async fn members_read_but_cannot_update_and_changes_are_audited() {
     .unwrap();
     assert_eq!(events, 1);
 }
+
+
+#[tokio::test]
+async fn concurrent_first_reads_create_only_one_default_budget() {
+    let (state, path) = state().await;
+    let (first, second) = tokio::join!(
+        call(&state, "GET", OWNER_SESSION, json!({})),
+        call(&state, "GET", OWNER_SESSION, json!({})),
+    );
+
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(second.0, StatusCode::OK);
+
+    let pool = sqlx::AnyPool::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_tenanttokenbudget WHERE tenant_id = ?",
+    )
+    .bind(TENANT)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let _ = std::fs::remove_file(path);
+}
