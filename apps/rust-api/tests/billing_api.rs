@@ -29,6 +29,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenanttokenbudget (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL UNIQUE, daily_limit INTEGER NOT NULL, monthly_limit INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenanttokenusage (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, reserved_tokens INTEGER NOT NULL, consumed_tokens INTEGER NOT NULL, expires_at DATETIME NOT NULL, settled_at DATETIME, scope_ref TEXT, agent_run_id TEXT, workflow_run_id TEXT)",
         "CREATE TABLE core_entitlementgrant (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, order_id TEXT NOT NULL, subscription_id TEXT, period VARCHAR(16) NOT NULL, tokens INTEGER NOT NULL, expires_at DATETIME, reason TEXT NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_order (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, amount_cents INTEGER NOT NULL, refunded_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, channel VARCHAR(16) NOT NULL, provider_trade_no VARCHAR(128) NOT NULL, payment_instruction TEXT NOT NULL, paid_at DATETIME, idempotency_key VARCHAR(160) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -49,6 +50,8 @@ async fn state() -> AppState {
     sqlx::query("INSERT INTO core_tenanttokenusage (id, tenant_id, status, reserved_tokens, consumed_tokens, expires_at, settled_at, scope_ref) VALUES ('usage-1', ?, 'settled', 0, 18, datetime('now'), datetime('now'), 'agent-chat:thread-1')")
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenanttokenusage (id, tenant_id, status, reserved_tokens, consumed_tokens, expires_at, settled_at, scope_ref) VALUES ('usage-2', ?, 'reserved', 7, 0, datetime('now', '+1 hour'), NULL, NULL)")
+        .bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_order (id, tenant_id, plan_id, status, amount_cents, refunded_cents, currency, channel, provider_trade_no, payment_instruction, paid_at, idempotency_key, created_at, updated_at) VALUES ('order-1', ?, 'plan-1', 'pending', 9900, 0, 'CNY', 'alipay', 'trade-1', '{\"qr_code\":\"https://pay.example/qr\"}', NULL, 'idem-1', datetime('now'), datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_entitlementgrant (id, tenant_id, order_id, period, tokens, reason, created_at) VALUES ('grant-1', ?, 'order-1', 'monthly', 500, 'purchase', datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
@@ -144,4 +147,35 @@ async fn reports_usage_ledger_grants_and_payment_capabilities() {
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(diagnostics[0]["channel"], "alipay");
     assert_eq!(diagnostics[0]["missing"].as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn reads_tenant_orders_and_payment_instructions() {
+    let state = state().await;
+    let (status, body) = call(&state, &format!("/api/v1/tenants/{TENANT}/billing/orders/")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["id"], "order-1");
+    assert_eq!(results[0]["plan"], "starter");
+    assert_eq!(results[0]["status"], "pending");
+    assert_eq!(results[0]["amount_cents"], 9900);
+    assert!(results[0].get("payment").is_none());
+
+    let (status, body) = call(
+        &state,
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/order-1/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["payment"]["qr_code"], "https://pay.example/qr");
+    assert_eq!(body["provider_trade_no"], "trade-1");
+
+    let (status, body) = call(
+        &state,
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/missing/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["detail"], "Not found.");
 }

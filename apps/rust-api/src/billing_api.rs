@@ -287,6 +287,105 @@ pub async fn get_capabilities(
     .into_response()
 }
 
+pub async fn list_orders(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let sql = order_select(&state, "ORDER BY order_row.created_at DESC");
+    let rows = match sqlx::query(&sql).bind(&tenant_id).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let results: Vec<Value> = rows.iter().map(order_payload).collect();
+    Json(json!({"results": results})).into_response()
+}
+
+pub async fn get_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, order_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let sql = order_select(&state, "AND CAST(order_row.id AS TEXT) = ? LIMIT 1");
+    let row = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&order_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let Some(row) = row else {
+        return not_found();
+    };
+    let payment_text: Option<String> = row.try_get("payment_text").ok();
+    let payment = payment_text.and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let mut payload = order_payload(&row);
+    if let Some(payment) = payment.filter(|value| !value.is_null()) {
+        payload["payment"] = payment;
+    }
+    Json(payload).into_response()
+}
+
+fn order_select(state: &AppState, suffix: &str) -> String {
+    let paid = timestamp(state, "order_row", "paid_at");
+    let created = timestamp(state, "order_row", "created_at");
+    let payment = json_text(state, "order_row.payment_instruction");
+    format!(
+        "SELECT CAST(order_row.id AS TEXT) AS id, CAST(order_row.tenant_id AS TEXT) AS tenant, \
+         plan.code AS plan_code, order_row.status, order_row.amount_cents, \
+         order_row.refunded_cents, order_row.currency, order_row.channel, \
+         order_row.provider_trade_no, {paid} AS paid, order_row.idempotency_key, \
+         {created} AS created, {payment} AS payment_text FROM core_order order_row \
+         JOIN core_plan plan ON CAST(plan.id AS TEXT) = CAST(order_row.plan_id AS TEXT) \
+         WHERE CAST(order_row.tenant_id AS TEXT) = ? {suffix}"
+    )
+}
+
+fn order_payload(row: &sqlx::any::AnyRow) -> Value {
+    json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "tenant": row.try_get::<String, _>("tenant").unwrap_or_default(),
+        "plan": row.try_get::<String, _>("plan_code").unwrap_or_default(),
+        "status": row.try_get::<String, _>("status").unwrap_or_default(),
+        "amount_cents": row.try_get::<i64, _>("amount_cents").unwrap_or(0),
+        "refunded_cents": row.try_get::<i64, _>("refunded_cents").unwrap_or(0),
+        "currency": row.try_get::<String, _>("currency").unwrap_or_default(),
+        "channel": row.try_get::<String, _>("channel").unwrap_or_default(),
+        "provider_trade_no": row.try_get::<String, _>("provider_trade_no").unwrap_or_default(),
+        "paid_at": row.try_get::<Option<String>, _>("paid").ok().flatten(),
+        "idempotency_key": row.try_get::<String, _>("idempotency_key").unwrap_or_default(),
+        "created_at": row.try_get::<String, _>("created").unwrap_or_default(),
+    })
+}
+
 async fn ensure_budget(state: &AppState, tenant_id: &str) -> Result<(i64, i64), Response> {
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
