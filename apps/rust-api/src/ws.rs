@@ -98,12 +98,12 @@ pub async fn forward(
 
     ws.on_upgrade(move |client| async move {
         let _permit = permit;
-        relay(client, target, headers, peer).await;
+        relay(client, target, headers).await;
     })
     .into_response()
 }
 
-async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer: SocketAddr) {
+async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap) {
     let upstream_request = match build_upstream_request(&target, &headers) {
         Ok(request) => request,
         Err(error) => {
