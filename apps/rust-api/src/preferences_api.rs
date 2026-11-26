@@ -469,3 +469,35 @@ fn database_error(message: String) -> Response {
     )
         .into_response()
 }
+
+pub async fn shortcuts(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = require_user(&state, &headers).await {
+        return response;
+    }
+    Json(json!({"results": [
+        {"id": "sidebar.toggle", "default_combination": "Mod+B", "scope": "global", "description": "Toggle the navigation sidebar."},
+        {"id": "command.palette", "default_combination": "Mod+K", "scope": "global", "description": "Open the command palette."},
+        {"id": "agent.new", "default_combination": "Mod+N", "scope": "studio", "description": "Create a new agent."},
+        {"id": "workflow.run", "default_combination": "Mod+Enter", "scope": "studio", "description": "Run the current workflow."},
+        {"id": "settings.open", "default_combination": "Mod+,", "scope": "global", "description": "Open the settings center."}
+    ]}))
+    .into_response()
+}
+
+pub async fn about(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = require_user(&state, &headers).await {
+        return response;
+    }
+    Json(json!({
+        "version": option_env!("AI_AGENT_STACK_VERSION").unwrap_or("1.1.0"),
+        "build": {
+            "commit": std::env::var("GIT_COMMIT").or_else(|_| std::env::var("CI_COMMIT_SHA")).unwrap_or_default(),
+            "built_at": std::env::var("BUILD_DATE").unwrap_or_default(),
+        },
+        "licenses": {
+            "file": "LICENSE",
+            "notice": "Third-party licenses are listed in the repository LICENSE file.",
+        },
+    }))
+    .into_response()
+}

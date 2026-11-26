@@ -156,3 +156,17 @@ async fn rejects_unknown_namespaces_and_shortcut_conflicts() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["values"], json!({"sidebar.toggle": "Mod+B"}));
 }
+
+#[tokio::test]
+async fn exposes_meta_about_and_shortcut_registry() {
+    let state = state().await;
+    let (status, body) = call(&state, "GET", "/api/v1/meta/about/", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["version"], json!("1.1.0"));
+    assert_eq!(body["licenses"]["file"], json!("LICENSE"));
+
+    let (status, body) = call(&state, "GET", "/api/v1/meta/shortcuts/", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 5);
+    assert_eq!(body["results"][1]["id"], json!("command.palette"));
+}
