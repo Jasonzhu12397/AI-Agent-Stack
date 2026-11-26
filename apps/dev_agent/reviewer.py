@@ -12,7 +12,8 @@ from .scanner import SKIP_DIRECTORIES
 from .security import SECRET_PATTERNS
 
 SQL_CALLS = {"execute", "executemany", "raw", "extra"}
-NETWORK_CALLS = {"get", "post", "put", "patch", "delete", "request"}
+NETWORK_CALLS = {"get", "post", "put", "patch", "delete", "request", "urlopen"}
+NETWORK_MODULES = {"requests", "urllib3", "urllib.request"}
 MUTABLE_DEFAULTS = (ast.List, ast.Dict, ast.Set)
 
 
@@ -70,12 +71,44 @@ def _is_mutable(node: ast.AST | None) -> bool:
     return isinstance(node, MUTABLE_DEFAULTS)
 
 
-def _network_without_timeout(node: ast.Call) -> bool:
-    name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
-    if name not in NETWORK_CALLS:
+def _network_import_aliases(tree: ast.AST) -> dict[str, str]:
+    """Resolve explicit imports for network clients without guessing on method names."""
+
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                root = item.name.split(".", 1)[0]
+                if root in {"requests", "urllib3"}:
+                    aliases[item.asname or root] = root
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module in NETWORK_MODULES:
+                for item in node.names:
+                    aliases[item.asname or item.name] = f"{module}.{item.name}"
+    return aliases
+
+
+def _resolved_name(node: ast.AST, aliases: dict[str, str]) -> str:
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _resolved_name(node.value, aliases)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.Call):
+        return _resolved_name(node.func, aliases)
+    return ""
+
+
+def _network_without_timeout(node: ast.Call, aliases: dict[str, str]) -> bool:
+    """Only flag known network-library calls, not ORM or dictionary methods."""
+
+    if "timeout" in {keyword.arg for keyword in node.keywords}:
         return False
-    keywords = {keyword.arg for keyword in node.keywords}
-    return "timeout" not in keywords
+    name = _resolved_name(node.func, aliases)
+    if name.rsplit(".", 1)[-1] not in NETWORK_CALLS:
+        return False
+    return any(name.startswith(f"{module}.") for module in NETWORK_MODULES)
 
 
 def _sql_sink(node: ast.Call) -> str | None:
@@ -109,6 +142,7 @@ def _review_tree(path: str, source: str) -> list[ReviewFinding]:
         ]
 
     lines = source.splitlines()
+    network_aliases = _network_import_aliases(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             if node.type is None:
@@ -174,7 +208,7 @@ def _review_tree(path: str, source: str) -> list[ReviewFinding]:
                                 suggestion="Pass an argument list and keep shell=False.",
                             )
                         )
-            if _network_without_timeout(node):
+            if _network_without_timeout(node, network_aliases):
                 findings.append(
                     ReviewFinding(
                         rule="missing-network-timeout",
