@@ -810,14 +810,13 @@ async fn validate_node_references(
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let risk = declarations
+            let declaration = declarations
                 .iter()
-                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(capability))
-                .and_then(|entry| entry.get("risk_level"))
-                .and_then(Value::as_str)
-                .unwrap_or("low")
-                .to_string();
-            resolved_risk = Some(risk);
+                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(capability));
+            let Some(declaration) = declaration else {
+                continue;
+            };
+            resolved_risk = Some(capability_risk_level(declaration));
             break;
         }
         let Some(risk) = resolved_risk else {
@@ -1041,4 +1040,41 @@ fn capabilities_value(value: Option<String>) -> Vec<String> {
             })
         })
         .unwrap_or_default()
+}
+
+fn capability_risk_level(declaration: &Value) -> String {
+    match declaration.get("risk_level") {
+        None => "low".to_string(),
+        Some(Value::String(value))
+            if ["low", "medium", "high", "critical", "unclassified"].contains(&value.as_str()) =>
+        {
+            value.clone()
+        }
+        Some(_) => "unclassified".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod risk_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_capability_risk_values_fail_closed() {
+        assert_eq!(
+            capability_risk_level(&json!({"name": "read", "risk_level": "high"})),
+            "high"
+        );
+        assert_eq!(
+            capability_risk_level(&json!({"name": "read"})),
+            "low"
+        );
+        assert_eq!(
+            capability_risk_level(&json!({"name": "read", "risk_level": "unknown"})),
+            "unclassified"
+        );
+        assert_eq!(
+            capability_risk_level(&json!({"name": "read", "risk_level": 42})),
+            "unclassified"
+        );
+    }
 }
