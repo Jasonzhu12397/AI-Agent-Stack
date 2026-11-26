@@ -182,6 +182,24 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/tenants/{tenant_id}/model-configs/{model_config_id}/",
                 axum::routing::patch(crate::model_api::update_config),
             )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/agents/",
+                get(crate::agent_api::list_agents).post(crate::agent_api::create_agent),
+            )
+            .route(
+                "/api/v1/agents/{agent_id}/",
+                get(crate::agent_api::get_agent).patch(crate::agent_api::update_agent),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/knowledge-bases/",
+                get(crate::knowledge_api::list_knowledge_bases)
+                    .post(crate::knowledge_api::create_knowledge_base),
+            )
+            .route(
+                "/api/v1/knowledge-bases/{knowledge_base_id}/documents/",
+                get(crate::knowledge_api::list_documents)
+                    .post(crate::knowledge_api::create_document),
+            )
             .route("/health/live", get(edge_liveness));
     }
     router

@@ -1,9 +1,11 @@
+pub mod agent_api;
 pub mod audit;
 pub mod audit_api;
 pub mod auth;
 pub mod config;
 pub mod context;
 pub mod identity;
+pub mod knowledge_api;
 pub mod model_api;
 pub mod native;
 pub mod proxy;
