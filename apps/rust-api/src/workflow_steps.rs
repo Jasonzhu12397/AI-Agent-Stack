@@ -120,15 +120,6 @@ async fn decide(
         }
     }
     let postgres = is_postgres(&state);
-    let now = Utc::now();
-    let now_text = now.to_rfc3339_opts(SecondsFormat::Micros, false);
-    let decision = if approve { "approved" } else { "rejected" };
-    let decision_payload = json!({
-        "decision": decision,
-        "decided_by_id": user.id,
-        "decided_at": now_text,
-        "reason": reason.trim(),
-    });
     let mut transaction = match pool.begin().await {
         Ok(transaction) => transaction,
         Err(error) => {
@@ -210,6 +201,57 @@ async fn decide(
         )
             .into_response();
     }
+    let deadline_expr = if postgres {
+        "to_char(deadline_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+    } else {
+        "strftime('%Y-%m-%dT%H:%M:%fZ', deadline_at)"
+    };
+    let deadline_sql = format!(
+        "SELECT {deadline_expr} AS deadline FROM core_workflowrun WHERE CAST(id AS TEXT) = ?"
+    );
+    let deadline_text = match sqlx::query_scalar::<_, Option<String>>(&deadline_sql)
+        .bind(&run_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            let _ = transaction.rollback().await;
+            return not_found();
+        }
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            return database_error_message(error.to_string());
+        }
+    };
+    let deadline = match deadline_text {
+        Some(value) => match DateTime::parse_from_rfc3339(&value) {
+            Ok(value) => Some(value.with_timezone(&Utc)),
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                return database_error_message(error.to_string());
+            }
+        },
+        None => None,
+    };
+    if deadline.is_some_and(|deadline| deadline <= Utc::now()) {
+        let _ = transaction.rollback().await;
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"detail": "Workflow run deadline exceeded before the decision."})),
+        )
+            .into_response();
+    }
+
+    let now = Utc::now();
+    let now_text = now.to_rfc3339_opts(SecondsFormat::Micros, false);
+    let decision = if approve { "approved" } else { "rejected" };
+    let decision_payload = json!({
+        "decision": decision,
+        "decided_by_id": user.id,
+        "decided_at": now_text,
+        "reason": reason.trim(),
+    });
     let step_id: String = step.try_get("id").unwrap_or_default();
     let step_status_value = if approve { "succeeded" } else { "failed" };
     let step_error = if approve {
