@@ -123,8 +123,13 @@ def _intent_tool(offered: list[str], instruction: str) -> str | None:
 
 MAX_FALLBACK_HOPS = 3
 
+
 def _fallback_idempotency_key(idempotency_key, source_model_id, depth):
-    base_key = idempotency_key if isinstance(idempotency_key, str) and idempotency_key else uuid.uuid4().hex
+    base_key = (
+        idempotency_key
+        if isinstance(idempotency_key, str) and idempotency_key
+        else uuid.uuid4().hex
+    )
     material = f"{base_key}:{source_model_id}:{depth}".encode("utf-8")
     return "fallback:" + hashlib.sha256(material).hexdigest()
 
@@ -615,7 +620,17 @@ class ModelGateway:
                 raise ModelGatewayError(
                     "MODEL_PROVIDER_INVALID_EMBEDDING",
                     "The model provider returned invalid embeddings.",
+                    billable_uncertain=True,
                 ) from exc
+        except ModelGatewayError as exc:
+            if exc.billable_uncertain:
+                guard.settle(
+                    reservation=reservation,
+                    consumed_tokens=reservation.reserved_tokens,
+                )
+            else:
+                guard.release(reservation=reservation)
+            raise
         except BaseException:
             if provider_request_started:
                 guard.settle(
