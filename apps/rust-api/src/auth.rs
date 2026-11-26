@@ -131,6 +131,13 @@ pub async fn login(
         tracing::error!(%error, "rust auth could not persist the session");
         return unavailable("The session could not be created.");
     }
+    record_session_activity(
+        pool,
+        user_id,
+        &session_key,
+        database_url(&state).starts_with("postgres"),
+    )
+    .await;
 
     if let Err(error) = record_auth_event(pool, database_url(&state), audit).await {
         tracing::error!(%error, "rust auth could not append the login audit event");
@@ -160,6 +167,41 @@ pub async fn login(
         &session_cookie(&session_key, state.config.secure_cookies),
     );
     response
+}
+
+async fn record_session_activity(
+    pool: &sqlx::AnyPool,
+    user_id: i64,
+    session_key: &str,
+    postgres: bool,
+) {
+    let now = if postgres { "NOW()" } else { "datetime('now')" };
+    let sql = format!(
+        "INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity, revoked_at) \
+         VALUES (?, ?, {now}, {now}, NULL) \
+         ON CONFLICT(session_key) DO UPDATE SET user_id = excluded.user_id, \
+         last_activity = excluded.last_activity, revoked_at = NULL"
+    );
+    let result = sqlx::query(&sql)
+        .bind(session_key)
+        .bind(user_id)
+        .execute(pool)
+        .await;
+    if let Err(error) = result {
+        tracing::debug!(%error, "rust auth skipped session activity metadata");
+    }
+}
+
+async fn mark_session_revoked(pool: &sqlx::AnyPool, session_key: &str, postgres: bool) {
+    let now = if postgres { "NOW()" } else { "datetime('now')" };
+    let sql = format!(
+        "UPDATE core_sessionactivity SET revoked_at = {now} \
+         WHERE session_key = ? AND revoked_at IS NULL"
+    );
+    let result = sqlx::query(&sql).bind(session_key).execute(pool).await;
+    if let Err(error) = result {
+        tracing::debug!(%error, "rust auth skipped session revocation metadata");
+    }
 }
 
 /// Native `POST /api/v1/auth/logout/`.
@@ -217,6 +259,12 @@ pub async fn logout(
         tracing::error!(%error, "rust auth could not delete the logout session");
         return unavailable("The session could not be invalidated.");
     }
+    mark_session_revoked(
+        pool,
+        &session_key,
+        database_url(&state).starts_with("postgres"),
+    )
+    .await;
 
     let audit = AuthAudit {
         event_type: "auth.logout.succeeded",

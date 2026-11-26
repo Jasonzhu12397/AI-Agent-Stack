@@ -232,6 +232,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
             )
             .route(
+                "/api/v1/users/me/sessions/",
+                get(crate::account_api::list_sessions),
+            )
+            .route(
+                "/api/v1/users/me/sessions/{session_key}/revoke/",
+                axum::routing::post(crate::account_api::revoke_session),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/billing/subscription/trial/",
                 axum::routing::post(crate::billing_api::start_subscription_trial),
             )

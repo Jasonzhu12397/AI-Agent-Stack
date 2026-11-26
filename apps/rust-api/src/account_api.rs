@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -208,6 +208,152 @@ pub async fn update_profile(
         Ok(Some(updated)) => Json(profile_payload(&updated_user, &updated)).into_response(),
         Ok(None) => unavailable(),
         Err(response) => response,
+    }
+}
+
+pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    let expire_expr = timestamp_expr(&state, "session", "expire_date");
+    let created_expr = timestamp_expr(&state, "activity", "created_at");
+    let activity_expr = timestamp_expr(&state, "activity", "last_activity");
+    let revoked_expr = timestamp_expr(&state, "activity", "revoked_at");
+    let sql = format!(
+        "SELECT session.session_key, session.session_data, {expire_expr} AS expire_date, \
+         {created_expr} AS created_at, {activity_expr} AS last_activity, \
+         {revoked_expr} AS revoked_at FROM django_session session \
+         LEFT JOIN core_sessionactivity activity \
+         ON activity.session_key = session.session_key ORDER BY session.expire_date DESC"
+    );
+    let rows = match sqlx::query(&sql).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let mut results = Vec::new();
+    for row in rows {
+        let key: String = row.try_get("session_key").unwrap_or_default();
+        let data: String = row.try_get("session_data").unwrap_or_default();
+        let decoded = match crate::identity::decode_session_data(&data, secret_key) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let owner = decoded.get("_auth_user_id").and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value.as_i64().map(|id| id.to_string()))
+        });
+        if owner.as_deref() != Some(user.id.to_string().as_str()) {
+            continue;
+        }
+        let created: Option<String> = row.try_get("created_at").ok().flatten();
+        let last_activity: Option<String> = row.try_get("last_activity").ok().flatten();
+        let revoked: Option<String> = row.try_get("revoked_at").ok().flatten();
+        results.push(json!({
+            "session_key": key,
+            "is_current": key == user.session_key,
+            "expire_date": row.try_get::<Option<String>, _>("expire_date").ok().flatten(),
+            "created_at": created,
+            "last_activity": last_activity,
+            "timestamps_source": if created.is_some() || last_activity.is_some() || revoked.is_some() { "session_metadata" } else { "unavailable" },
+        }));
+    }
+    Json(json!({"results": results})).into_response()
+}
+
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session_key): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT session_data FROM django_session WHERE session_key = ? LIMIT 1",
+    )
+    .bind(&session_key)
+    .fetch_optional(pool)
+    .await;
+    let stored = match stored {
+        Ok(Some(value)) => value,
+        Ok(None) => return Json(json!({"revoked": false, "idempotent": true})).into_response(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let owner = crate::identity::decode_session_data(&stored, secret_key)
+        .ok()
+        .and_then(|data| {
+            data.get("_auth_user_id").and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value.as_i64().map(|id| id.to_string()))
+            })
+        });
+    if owner.as_deref() != Some(user.id.to_string().as_str()) {
+        return Json(json!({"revoked": false, "idempotent": true})).into_response();
+    }
+    if let Err(error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
+        .bind(&session_key)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let now_expr = if is_postgres(&state) {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    let sql = format!(
+        "UPDATE core_sessionactivity SET revoked_at = {now_expr} \
+         WHERE session_key = ? AND revoked_at IS NULL"
+    );
+    if let Err(error) = sqlx::query(&sql).bind(&session_key).execute(pool).await {
+        return database_error(error.to_string());
+    }
+    if let Some(database_url) = state.config.database_url.as_deref() {
+        let event = crate::audit::AuditEvent {
+            tenant_id: None,
+            project_id: None,
+            event_type: "session.revoked",
+            resource_type: "session",
+            resource_id: &session_key,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"current": session_key == user.session_key}),
+        };
+        if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
+            tracing::error!(%error, "rust account api could not append the session audit event");
+            return unavailable();
+        }
+    }
+    Json(json!({"revoked": true, "idempotent": true})).into_response()
+}
+
+fn timestamp_expr(state: &AppState, alias: &str, field: &str) -> String {
+    if is_postgres(state) {
+        format!("to_char({alias}.{field} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+    } else {
+        format!("strftime('%Y-%m-%dT%H:%M:%fZ', {alias}.{field})")
     }
 }
 
