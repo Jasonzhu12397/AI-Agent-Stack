@@ -236,6 +236,20 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::list_identities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/settings/notifications/endpoints/",
+                get(crate::notification_api::list_endpoints)
+                    .post(crate::notification_api::create_endpoint),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/settings/notifications/endpoints/{endpoint_id}/",
+                axum::routing::patch(crate::notification_api::update_endpoint)
+                    .delete(crate::notification_api::delete_endpoint),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/settings/notifications/endpoints/{endpoint_id}/test/",
+                axum::routing::post(crate::notification_api::test_endpoint),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/feedback/",
                 get(crate::preferences_api::list_feedback)
                     .post(crate::preferences_api::create_feedback),

@@ -23,6 +23,7 @@ async fn state() -> AppState {
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_userpreference (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, namespace VARCHAR(32) NOT NULL, \"values\" TEXT NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL, UNIQUE(user_id, namespace))",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL)",
+        "CREATE TABLE core_notificationendpoint (id TEXT PRIMARY KEY, channel VARCHAR(16) NOT NULL, name VARCHAR(120) NOT NULL, sealed_url TEXT NOT NULL, sealed_secret TEXT NOT NULL, enabled INTEGER NOT NULL, last_sent_at DATETIME, last_error VARCHAR(200) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, tenant_id TEXT NOT NULL)",
         "CREATE TABLE core_feedbackentry (id TEXT PRIMARY KEY, category VARCHAR(32) NOT NULL, severity VARCHAR(16) NOT NULL, body TEXT NOT NULL, created_at DATETIME NOT NULL, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
@@ -30,7 +31,7 @@ async fn state() -> AppState {
     }
     sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 'pbkdf2_sha256$demo', 0, 1)")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role) VALUES ('m1', '4c900ce633d9463d88256c3371c48bc8', 1, 'member')")
+    sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role) VALUES ('m1', '4c900ce633d9463d88256c3371c48bc8', 1, 'admin')")
         .execute(&pool).await.unwrap();
     let data = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
@@ -211,4 +212,71 @@ async fn lists_and_creates_tenant_feedback() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn manages_notification_endpoints_without_exposing_secrets() {
+    let state = state().await;
+    let base =
+        "/api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/settings/notifications/endpoints/";
+    let (status, body) = call(
+        &state,
+        "POST",
+        base,
+        Some(json!({"channel": "dingtalk", "name": "Ops", "webhook_url": "https://example.invalid/robot", "secret": "sign-key"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{}", body);
+    assert!(body.get("sealed_url").is_none());
+    assert_eq!(body["enabled"], json!(true));
+    let id = body["id"].as_str().unwrap().to_string();
+
+    let (status, body) = call(&state, "GET", base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
+    assert_eq!(body["results"][0]["name"], json!("Ops"));
+
+    let (status, _) = call(
+        &state,
+        "POST",
+        base,
+        Some(json!({"channel": "slack", "name": "Bad", "webhook_url": "https://example.invalid"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let detail = format!("{base}{id}/");
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        &detail,
+        Some(json!({"name": "Renamed", "enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], json!("Renamed"));
+    assert_eq!(body["enabled"], json!(false));
+
+    let (status, _) = call(
+        &state,
+        "PATCH",
+        &detail,
+        Some(json!({"webhook_url": "https://127.0.0.1:9/hook"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let test_uri = format!("{base}{id}/test/");
+    let (status, body) = call(&state, "POST", &test_uri, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], json!(false));
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("transport error"));
+
+    let (status, _) = call(&state, "DELETE", &detail, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = call(&state, "GET", base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 0);
 }

@@ -11,6 +11,7 @@ pub mod identity;
 pub mod knowledge_api;
 pub mod model_api;
 pub mod native;
+pub mod notification_api;
 pub mod plugin_api;
 pub mod preferences_api;
 pub mod proxy;
