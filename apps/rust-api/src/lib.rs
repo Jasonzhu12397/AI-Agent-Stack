@@ -5,5 +5,6 @@ pub mod context;
 pub mod identity;
 pub mod native;
 pub mod proxy;
+pub mod tasks;
 pub mod tenancy;
 pub mod ws;

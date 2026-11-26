@@ -93,3 +93,10 @@ logout and the CSRF rejection without audit noise.
   last-project-admin protection, project membership requires tenant membership.
 - Tenant/project audit events are appended inside the same transaction.
 - Tests: tests/tenancy.rs 3 passed; full suite 19 passed; clippy -D warnings clean.
+
+2026-11-26 task batch
+- Native routes: project task list/create, task detail, task cancel.
+- Create enforces Idempotency-Key, task type allow-list and 64 KiB payload cap.
+- Cancel implements queued/running/waiting-approval state transitions and writes
+  task.created/task.cancelled into the tenant audit chain.
+- Tests: tests/tasks.rs 2 passed; full suite 21 passed; clippy -D warnings clean.

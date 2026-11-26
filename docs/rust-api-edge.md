@@ -39,6 +39,10 @@ domain model, permissions, audit and realtime code in the Django service.
   owner and last project administrator protections, project membership requiring
   tenant membership first, and tenant/project audit events written into the
   Django hash chain inside the same transaction as the business row.
+- Owns the task surface: project task list/create, task detail and task cancel.
+  Create honours `Idempotency-Key`, rejects unsupported task types and payloads
+  over 64 KiB, and appends `task.created`; cancel applies the queued/running/
+  waiting-approval state machine and appends `task.cancelled`.
 
 All other business routes still live in Django during this stage. The Rust
 handlers share the same schema, so a rollback is a single routing change.
@@ -101,9 +105,10 @@ consumer and its authorization rules.
 The edge is the stable seam for moving routes into Rust:
 
 1. Edge proxy and WebSocket relay (this stage) with parity checks and rollback.
-2. Native Rust auth and tenancy: CSRF, login, logout, me, tenants, projects and
-   both membership scopes now run in Rust against the shared session, RBAC and
-   audit tables. Model gateway and task APIs move next.
+2. Native Rust auth, tenancy and tasks: CSRF, login, logout, me, tenants,
+   projects, both membership scopes and task list/create/detail/cancel now run
+   in Rust against the shared session, RBAC and audit tables. Model gateway
+   moves next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

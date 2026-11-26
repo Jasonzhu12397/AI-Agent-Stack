@@ -1267,7 +1267,7 @@ fn database_error_message(message: String) -> Response {
     service_unavailable()
 }
 
-fn is_postgres(state: &AppState) -> bool {
+pub(crate) fn is_postgres(state: &AppState) -> bool {
     state
         .config
         .database_url
@@ -1276,17 +1276,19 @@ fn is_postgres(state: &AppState) -> bool {
         .unwrap_or(false)
 }
 
-fn timestamp_expr(postgres: bool, alias: &str) -> String {
+pub(crate) fn timestamp_expr(postgres: bool, alias: &str) -> String {
+    timestamp_field_expr(postgres, alias, "created_at")
+}
+
+pub(crate) fn timestamp_field_expr(postgres: bool, alias: &str, field: &str) -> String {
     if postgres {
-        format!(
-            "to_char({alias}.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
-        )
+        format!("to_char({alias}.{field} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
     } else {
-        format!("strftime('%Y-%m-%dT%H:%M:%fZ', {alias}.created_at)")
+        format!("strftime('%Y-%m-%dT%H:%M:%fZ', {alias}.{field})")
     }
 }
 
-fn normalize_timestamp(value: &str) -> String {
+pub(crate) fn normalize_timestamp(value: &str) -> String {
     if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(value) {
         return format_timestamp(timestamp.with_timezone(&Utc));
     }
@@ -1480,7 +1482,7 @@ fn request_meta(headers: &HeaderMap) -> RequestMeta {
     }
 }
 
-async fn tenant_role(
+pub(crate) async fn tenant_role(
     pool: &sqlx::AnyPool,
     tenant_id: &str,
     user_id: i64,
@@ -1496,14 +1498,18 @@ async fn tenant_role(
     .map_err(|error| error.to_string())
 }
 
-async fn tenant_admin(pool: &sqlx::AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
+pub(crate) async fn tenant_admin(
+    pool: &sqlx::AnyPool,
+    tenant_id: &str,
+    user_id: i64,
+) -> Result<bool, String> {
     Ok(matches!(
         tenant_role(pool, tenant_id, user_id).await?,
         Some(role) if role == "owner" || role == "admin"
     ))
 }
 
-async fn project_access(
+pub(crate) async fn project_access(
     pool: &sqlx::AnyPool,
     tenant_id: &str,
     project_id: &str,

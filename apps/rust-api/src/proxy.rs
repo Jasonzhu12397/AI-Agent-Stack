@@ -91,6 +91,15 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/members/{membership_id}/",
                 patch(crate::tenancy::update_project_member)
                     .delete(crate::tenancy::delete_project_member),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/tasks/",
+                get(crate::tasks::list_tasks).post(crate::tasks::create_task),
+            )
+            .route("/api/v1/tasks/{task_id}/", get(crate::tasks::get_task))
+            .route(
+                "/api/v1/tasks/{task_id}/cancel/",
+                post(crate::tasks::cancel_task),
             );
     }
     router.fallback(forward).with_state(state)
