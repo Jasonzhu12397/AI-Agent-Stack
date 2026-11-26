@@ -122,6 +122,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::token_budget::get_budget)
                     .put(crate::token_budget::update_budget)
                     .patch(crate::token_budget::patch_budget),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/workflows/",
+                get(crate::workflows::list_workflows).post(crate::workflows::create_workflow),
+            )
+            .route(
+                "/api/v1/workflows/{workflow_id}/",
+                get(crate::workflows::get_workflow).patch(crate::workflows::update_workflow),
             );
     }
     router.fallback(forward).with_state(state)

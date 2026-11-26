@@ -9,4 +9,5 @@ pub mod proxy;
 pub mod tasks;
 pub mod tenancy;
 pub mod token_budget;
+pub mod workflows;
 pub mod ws;
