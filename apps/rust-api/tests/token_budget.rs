@@ -142,7 +142,6 @@ async fn members_read_but_cannot_update_and_changes_are_audited() {
     assert_eq!(events, 1);
 }
 
-
 #[tokio::test]
 async fn concurrent_first_reads_create_only_one_default_budget() {
     let (state, path) = state().await;
