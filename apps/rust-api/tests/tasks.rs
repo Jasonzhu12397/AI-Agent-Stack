@@ -222,3 +222,56 @@ async fn cancels_a_queued_task_and_records_the_audit_event() {
     .unwrap();
     assert_eq!(events, 1);
 }
+
+
+#[tokio::test]
+async fn project_viewers_cannot_cancel_tasks() {
+    let (state, path) = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query(
+        "INSERT INTO core_projectmembership (id, project_id, user_id, role, created_at) \
+         VALUES (?, ?, 2, 'viewer', datetime('now'))",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(PROJECT)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let uri = format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/tasks/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        OWNER_SESSION,
+        Some("viewer-cancel-key"),
+        json!({"task_type": "demo.sleep", "payload": {"seconds": 1}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let task_id = body["id"].as_str().unwrap();
+
+    let (status, _) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tasks/{task_id}/cancel/"),
+        VIEWER_SESSION,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/api/v1/tasks/{task_id}/"),
+        OWNER_SESSION,
+        None,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "queued");
+    let _ = std::fs::remove_file(path);
+}
