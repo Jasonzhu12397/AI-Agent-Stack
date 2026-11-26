@@ -143,7 +143,7 @@ pub async fn create_provider(
     };
     let mut final_type = provider_type;
     let mut final_base = base_url.to_string();
-    let mut final_credential = credential_ref.to_string();
+    let final_credential = credential_ref.to_string();
     if account_mode {
         let Some(platform) = preset(preset_key) else {
             return validation_error("preset_key", "Unknown model platform preset.");
@@ -372,9 +372,7 @@ pub async fn create_provider(
     }
     let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
         Ok(rows) => rows,
-        Ok(rows) if rows.is_empty() => return not_found(),
         Err(error) => return database_error_message(error),
-        _ => Vec::new(),
     };
     let Some(row) = rows.into_iter().next() else {
         return not_found();
