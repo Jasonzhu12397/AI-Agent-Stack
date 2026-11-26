@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::TryStreamExt;
 use serde_json::json;
@@ -60,7 +60,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/edge/info", get(info))
         .route("/ws/{*path}", get(crate::ws::forward));
     if native_identity {
-        router = router.route("/api/v1/auth/me/", get(crate::native::current_user));
+        router = router
+            .route("/api/v1/auth/csrf/", get(crate::auth::csrf))
+            .route("/api/v1/auth/login/", post(crate::auth::login))
+            .route("/api/v1/auth/logout/", post(crate::auth::logout))
+            .route("/api/v1/auth/me/", get(crate::native::current_user));
     }
     router.fallback(forward).with_state(state)
 }

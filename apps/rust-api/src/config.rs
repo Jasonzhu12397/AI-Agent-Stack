@@ -13,6 +13,7 @@ pub struct Config {
     pub native_identity: bool,
     pub database_url: Option<String>,
     pub django_secret_key: Option<String>,
+    pub secure_cookies: bool,
 }
 
 impl Config {
@@ -65,6 +66,7 @@ impl Config {
             native_identity: false,
             database_url: None,
             django_secret_key: None,
+            secure_cookies: false,
         })
     }
 
@@ -85,6 +87,10 @@ impl Config {
         self.native_identity = enabled;
         self.database_url = database_url;
         self.django_secret_key = django_secret_key;
+        let production = env::var("APP_ENV")
+            .map(|value| value.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+        self.secure_cookies = parse_bool("RUST_API_SECURE_COOKIES", production)?;
         Ok(self)
     }
 

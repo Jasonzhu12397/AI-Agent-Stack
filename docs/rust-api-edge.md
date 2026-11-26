@@ -22,15 +22,21 @@ domain model, permissions, audit and realtime code in the Django service.
   `Cookie`, `Origin` and `Sec-WebSocket-Protocol` (including the
   `session.<key>` subprotocol) reach Django Channels unchanged, so session
   authentication and close code `4403` behave as they do without the edge.
-- When `RUST_API_NATIVE_IDENTITY=true`, serves `GET /api/v1/auth/me/` from
-  Rust. It reads the shared `django_session` row, verifies the Django
-  `TimestampSigner` signature, decrypts the optional zlib payload, then reads
-  `auth_user`. Cookie and `X-Session-Token` authentication both work, so a
-  session minted by Django is accepted by Rust and vice versa.
+- When `RUST_API_NATIVE_IDENTITY=true`, owns the complete auth surface:
+  `GET /api/v1/auth/csrf/`, `POST /api/v1/auth/login/`,
+  `POST /api/v1/auth/logout/` and `GET /api/v1/auth/me/`.
+- Login verifies Django `pbkdf2_sha256` hashes, mints a session in exactly the
+  `django_session` format (`TimestampSigner`, optional zlib, compact JSON),
+  rotates `last_login`, appends the login/denied events to the tenant-less
+  audit hash chain and sets `sessionid`.
+- Logout appends the logout event, deletes the session row and clears the
+  cookie. `/me/` accepts the cookie or `X-Session-Token`.
+- Sessions are interchangeable: a Rust-minted session is accepted by Django
+  and a Django-minted session is accepted by Rust.
 
-Tenant resolution, RBAC, audit and login/logout still live in Django during
-this stage. The Rust identity handler is read-only and shares the same schema,
-so a rollback is a single routing change.
+Tenant resolution, RBAC and every non-auth route still live in Django during
+this stage. The Rust auth handlers share the same schema, so a rollback is a
+single routing change.
 
 ## Configuration
 
@@ -44,6 +50,7 @@ so a rollback is a single routing change.
 | `RUST_API_NATIVE_IDENTITY` | `false` | Serves `GET /api/v1/auth/me/` from Rust |
 | `DATABASE_URL` | unset | Shared Django database; required with native identity |
 | `DJANGO_SECRET_KEY` | unset | Session signing key; required with native identity |
+| `RUST_API_SECURE_COOKIES` | `APP_ENV=production` | Adds `Secure` to the session/CSRF cookies |
 
 The service refuses an upstream URL that carries a path, a non-HTTP scheme, a
 zero timeout, or a request timeout shorter than the upstream timeout.
@@ -89,8 +96,8 @@ consumer and its authorization rules.
 The edge is the stable seam for moving routes into Rust:
 
 1. Edge proxy and WebSocket relay (this stage) with parity checks and rollback.
-2. Native Rust identity: `GET /api/v1/auth/me/` reads Django sessions today.
-   Login, logout and CSRF move next, followed by tenant and RBAC middleware.
+2. Native Rust auth: CSRF, login, logout and me now run in Rust against the
+   shared session and audit tables. Tenant and RBAC middleware move next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

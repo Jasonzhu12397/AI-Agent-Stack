@@ -7,6 +7,9 @@ description = "Axum edge API for AI Agent Stack"
 
 [dependencies]
 base64 = "0.22"
+chrono = { version = "0.4", features = ["clock"] }
+hex = "0.4"
+pbkdf2 = "0.12"
 flate2 = "1"
 hmac = "0.12"
 sha2 = "0.10"

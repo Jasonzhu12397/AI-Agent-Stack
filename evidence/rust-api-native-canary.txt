@@ -50,3 +50,33 @@ Automated tests:
   when the upstream is unreachable).
 - apps/rust-api/tests/proxy.rs: 4 passed.
 - cargo clippy --all-targets -- -D warnings: clean.
+
+Native auth acceptance (same date, second run)
+Database: real Django migrations + auth_user row (pbkdf2_sha256, 1,000,000 iterations)
+
+GET  /api/v1/auth/csrf/    -> 200, {"csrf_token":"<64 chars>"}, Set-Cookie csrftoken=<32 chars>
+POST /api/v1/auth/login/   -> 200, {"id":1,"username":"rust-auth@example.com",
+                               "email":"rust-auth@example.com","session_token":"..."}
+                              Set-Cookie sessionid=<32 chars>; Path=/; HttpOnly; SameSite=Lax
+GET  /api/v1/auth/me/      -> 200, id/username/email/is_staff
+GET  /api/v1/auth/me/ (X-Session-Token) -> 200
+POST /api/v1/auth/logout/  -> 204, session row deleted, sessionid cleared
+GET  /api/v1/auth/me/ after logout -> 401 with WWW-Authenticate: Session
+POST /api/v1/auth/login/ without CSRF -> 403 "CSRF Failed: CSRF cookie not set."
+POST /api/v1/auth/login/ wrong password -> 400 "Invalid username or password."
+POST /api/v1/auth/login/ missing field -> 400 "Username and password are required."
+
+Cross-runtime session compatibility:
+- Rust-minted sessionid was sent to Django GET /api/v1/auth/me/ -> 200
+  {"id":1,"username":"rust-auth@example.com","email":"rust-auth@example.com","is_staff":false}
+- Django-minted session was sent to Rust GET /api/v1/auth/me/ -> 200
+
+Audit chain (Django verifier, not a Rust self-check):
+  verify_global_audit_chain() -> {'valid': True, 'verified_count': 5, ...}
+  events: login.succeeded, logout.succeeded, login.succeeded,
+          login.denied(invalid_credentials), login.denied(invalid_payload)
+The fifth-event head hash was accepted by Django's canonical JSON + SHA-256 verifier,
+so Rust writes byte-compatible audit events.
+
+Automated: apps/rust-api/tests/auth.rs (2 passed) covers CSRF, login, me,
+logout and the CSRF rejection without audit noise.
