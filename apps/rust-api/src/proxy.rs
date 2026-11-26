@@ -361,7 +361,10 @@ mod tests {
     #[test]
     fn removes_connection_nominated_headers() {
         let mut headers = HeaderMap::new();
-        headers.insert("connection", HeaderValue::from_static("keep-alive, x-private-hop"));
+        headers.insert(
+            "connection",
+            HeaderValue::from_static("keep-alive, x-private-hop"),
+        );
         headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
         headers.insert("x-private-hop", HeaderValue::from_static("internal"));
         headers.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.10"));
