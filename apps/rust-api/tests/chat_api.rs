@@ -75,7 +75,14 @@ async fn call(
     let request = Request::builder()
         .method(method)
         .uri(uri)
-        .header("cookie", format!("sessionid={SESSION}"));
+        .header(
+            "cookie",
+            format!("sessionid={SESSION}; csrftoken=0123456789abcdef0123456789abcdef"),
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        );
     let request = match body {
         Some(body) => request
             .header("content-type", "application/json")

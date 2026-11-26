@@ -2,6 +2,7 @@ pub mod agent_api;
 pub mod audit;
 pub mod audit_api;
 pub mod auth;
+pub mod billing_api;
 pub mod chat_api;
 pub mod config;
 pub mod context;
