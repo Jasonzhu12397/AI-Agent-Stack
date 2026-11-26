@@ -228,6 +228,11 @@ pub fn router(state: AppState) -> Router {
                 get(crate::billing_api::get_order),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/billing/payments/credentials/{channel}/",
+                get(crate::billing_api::get_payment_credentials)
+                    .put(crate::billing_api::put_payment_credentials),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-chat/threads/",
                 get(crate::chat_api::list_threads).post(crate::chat_api::create_thread),
             )

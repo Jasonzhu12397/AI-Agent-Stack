@@ -25,11 +25,12 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_plan (id TEXT PRIMARY KEY, code VARCHAR(64) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, interval VARCHAR(16) NOT NULL, price_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, token_quota_daily INTEGER NOT NULL, token_quota_monthly INTEGER NOT NULL, features TEXT NOT NULL, region_scope VARCHAR(16) NOT NULL, active BOOLEAN NOT NULL)",
         "CREATE TABLE core_subscription (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME, current_period_start DATETIME, current_period_end DATETIME, cancel_at_period_end BOOLEAN NOT NULL, renewal_mode VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
-        "CREATE TABLE core_paymentchannelsecret (id TEXT PRIMARY KEY, channel VARCHAR(32) NOT NULL, slot VARCHAR(64) NOT NULL)",
+        "CREATE TABLE core_paymentchannelsecret (id TEXT PRIMARY KEY, channel VARCHAR(32) NOT NULL, slot VARCHAR(64) NOT NULL, sealed_value TEXT NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenanttokenbudget (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL UNIQUE, daily_limit INTEGER NOT NULL, monthly_limit INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenanttokenusage (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, reserved_tokens INTEGER NOT NULL, consumed_tokens INTEGER NOT NULL, expires_at DATETIME NOT NULL, settled_at DATETIME, scope_ref TEXT, agent_run_id TEXT, workflow_run_id TEXT)",
         "CREATE TABLE core_entitlementgrant (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, order_id TEXT NOT NULL, subscription_id TEXT, period VARCHAR(16) NOT NULL, tokens INTEGER NOT NULL, expires_at DATETIME, reason TEXT NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_order (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, amount_cents INTEGER NOT NULL, refunded_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, channel VARCHAR(16) NOT NULL, provider_trade_no VARCHAR(128) NOT NULL, payment_instruction TEXT NOT NULL, paid_at DATETIME, idempotency_key VARCHAR(160) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -72,12 +73,33 @@ async fn state() -> AppState {
 }
 
 async fn call(state: &AppState, uri: &str) -> (StatusCode, Value) {
+    request(state, "GET", uri, None).await
+}
+
+async fn request(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let request = Request::builder()
-        .method("GET")
+        .method(method)
         .uri(uri)
-        .header("cookie", format!("sessionid={SESSION}"))
-        .body(Body::empty())
-        .unwrap();
+        .header(
+            "cookie",
+            format!("sessionid={SESSION}; csrftoken=0123456789abcdef0123456789abcdef"),
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        );
+    let request = match body {
+        Some(body) => request
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+        None => request.body(Body::empty()).unwrap(),
+    };
     let response = router(state.clone()).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
@@ -178,4 +200,53 @@ async fn reads_tenant_orders_and_payment_instructions() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["detail"], "Not found.");
+}
+
+#[tokio::test]
+async fn seals_and_reports_payment_channel_credentials() {
+    let state = state().await;
+    let uri = format!("/api/v1/tenants/{TENANT}/billing/payments/credentials/alipay/");
+    let (status, body) = call(&state, &uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["channel"], "alipay");
+    assert_eq!(body["configured"], false);
+    assert_eq!(body["missing"].as_array().unwrap().len(), 4);
+    assert_eq!(body["filled"].as_array().unwrap().len(), 0);
+
+    let (status, body) = request(
+        &state,
+        "PUT",
+        &uri,
+        Some(json!({"values": {
+            "app_id": "2021000000000000",
+            "private_key": "private-pem",
+            "public_key": "public-pem",
+            "notify_url": "https://example.com/callback",
+        }})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["configured"], true);
+    assert_eq!(body["filled"].as_array().unwrap().len(), 4);
+    assert_eq!(body["missing"].as_array().unwrap().len(), 0);
+
+    let (status, body) = request(
+        &state,
+        "PUT",
+        &format!("/api/v1/tenants/{TENANT}/billing/payments/credentials/unknown/"),
+        Some(json!({"values": {"app_id": "x"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], "PAYMENT_CHANNEL_NOT_SUPPORTED");
+
+    let (status, body) = request(
+        &state,
+        "PUT",
+        &uri,
+        Some(json!({"values": {"not_a_slot": "x"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "INVALID_CREDENTIALS");
 }

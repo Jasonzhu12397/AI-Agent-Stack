@@ -6,6 +6,7 @@ license = "Apache-2.0"
 description = "Axum edge API for AI Agent Stack"
 
 [dependencies]
+aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["clock"] }
 hex = "0.4"

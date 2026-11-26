@@ -1,11 +1,15 @@
 #![allow(clippy::result_large_err)]
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::Engine;
 use chrono::Datelike;
 use serde_json::{json, Value};
+use sha2::Digest;
 use sqlx::{AnyPool, Row};
 
 use crate::context::{authenticate, AuthError};
@@ -384,6 +388,283 @@ fn order_payload(row: &sqlx::any::AnyRow) -> Value {
         "idempotency_key": row.try_get::<String, _>("idempotency_key").unwrap_or_default(),
         "created_at": row.try_get::<String, _>("created").unwrap_or_default(),
     })
+}
+
+pub async fn get_payment_credentials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, channel)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let Some((env_names, slots)) = channel_slots(&channel) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": {"code": "PAYMENT_CHANNEL_NOT_SUPPORTED", "message": "Unsupported channel.", "details": {}}}))).into_response();
+    };
+    credentials_report(&state, &channel, &env_names, &slots).await
+}
+
+pub async fn put_payment_credentials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, channel)): Path<(String, String)>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return (StatusCode::FORBIDDEN, Json(json!({"error": {"code": "TENANT_ADMIN_REQUIRED", "message": "Tenant owner or admin role is required to change payment credentials.", "details": {}}}))).into_response();
+    }
+    let Some((env_names, slots)) = channel_slots(&channel) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error": {"code": "PAYMENT_CHANNEL_NOT_SUPPORTED", "message": "Unsupported channel.", "details": {}}}))).into_response();
+    };
+    let Json(payload) = match body {
+        Ok(body) => body,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": {"code": "INVALID_CREDENTIALS", "message": "Request body must be a JSON object.", "details": {}}}))).into_response(),
+    };
+    let Some(values) = payload.get("values").and_then(Value::as_object) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": {"code": "INVALID_CREDENTIALS", "message": "values must be a non-empty object.", "details": {}}}))).into_response();
+    };
+    if values.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": {"code": "INVALID_CREDENTIALS", "message": "values must be a non-empty object.", "details": {}}}))).into_response();
+    }
+    let unknown: Vec<&str> = values
+        .keys()
+        .filter(|slot| !slots.contains(&slot.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": {"code": "INVALID_CREDENTIALS", "message": format!("Unknown slot(s) for {channel}: {}.", unknown.join(", ")), "details": {}}}))).into_response();
+    }
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    for (slot, value) in values {
+        let text = value.as_str().map(str::trim).unwrap_or_default();
+        let result = if text.is_empty() {
+            sqlx::query("DELETE FROM core_paymentchannelsecret WHERE channel = ? AND slot = ?")
+                .bind(&channel)
+                .bind(slot)
+                .execute(pool)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        } else {
+            match seal_credential(secret_key, text) {
+                Ok(sealed) => upsert_secret(pool, &state, &channel, slot, &sealed, user.id).await,
+                Err(response) => return response,
+            }
+        };
+        if let Err(error) = result {
+            return database_error(error);
+        }
+    }
+    if let Some(database_url) = state.config.database_url.as_deref() {
+        let metadata =
+            json!({"channel": channel, "slots": values.keys().cloned().collect::<Vec<_>>()});
+        let event = crate::audit::AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "billing.payment.credentials",
+            resource_type: "payment_channel",
+            resource_id: &channel,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata,
+        };
+        if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
+            tracing::error!(%error, "rust billing api could not append the credential audit event");
+            return unavailable();
+        }
+    }
+    credentials_report(&state, &channel, &env_names, &slots).await
+}
+
+async fn credentials_report(
+    state: &AppState,
+    channel: &str,
+    env_names: &[&str],
+    slots: &[&str],
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT slot FROM core_paymentchannelsecret WHERE channel = ?",
+    )
+    .bind(channel)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut filled: Vec<String> = rows;
+    for (index, env_name) in env_names.iter().enumerate() {
+        if std::env::var(env_name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            if let Some(slot) = slots.get(index) {
+                filled.push((*slot).to_string());
+            }
+        }
+    }
+    filled.sort();
+    filled.dedup();
+    let missing: Vec<String> = slots
+        .iter()
+        .filter(|slot| !filled.iter().any(|filled_slot| filled_slot == *slot))
+        .map(|slot| (*slot).to_string())
+        .collect();
+    Json(json!({
+        "channel": channel,
+        "required": slots,
+        "slots": slots,
+        "filled": filled,
+        "missing": missing,
+        "configured": missing.is_empty(),
+    }))
+    .into_response()
+}
+
+fn channel_slots(channel: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    match channel {
+        "alipay" => Some((
+            vec![
+                "ALIPAY_APP_ID",
+                "ALIPAY_PRIVATE_KEY",
+                "ALIPAY_PUBLIC_KEY",
+                "ALIPAY_NOTIFY_URL",
+            ],
+            vec!["app_id", "private_key", "public_key", "notify_url"],
+        )),
+        "wechat" => Some((
+            vec![
+                "WECHATPAY_APPID",
+                "WECHATPAY_MCHID",
+                "WECHATPAY_API_V3_KEY",
+                "WECHATPAY_CERT_SERIAL_NO",
+                "WECHATPAY_PRIVATE_KEY",
+                "WECHATPAY_PLATFORM_CERT",
+                "WECHATPAY_NOTIFY_URL",
+            ],
+            vec![
+                "appid",
+                "mchid",
+                "api_v3_key",
+                "serial_no",
+                "private_key",
+                "platform_cert",
+                "notify_url",
+            ],
+        )),
+        _ => None,
+    }
+}
+
+async fn tenant_admin(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
+    let role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM core_tenantmembership \
+         WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ? LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(matches!(role.as_deref(), Some("owner") | Some("admin")))
+}
+
+fn seal_credential(secret_key: &str, plaintext: &str) -> Result<String, Response> {
+    let scope = b"payment-channel-secret";
+    let key_bytes = sha2::Sha256::digest(format!("payment-channel-secret:{secret_key}").as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|_| database_error("invalid payment credential key".to_string()))?;
+    let uuid = uuid::Uuid::new_v4();
+    let nonce_bytes = &uuid.as_bytes()[..12];
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: scope,
+            },
+        )
+        .map_err(|_| database_error("failed to seal the payment credential".to_string()))?;
+    let mut blob = nonce_bytes.to_vec();
+    blob.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::URL_SAFE.encode(blob))
+}
+
+async fn upsert_secret(
+    pool: &AnyPool,
+    state: &AppState,
+    channel: &str,
+    slot: &str,
+    sealed: &str,
+    user_id: i64,
+) -> Result<(), String> {
+    let now = if is_postgres(state) {
+        "NOW()".to_string()
+    } else {
+        "datetime('now')".to_string()
+    };
+    let update = format!(
+        "UPDATE core_paymentchannelsecret SET sealed_value = ?, updated_by_id = ?, updated_at = {now} \
+         WHERE channel = ? AND slot = ?"
+    );
+    let updated = sqlx::query(&update)
+        .bind(sealed)
+        .bind(user_id)
+        .bind(channel)
+        .bind(slot)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .rows_affected();
+    if updated > 0 {
+        return Ok(());
+    }
+    let insert = format!(
+        "INSERT INTO core_paymentchannelsecret (id, channel, slot, sealed_value, updated_by_id, updated_at) \
+         VALUES (?, ?, ?, ?, ?, {now})"
+    );
+    sqlx::query(&insert)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(channel)
+        .bind(slot)
+        .bind(sealed)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn ensure_budget(state: &AppState, tenant_id: &str) -> Result<(i64, i64), Response> {
