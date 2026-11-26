@@ -39,6 +39,7 @@ def _validate_scope(tenant_id, project_id, model_config):
         raise RagRuntimeError("Embedding model is disabled.")
     if "embeddings" not in (model_config.capabilities or []):
         raise RagRuntimeError("Selected model does not have the embeddings capability.")
+    return project
 
 
 def ingest_text(
@@ -54,7 +55,7 @@ def ingest_text(
     overlap=160,
     heartbeat=None,
 ):
-    _validate_scope(tenant_id, project_id, embedding_model)
+    project = _validate_scope(tenant_id, project_id, embedding_model)
     if heartbeat is not None and not callable(heartbeat):
         raise RagRuntimeError("Heartbeat must be callable when provided.")
     if not isinstance(document_id, str) or not document_id.strip():
@@ -65,7 +66,7 @@ def ingest_text(
     collection_ready = False
     collection = None
     guard = AdHocTokenGuard(
-        tenant=tenant_id,
+        tenant=project.tenant,
         scope_ref=f"rag-ingest:{document_id}",
     )
     gateway = ModelGateway(guard=guard)
@@ -129,13 +130,13 @@ def retrieve_context(
     score_threshold=None,
     metadata_filters=None,
 ):
-    _validate_scope(tenant_id, project_id, embedding_model)
+    project = _validate_scope(tenant_id, project_id, embedding_model)
     if not isinstance(query, str) or not query.strip() or len(query) > 20000:
         raise RagRuntimeError("Query must be a non-empty string up to 20,000 characters.")
     store = vector_store or QdrantVectorStore()
     query_digest = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
     guard = AdHocTokenGuard(
-        tenant=tenant_id,
+        tenant=project.tenant,
         scope_ref=f"rag-retrieve:{project_id}",
     )
     try:

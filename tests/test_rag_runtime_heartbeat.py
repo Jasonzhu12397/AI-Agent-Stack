@@ -4,6 +4,10 @@ import pytest
 from core import rag_runtime
 
 
+def _fake_scope(*_args):
+    return SimpleNamespace(tenant=SimpleNamespace(id="tenant-1"))
+
+
 class FakeGateway:
     def __init__(self, guard=None):
         self.batch_sizes = []
@@ -33,7 +37,7 @@ def test_ingestion_renews_lease_before_each_batch_and_vector_write(monkeypatch):
     heartbeats = []
     model = SimpleNamespace(model_name="test-embedding-model")
 
-    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "_validate_scope", _fake_scope)
     monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     result = rag_runtime.ingest_text(
@@ -61,7 +65,7 @@ def test_ingestion_stops_when_lease_heartbeat_fails(monkeypatch):
     store = FakeVectorStore()
     model = SimpleNamespace(model_name="test-embedding-model")
 
-    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "_validate_scope", _fake_scope)
     monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     def fail_heartbeat():
@@ -86,7 +90,7 @@ def test_ingestion_stops_when_lease_heartbeat_fails(monkeypatch):
 
 
 def test_ingestion_rejects_non_callable_heartbeat(monkeypatch):
-    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "_validate_scope", _fake_scope)
 
     with pytest.raises(rag_runtime.RagRuntimeError, match="Heartbeat must be callable"):
         rag_runtime.ingest_text(
@@ -143,7 +147,7 @@ def test_ingestion_and_retrieval_use_the_model_scoped_collection(monkeypatch):
     store = Router()
     model = SimpleNamespace(model_name="bge-m3")
 
-    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "_validate_scope", _fake_scope)
     monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: gateway)
 
     result = rag_runtime.ingest_text(

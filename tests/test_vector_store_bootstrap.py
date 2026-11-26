@@ -1,7 +1,13 @@
+from types import SimpleNamespace
+
 import pytest
 from core import rag_runtime
 from core.vector_store import QdrantVectorStore, VectorStoreError
 from rest_framework.test import APIClient
+
+
+def _fake_scope(*_args):
+    return SimpleNamespace(tenant=SimpleNamespace(id="tenant-1"))
 
 
 def _store(monkeypatch):
@@ -109,7 +115,7 @@ def test_ingestion_creates_the_collection_once(monkeypatch):
             return {"upserted": len(records)}
 
     store = FakeStore()
-    monkeypatch.setattr(rag_runtime, "_validate_scope", lambda *args: None)
+    monkeypatch.setattr(rag_runtime, "_validate_scope", _fake_scope)
     monkeypatch.setattr(rag_runtime, "ModelGateway", lambda guard=None: FakeGateway())
 
     result = rag_runtime.ingest_text(
