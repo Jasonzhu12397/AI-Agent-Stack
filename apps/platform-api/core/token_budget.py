@@ -146,7 +146,7 @@ def reserve_tenant_tokens(
     lease_expires_at = task.lease_expires_at
     if lease_expires_at is not None and lease_expires_at <= now:
         raise ValueError("Cannot reserve tokens for an expired task lease")
-    reservation_expires_at = lease_expires_at or now + timedelta(minutes=5)
+    reservation_expires_at = max(lease_expires_at or now, now + timedelta(minutes=10))
     budget, _ = TenantTokenBudget.objects.select_for_update().get_or_create(
         tenant_id=task.tenant_id,
     )
