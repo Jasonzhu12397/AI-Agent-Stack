@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::ws::{CloseCode, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -60,7 +60,7 @@ pub async fn forward(
         .upstream_websocket_url(path_and_query.as_deref())
     {
         Ok(url) => url,
-        Err(error) => {
+        Err(_) => {
             tracing::warn!("rust api edge could not derive the websocket upstream");
             return (
                 StatusCode::BAD_GATEWAY,
@@ -106,7 +106,7 @@ pub async fn forward(
 async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap) {
     let upstream_request = match build_upstream_request(&target, &headers) {
         Ok(request) => request,
-        Err(error) => {
+        Err(_) => {
             tracing::warn!("rust api edge could not build the websocket handshake");
             close_client(client, 1011, "invalid websocket upstream request").await;
             return;
@@ -129,7 +129,7 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap) {
             );
             socket
         }
-        Ok(Err(error)) => {
+        Ok(Err(_)) => {
             tracing::warn!("rust api edge could not reach the websocket upstream");
             close_client(client, 1011, "websocket upstream unavailable").await;
             return;
@@ -151,7 +151,7 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap) {
         }
     };
 
-    if let Err(error) = result {
+    if let Err(_error) = result {
         tracing::debug!("websocket relay finished with an error");
         let _ = client_tx
             .send(Message::Close(Some(CloseFrame {
