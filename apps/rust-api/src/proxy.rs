@@ -343,3 +343,24 @@ fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
         headers.remove(name);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removes_connection_nominated_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("connection", HeaderValue::from_static("keep-alive, x-private-hop"));
+        headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
+        headers.insert("x-private-hop", HeaderValue::from_static("internal"));
+        headers.insert("x-forwarded-for", HeaderValue::from_static("192.0.2.10"));
+
+        strip_hop_by_hop_headers(&mut headers);
+
+        assert!(!headers.contains_key("connection"));
+        assert!(!headers.contains_key("keep-alive"));
+        assert!(!headers.contains_key("x-private-hop"));
+        assert_eq!(headers.get("x-forwarded-for").unwrap(), "192.0.2.10");
+    }
+}
