@@ -203,6 +203,18 @@ pub fn router(state: AppState) -> Router {
                 get(crate::agent_api::get_agent_run),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/",
+                get(crate::plugin_api::list_plugins),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-plugin-installations/",
+                get(crate::plugin_api::list_installations),
+            )
+            .route(
+                "/api/v1/agent-plugin-installations/{installation_id}/status/",
+                post(crate::plugin_api::update_installation_status),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/knowledge-bases/",
                 get(crate::knowledge_api::list_knowledge_bases)
                     .post(crate::knowledge_api::create_knowledge_base),

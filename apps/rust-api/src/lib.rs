@@ -8,6 +8,7 @@ pub mod identity;
 pub mod knowledge_api;
 pub mod model_api;
 pub mod native;
+pub mod plugin_api;
 pub mod proxy;
 pub mod tasks;
 pub mod tenancy;
