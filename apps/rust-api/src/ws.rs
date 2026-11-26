@@ -104,7 +104,7 @@ pub async fn forward(
 }
 
 async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer: SocketAddr) {
-    let upstream_request = match build_upstream_request(&target, &headers, peer) {
+    let upstream_request = match build_upstream_request(&target, &headers) {
         Ok(request) => request,
         Err(error) => {
             tracing::warn!(%error, "rust api edge could not build the websocket handshake");
@@ -251,7 +251,6 @@ async fn upstream_to_client(
 fn build_upstream_request(
     target: &reqwest::Url,
     headers: &HeaderMap,
-    peer: SocketAddr,
 ) -> Result<Request<()>, String> {
     let mut builder = Request::builder()
         .method("GET")
@@ -271,13 +270,6 @@ fn build_upstream_request(
     }
     if let Some(host) = headers.get("host") {
         builder = builder.header("host", host.clone());
-    }
-    let forwarded_for = match headers.get("x-forwarded-for") {
-        Some(existing) => format!("{}, {}", existing.to_str().unwrap_or_default(), peer.ip()),
-        None => peer.ip().to_string(),
-    };
-    if let Ok(value) = HeaderValue::from_str(&forwarded_for) {
-        builder = builder.header(HeaderName::from_static("x-forwarded-for"), value);
     }
     builder
         .body(())
