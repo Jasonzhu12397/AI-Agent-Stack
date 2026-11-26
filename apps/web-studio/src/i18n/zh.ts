@@ -1436,6 +1436,8 @@ export const zhCN: Record<string, string> = {
     "可选回滚修订号；留空使用最近一次捕获的修订",
   "Upgrade dry-runs the bundle, writes a revision ConfigMap, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created.":
     "升级会先服务端 dry-run，写入修订 ConfigMap，再应用新对象并等待工作负载就绪。回滚会重放捕获的对象，并删除升级新增的对象。",
+  "Upgrade dry-runs the bundle, writes an immutable revision, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created. Enter an older captured revision to roll back further.":
+    "升级会先服务端 dry-run，写入不可变修订，再应用新对象并等待工作负载就绪。回滚会重放捕获的对象，并删除升级新增的对象。填写更早的修订号可以继续回滚到更早版本。",
   "A target version and at least one YAML document are required.":
     "必须填写目标版本和至少一个 YAML 文档。",
   "Unable to request the network plugin change.":

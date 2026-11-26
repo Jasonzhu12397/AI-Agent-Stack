@@ -221,3 +221,53 @@ def test_a_secret_inside_the_bundle_is_rejected():
         execute_network_upgrade(payload, kubectl, cluster_name="cluster-1")
     assert caught.value.code == "NETWORK_UPGRADE_BUNDLE_FORBIDDEN_KIND"
     assert kubectl.mutations == 0
+
+
+def test_each_upgrade_keeps_an_immutable_revision_for_older_rollback():
+    kubectl = FakeKubectl()
+    first = execute_network_upgrade(
+        _upgrade_payload("execute"), kubectl, cluster_name="cluster-1"
+    )
+    first_revision = first["revision"]
+    first_config = first["revision_config_map"]
+    assert first_config in kubectl.configmaps
+
+    second_payload = {
+        **_upgrade_payload("execute"),
+        "target_version": "1.2.0",
+        "documents": yaml.safe_dump_all([_deployment("1.2.0")]),
+    }
+    second = execute_network_upgrade(second_payload, kubectl, cluster_name="cluster-1")
+    assert second["revision"] != first_revision
+    assert kubectl.configmaps["ai-agent-stack-netrev-calico"]["data"][
+        "latest_revision"
+    ] == second["revision"]
+    assert first_config in kubectl.configmaps
+
+    rolled_back = execute_network_rollback(
+        {**_rollback_payload(), "revision": first_revision},
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    assert rolled_back["revision"] == first_revision
+    current = kubectl.objects[("Deployment", "default", "calico-node")]
+    assert current["metadata"]["annotations"]["ai-agent-stack.io/network-version"] == "1.0.0"
+
+
+def test_revision_collision_gets_a_unique_history_name(monkeypatch):
+    kubectl = FakeKubectl()
+    monkeypatch.setattr(
+        "apps.target_agent.network_upgrade.time.strftime",
+        lambda *_args: "20261126T000000Z",
+    )
+    first = execute_network_upgrade(
+        _upgrade_payload("execute"), kubectl, cluster_name="cluster-1"
+    )
+    second = execute_network_upgrade(
+        {**_upgrade_payload("execute"), "target_version": "1.2.0"},
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    assert first["revision"] == "20261126T000000Z"
+    assert second["revision"] == "20261126T000000Z-2"
+    assert second["revision_config_map"].endswith("20261126t000000z-2")

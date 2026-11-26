@@ -2489,7 +2489,7 @@ onUnmounted(() => {
       />
       <el-input v-model="networkRevision" size="small" placeholder="Optional rollback revision; blank uses the latest captured revision" style="margin-top: 10px" />
       <small class="fleet-version-current">
-        Upgrade dry-runs the bundle, writes a revision ConfigMap, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created.
+        Upgrade dry-runs the bundle, writes an immutable revision, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created. Enter an older captured revision to roll back further.
       </small>
       <small v-if="networkUpgradeMessage" class="fleet-version-message">{{ networkUpgradeMessage }}</small>
       <template #footer>

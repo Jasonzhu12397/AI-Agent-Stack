@@ -315,21 +315,33 @@ def _from_version(existing: list[dict[str, Any] | None]) -> str | None:
 
 
 def _revision_name(plugin: str) -> str:
+    """The mutable pointer that always names the latest captured revision."""
+
     return f"ai-agent-stack-netrev-{plugin}"
 
 
-def _revision_manifest(
+def _history_name(plugin: str, revision: str) -> str:
+    """An immutable ConfigMap that holds exactly one captured revision."""
+
+    return f"ai-agent-stack-netrev-{plugin}-{revision.lower()}"
+
+
+def _snapshot_manifest(
     request: dict[str, Any],
     *,
+    name: str,
     revision: str,
-    previous_version: str | None,
-    snapshot: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    latest_revision: str | None = None,
 ) -> dict[str, Any]:
+    data = {"snapshot": yaml.safe_dump(snapshot, sort_keys=False)}
+    if latest_revision is not None:
+        data["latest_revision"] = latest_revision
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": {
-            "name": _revision_name(request["plugin"]),
+            "name": name,
             "namespace": request["target_namespace"],
             "labels": {MANAGED_BY_LABEL: "target-agent"},
             "annotations": {
@@ -338,23 +350,27 @@ def _revision_manifest(
                 "ai-agent-stack.io/network-revision": revision,
             },
         },
-        "data": {"snapshot": yaml.safe_dump(snapshot, sort_keys=False)},
+        "data": data,
     }
 
 
-def _read_revision(runner, request: dict[str, Any], lease_lost_event) -> dict[str, Any]:
-    document = _get(
+def _unique_revision(runner, request: dict[str, Any], lease_lost_event) -> str:
+    base = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    candidate = base
+    suffix = 1
+    while _get(
         runner,
         "ConfigMap",
-        _revision_name(request["plugin"]),
+        _history_name(request["plugin"], candidate),
         request["target_namespace"],
         lease_lost_event,
-    )
-    if document is None:
-        raise NetworkUpgradeExecutionError(
-            "NETWORK_UPGRADE_REVISION_NOT_FOUND",
-            "No captured revision exists for this network plugin.",
-        )
+    ) is not None:
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return candidate
+
+
+def _snapshot_from(document: dict[str, Any], requested: str | None) -> dict[str, Any]:
     data = document.get("data")
     raw = data.get("snapshot") if isinstance(data, dict) else None
     if not isinstance(raw, str):
@@ -376,7 +392,6 @@ def _read_revision(runner, request: dict[str, Any], lease_lost_event) -> dict[st
         raise NetworkUpgradeExecutionError(
             "NETWORK_UPGRADE_REVISION_INVALID", "The revision snapshot has no revision id."
         )
-    requested = request.get("revision")
     if requested and requested != revision:
         raise NetworkUpgradeExecutionError(
             "NETWORK_UPGRADE_REVISION_MISMATCH",
@@ -388,6 +403,33 @@ def _read_revision(runner, request: dict[str, Any], lease_lost_event) -> dict[st
             "NETWORK_UPGRADE_REVISION_INVALID", "The revision snapshot has no objects."
         )
     return snapshot
+
+
+def _read_revision(runner, request: dict[str, Any], lease_lost_event) -> dict[str, Any]:
+    requested = request.get("revision")
+    if requested:
+        history = _get(
+            runner,
+            "ConfigMap",
+            _history_name(request["plugin"], requested),
+            request["target_namespace"],
+            lease_lost_event,
+        )
+        if history is not None:
+            return _snapshot_from(history, requested)
+    document = _get(
+        runner,
+        "ConfigMap",
+        _revision_name(request["plugin"]),
+        request["target_namespace"],
+        lease_lost_event,
+    )
+    if document is None:
+        raise NetworkUpgradeExecutionError(
+            "NETWORK_UPGRADE_REVISION_NOT_FOUND",
+            "No captured revision exists for this network plugin.",
+        )
+    return _snapshot_from(document, requested)
 
 
 def execute_network_upgrade(
@@ -429,7 +471,7 @@ def execute_network_upgrade(
     if request["execution_mode"] == "simulation":
         return plan
     _apply(runner, docs, lease_lost_event, dry_run=True)
-    revision = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    revision = _unique_revision(runner, request, lease_lost_event)
     snapshot = {
         "revision": revision,
         "plugin": request["plugin"],
@@ -446,14 +488,21 @@ def execute_network_upgrade(
             for document, current in zip(docs, existing, strict=True)
         ],
     }
-    revision_manifest = _revision_manifest(
+    history_manifest = _snapshot_manifest(
         request,
+        name=_history_name(request["plugin"], revision),
         revision=revision,
-        previous_version=previous_version,
-        snapshot=snapshot["objects"],
+        snapshot=snapshot,
     )
-    revision_manifest["data"]["snapshot"] = yaml.safe_dump(snapshot, sort_keys=False)
-    _apply(runner, [revision_manifest], lease_lost_event, dry_run=False)
+    pointer_manifest = _snapshot_manifest(
+        request,
+        name=_revision_name(request["plugin"]),
+        revision=revision,
+        snapshot=snapshot,
+        latest_revision=revision,
+    )
+    _apply(runner, [history_manifest], lease_lost_event, dry_run=False)
+    _apply(runner, [pointer_manifest], lease_lost_event, dry_run=False)
     _apply(runner, docs, lease_lost_event, dry_run=False)
     _wait_workloads(runner, docs, lease_lost_event)
     return {
@@ -463,6 +512,7 @@ def execute_network_upgrade(
         "upgrade_performed": True,
         "side_effects": True,
         "revision": revision,
+        "revision_config_map": _history_name(request["plugin"], revision),
         "ready_workloads": [
             {"kind": document["kind"], "name": document["metadata"]["name"]}
             for document in docs

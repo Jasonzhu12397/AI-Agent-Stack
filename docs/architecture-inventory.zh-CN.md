@@ -213,7 +213,7 @@
 - 项目级实时事件：Task / AuditEvent 提交后 `pg_notify`，Channels WebSocket 与 SSE 端点均消费同一事件源；前端优先 WebSocket、SSE 回退；SQLite 下为有界轮询，PostgreSQL 下为 LISTEN 唤醒。
 - Day-2 工作节点扩缩容：`cluster.scale` 校验集群身份与 MachineDeployment 归属，扩容时可用 BareMetalHost 容量不足会在修改前阻断，只 patch `spec.replicas`，并等待副本数、就绪副本数与 observedGeneration 收敛。模拟模式无副作用；执行模式必须审批。舰队控制台已提供同一命令入口。
 - Day-2 工作节点修复：`cluster.worker.repair` 检查目标集群自有 MachineDeployment 下的工作节点 Machine，选择一个 `NodeHealthy` 条件为假的节点，只删除该 Machine，由 CAPI 在其回收的 BareMetalHost 上重建副本。指名健康节点会被拒绝，模拟模式不删除任何对象，执行模式必须审批。舰队控制台已提供同一命令入口。
-- 网络插件升级与回滚：`target.network.upgrade` 解析一个或多个 Kubernetes YAML 文档，拒绝 Secret，先对整个 bundle 做服务端 dry-run，再把所有已存在对象和原本不存在的对象写入修订 ConfigMap，随后应用新 bundle，并等待 Deployment/DaemonSet/StatefulSet 就绪。`target.network.rollback` 读取该修订，重放捕获对象并删除升级新增对象。两者只允许 Target Agent、必须审批，并已在舰队控制台提供入口。
+- 网络插件升级与回滚：`target.network.upgrade` 解析一个或多个 Kubernetes YAML 文档，拒绝 Secret，先对整个 bundle 做服务端 dry-run，再把所有已存在对象和原本不存在的对象写入每个修订独立的不可变 ConfigMap，并更新最新修订指针，随后应用新 bundle，等待 Deployment/DaemonSet/StatefulSet 就绪。`target.network.rollback` 读取指定修订（省略时读取最新修订），重放捕获对象并删除升级新增对象；更早的修订仍可继续选择回滚。两者只允许 Target Agent、必须审批，并已在舰队控制台提供入口。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 

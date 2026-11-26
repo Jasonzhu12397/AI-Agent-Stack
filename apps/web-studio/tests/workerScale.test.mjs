@@ -34,5 +34,5 @@ test("the network plugin dialog submits real upgrade and rollback commands", () 
   assert.match(component, /target\.network\.rollback/);
   assert.match(component, /documents: networkDocuments\.value/);
   assert.match(component, /target_version: networkVersion\.value\.trim\(\)/);
-  assert.match(component, /dry-runs the bundle, writes a revision ConfigMap/);
+  assert.match(component, /writes an immutable revision/);
 });

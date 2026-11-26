@@ -18,6 +18,7 @@ EXECUTION_MODES = ("simulation", "execute")
 MAX_DOCUMENT_CHARS = 60000
 _NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 _VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
+_REVISION = re.compile(r"[0-9]{8}T[0-9]{6}Z(?:-[0-9]+)?")
 
 
 class NetworkUpgradeError(ValueError):
@@ -95,9 +96,12 @@ def validate_upgrade_request(payload: Any, *, cluster_name: str | None) -> dict[
 def validate_rollback_request(payload: Any, *, cluster_name: str | None) -> dict[str, Any]:
     request = _common(payload, cluster_name)
     revision = payload.get("revision")
-    if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+    if revision is not None and (
+        not isinstance(revision, str) or not _REVISION.fullmatch(revision)
+    ):
         raise NetworkUpgradeError(
-            "NETWORK_UPGRADE_REQUEST_INVALID", "revision must be a non-empty string."
+            "NETWORK_UPGRADE_REQUEST_INVALID",
+            "revision must be a captured id such as 20261126T000000Z.",
         )
     return {**request, "revision": revision}
 
