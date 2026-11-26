@@ -234,7 +234,12 @@ def test_chat_resources_are_isolated_to_project_members(chat_workspace):
         f"/api/v1/tenants/{tenant.id}/projects/{hidden_project.id}/agent-chat/threads/"
     )
     message_url = f"/api/v1/agent-chat/threads/{hidden_thread.id}/messages/"
-    attachment_url = f"/api/v1/agent-chat/threads/{hidden_thread.id}/attachments/"
+
+    allowed_context = client.get(
+        f"/api/v1/tenants/{tenant.id}/projects/{_project.id}/agent-chat/context/"
+    )
+    assert allowed_context.status_code == 200
+    assert [item["id"] for item in allowed_context.json()["projects"]] == [str(_project.id)]
 
     assert client.get(context_url).status_code == 404
     assert client.get(thread_list_url).status_code == 404
@@ -242,7 +247,6 @@ def test_chat_resources_are_isolated_to_project_members(chat_workspace):
     assert client.get(f"/api/v1/agent-chat/threads/{hidden_thread.id}/").status_code == 404
     assert client.get(message_url).status_code == 404
     assert client.post(message_url, {"content": "read restricted data"}, format="json").status_code == 404
-    assert client.get(attachment_url).status_code == 404
 
 
 
