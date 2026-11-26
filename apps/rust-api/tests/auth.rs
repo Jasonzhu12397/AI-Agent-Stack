@@ -220,7 +220,6 @@ async fn rejects_login_without_csrf_and_appends_denied_events() {
     let _ = std::fs::remove_file(path);
 }
 
-
 #[tokio::test]
 async fn does_not_record_a_successful_login_when_session_persistence_fails() {
     let (state, path) = state().await;
