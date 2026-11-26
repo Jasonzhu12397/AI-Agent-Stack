@@ -106,7 +106,7 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
     let upstream_request = match build_upstream_request(&target, &headers, peer) {
         Ok(request) => request,
         Err(error) => {
-            tracing::warn!(%target, %error, "rust api edge could not build the websocket handshake");
+            tracing::warn!(%error, "rust api edge could not build the websocket handshake");
             close_client(client, 1011, "invalid websocket upstream request").await;
             return;
         }
@@ -124,16 +124,16 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
     .await;
     let upstream = match upstream_result {
         Ok(Ok((socket, response))) => {
-            tracing::info!(%target, status = response.status().as_u16(), "rust api edge upgraded the websocket upstream");
+            tracing::info!(status = response.status().as_u16(), "rust api edge upgraded the websocket upstream");
             socket
         }
         Ok(Err(error)) => {
-            tracing::warn!(%target, %error, "rust api edge could not reach the websocket upstream");
+            tracing::warn!(%error, "rust api edge could not reach the websocket upstream");
             close_client(client, 1011, "websocket upstream unavailable").await;
             return;
         }
         Err(_) => {
-            tracing::warn!(%target, "rust api edge websocket upstream handshake timed out");
+            tracing::warn!("rust api edge websocket upstream handshake timed out");
             close_client(client, 1011, "websocket upstream timed out").await;
             return;
         }
@@ -150,7 +150,7 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
     };
 
     if let Err(error) = result {
-        tracing::debug!(%target, %error, "websocket relay finished with an error");
+        tracing::debug!(%error, "websocket relay finished with an error");
         let _ = client_tx
             .send(Message::Close(Some(CloseFrame {
                 code: CloseCode::from(1011u16),
