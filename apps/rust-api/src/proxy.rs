@@ -258,11 +258,11 @@ async fn forward(
         &target,
     );
 
+    let mut sanitized_headers = incoming_headers.clone();
+    strip_hop_by_hop_headers(&mut sanitized_headers);
+
     let mut outbound = HeaderMap::new();
-    for (name, value) in incoming_headers.iter() {
-        if HOP_BY_HOP.contains(&name.as_str()) {
-            continue;
-        }
+    for (name, value) in sanitized_headers.iter() {
         outbound.append(name, value.clone());
     }
     if !outbound.contains_key("x-request-id") {
@@ -315,16 +315,31 @@ async fn forward(
     };
 
     let status = upstream_response.status();
-    let headers = upstream_response.headers().clone();
+    let mut headers = upstream_response.headers().clone();
+    strip_hop_by_hop_headers(&mut headers);
     let mut response = Response::new(Body::from_stream(upstream_response.bytes_stream().map_err(
         |error| std::io::Error::other(format!("upstream response stream failed: {error}")),
     )));
     *response.status_mut() = status;
     for (name, value) in headers.iter() {
-        if HOP_BY_HOP.contains(&name.as_str()) {
-            continue;
-        }
         response.headers_mut().append(name, value.clone());
     }
     response
+}
+
+fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
+    let connection_tokens: Vec<HeaderName> = headers
+        .get_all("connection")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|token| HeaderName::from_bytes(token.trim().as_bytes()).ok())
+        .collect();
+
+    for name in HOP_BY_HOP {
+        headers.remove(*name);
+    }
+    for name in connection_tokens {
+        headers.remove(name);
+    }
 }
