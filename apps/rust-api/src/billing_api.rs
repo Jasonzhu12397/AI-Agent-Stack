@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::Datelike;
 use serde_json::{json, Value};
 use sqlx::{AnyPool, Row};
 
@@ -127,6 +128,347 @@ pub async fn get_subscription(
         }
     };
     Json(json!({"subscription": subscription, "source": "authoritative"})).into_response()
+}
+
+pub async fn get_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let budget = match ensure_budget(&state, &tenant_id).await {
+        Ok(budget) => budget,
+        Err(response) => return response,
+    };
+    let now = chrono::Utc::now();
+    let day_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let today = now.date_naive();
+    let month_start = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let day_end = day_start + chrono::Duration::days(1);
+    let month_end = if month_start.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(month_start.year() + 1, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    } else {
+        chrono::NaiveDate::from_ymd_opt(month_start.year(), month_start.month() + 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    };
+    let daily_used = match period_usage(&state, &tenant_id, day_start, now).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let monthly_used = match period_usage(&state, &tenant_id, month_start, now).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let history = match usage_history(&state, &tenant_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let grants = match grant_history(&state, &tenant_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let daily_limit = budget.0;
+    let monthly_limit = budget.1;
+    Json(json!({
+        "daily_limit": daily_limit,
+        "monthly_limit": monthly_limit,
+        "daily_used": daily_used,
+        "monthly_used": monthly_used,
+        "remaining_daily": (daily_limit - daily_used).max(0),
+        "remaining_monthly": (monthly_limit - monthly_used).max(0),
+        "reset_at": rfc3339(day_end),
+        "monthly_reset_at": rfc3339(month_end),
+        "period_start": rfc3339(day_start),
+        "period_end": rfc3339(day_end),
+        "limits_source": "tenant_budget",
+        "history": history,
+        "grants": grants,
+    }))
+    .into_response()
+}
+
+pub async fn get_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let mut channels = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (channel, env_names, slots) in [
+        (
+            "alipay",
+            vec![
+                "ALIPAY_APP_ID",
+                "ALIPAY_PRIVATE_KEY",
+                "ALIPAY_PUBLIC_KEY",
+                "ALIPAY_NOTIFY_URL",
+            ],
+            vec!["app_id", "private_key", "public_key", "notify_url"],
+        ),
+        (
+            "wechat",
+            vec![
+                "WECHATPAY_APPID",
+                "WECHATPAY_MCHID",
+                "WECHATPAY_API_V3_KEY",
+                "WECHATPAY_CERT_SERIAL_NO",
+                "WECHATPAY_PRIVATE_KEY",
+                "WECHATPAY_PLATFORM_CERT",
+                "WECHATPAY_NOTIFY_URL",
+            ],
+            vec![
+                "appid",
+                "mchid",
+                "api_v3_key",
+                "serial_no",
+                "private_key",
+                "platform_cert",
+                "notify_url",
+            ],
+        ),
+    ] {
+        let missing = missing_slots(&state, channel, &env_names, &slots).await;
+        if missing.is_empty() {
+            channels.push(channel);
+        }
+        diagnostics.push(json!({
+            "channel": channel,
+            "configured": missing.is_empty(),
+            "missing": missing,
+            "required": slots,
+        }));
+    }
+    channels.sort();
+    let available = !channels.is_empty();
+    Json(json!({
+        "payment": {
+            "available": available,
+            "channels": channels,
+            "reason_code": if available { Value::Null } else { Value::String("PAYMENT_PROVIDER_NOT_CONFIGURED".into()) },
+            "diagnostics": diagnostics,
+        }
+    }))
+    .into_response()
+}
+
+async fn ensure_budget(state: &AppState, tenant_id: &str) -> Result<(i64, i64), Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let existing = sqlx::query(
+        "SELECT daily_limit, monthly_limit FROM core_tenanttokenbudget \
+         WHERE CAST(tenant_id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?;
+    if let Some(row) = existing {
+        return Ok((
+            row.try_get::<i64, _>("daily_limit").unwrap_or(100_000),
+            row.try_get::<i64, _>("monthly_limit").unwrap_or(1_000_000),
+        ));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = if is_postgres(state) {
+        "NOW()".to_string()
+    } else {
+        "datetime('now')".to_string()
+    };
+    let sql = format!(
+        "INSERT INTO core_tenanttokenbudget (id, tenant_id, daily_limit, monthly_limit, created_at, updated_at) \
+         VALUES (?, ?, 100000, 1000000, {now}, {now})"
+    );
+    sqlx::query(&sql)
+        .bind(id)
+        .bind(tenant_id)
+        .execute(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+    Ok((100_000, 1_000_000))
+}
+
+async fn period_usage(
+    state: &AppState,
+    tenant_id: &str,
+    start: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<i64, Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let start_text = format!("{}", start.format("%Y-%m-%d %H:%M:%S"));
+    let now_text = format!("{}", now.format("%Y-%m-%d %H:%M:%S"));
+    let settled = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT SUM(consumed_tokens) FROM core_tenanttokenusage \
+         WHERE CAST(tenant_id AS TEXT) = ? AND status = 'settled' \
+         AND settled_at >= ? AND settled_at <= ?",
+    )
+    .bind(tenant_id)
+    .bind(&start_text)
+    .bind(&now_text)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?
+    .unwrap_or(0);
+    let reserved = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT SUM(reserved_tokens) FROM core_tenanttokenusage \
+         WHERE CAST(tenant_id AS TEXT) = ? AND status = 'reserved' AND expires_at > ?",
+    )
+    .bind(tenant_id)
+    .bind(&now_text)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?
+    .unwrap_or(0);
+    Ok(settled + reserved)
+}
+
+async fn usage_history(state: &AppState, tenant_id: &str) -> Result<Value, Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let period_expr = if is_postgres(state) {
+        "to_char(settled_at AT TIME ZONE 'UTC', 'YYYY-MM')"
+    } else {
+        "strftime('%Y-%m', settled_at)"
+    };
+    let source_expr = "CASE WHEN scope_ref IS NOT NULL AND scope_ref <> '' THEN scope_ref \
+         WHEN agent_run_id IS NOT NULL THEN 'agent' ELSE 'workflow' END";
+    let sql = format!(
+        "SELECT {period_expr} AS period, {source_expr} AS source, \
+         SUM(consumed_tokens) AS consumed_tokens FROM core_tenanttokenusage \
+         WHERE CAST(tenant_id AS TEXT) = ? AND status = 'settled' AND settled_at IS NOT NULL \
+         GROUP BY period, source ORDER BY period DESC, source ASC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+    Ok(Value::Array(
+        rows.iter()
+            .map(|row| {
+                json!({
+                    "period": row.try_get::<String, _>("period").unwrap_or_default(),
+                    "source": row.try_get::<String, _>("source").unwrap_or_default(),
+                    "consumed_tokens": row.try_get::<i64, _>("consumed_tokens").unwrap_or(0),
+                })
+            })
+            .collect(),
+    ))
+}
+
+async fn grant_history(state: &AppState, tenant_id: &str) -> Result<Value, Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let expires = timestamp(state, "grant", "expires_at");
+    let created = timestamp(state, "grant", "created_at");
+    let sql = format!(
+        "SELECT CAST(grant.id AS TEXT) AS id, CAST(grant.order_id AS TEXT) AS order_id, \
+         grant.period, grant.tokens, {expires} AS expires, grant.reason, {created} AS created \
+         FROM core_entitlementgrant grant WHERE CAST(grant.tenant_id AS TEXT) = ? \
+         ORDER BY grant.created_at DESC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+    Ok(Value::Array(
+        rows.iter()
+            .map(|row| {
+                json!({
+                    "id": row.try_get::<String, _>("id").unwrap_or_default(),
+                    "order": row.try_get::<String, _>("order_id").unwrap_or_default(),
+                    "period": row.try_get::<String, _>("period").unwrap_or_default(),
+                    "tokens": row.try_get::<i64, _>("tokens").unwrap_or(0),
+                    "expires_at": row.try_get::<Option<String>, _>("expires").ok().flatten(),
+                    "reason": row.try_get::<String, _>("reason").unwrap_or_default(),
+                    "created_at": row.try_get::<String, _>("created").unwrap_or_default(),
+                })
+            })
+            .collect(),
+    ))
+}
+
+async fn missing_slots(
+    state: &AppState,
+    channel: &str,
+    env_names: &[&str],
+    slots: &[&str],
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        let env_name = env_names.get(index).copied().unwrap_or_default();
+        if stored_slot(state, channel, slot).await {
+            continue;
+        }
+        if std::env::var(env_name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        missing.push((*slot).to_string());
+    }
+    missing
+}
+
+async fn stored_slot(state: &AppState, channel: &str, slot: &str) -> bool {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return false;
+    };
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_paymentchannelsecret WHERE channel = ? AND slot = ?",
+    )
+    .bind(channel)
+    .bind(slot)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    count > 0
+}
+
+fn rfc3339(value: chrono::DateTime<chrono::Utc>) -> String {
+    value.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
 async fn payment_providers(state: &AppState) -> Vec<String> {

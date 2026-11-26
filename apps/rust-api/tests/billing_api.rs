@@ -26,6 +26,9 @@ async fn state() -> AppState {
         "CREATE TABLE core_plan (id TEXT PRIMARY KEY, code VARCHAR(64) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, interval VARCHAR(16) NOT NULL, price_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, token_quota_daily INTEGER NOT NULL, token_quota_monthly INTEGER NOT NULL, features TEXT NOT NULL, region_scope VARCHAR(16) NOT NULL, active BOOLEAN NOT NULL)",
         "CREATE TABLE core_subscription (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, started_at DATETIME, current_period_start DATETIME, current_period_end DATETIME, cancel_at_period_end BOOLEAN NOT NULL, renewal_mode VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_paymentchannelsecret (id TEXT PRIMARY KEY, channel VARCHAR(32) NOT NULL, slot VARCHAR(64) NOT NULL)",
+        "CREATE TABLE core_tenanttokenbudget (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL UNIQUE, daily_limit INTEGER NOT NULL, monthly_limit INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_tenanttokenusage (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, reserved_tokens INTEGER NOT NULL, consumed_tokens INTEGER NOT NULL, expires_at DATETIME NOT NULL, settled_at DATETIME, scope_ref TEXT, agent_run_id TEXT, workflow_run_id TEXT)",
+        "CREATE TABLE core_entitlementgrant (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, order_id TEXT NOT NULL, subscription_id TEXT, period VARCHAR(16) NOT NULL, tokens INTEGER NOT NULL, expires_at DATETIME, reason TEXT NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -40,6 +43,14 @@ async fn state() -> AppState {
     sqlx::query("INSERT INTO core_plan (id, code, name, description, interval, price_cents, currency, token_quota_daily, token_quota_monthly, features, region_scope, active) VALUES ('plan-2', 'archived', 'Archived', 'Old plan', 'monthly', 19900, 'CNY', 1, 1, '[]', 'domestic', 0)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_subscription (id, tenant_id, plan_id, status, started_at, current_period_start, current_period_end, cancel_at_period_end, renewal_mode, created_at, updated_at) VALUES ('sub-1', ?, 'plan-1', 'active', datetime('now'), datetime('now'), datetime('now', '+30 days'), 0, 'manual', datetime('now'), datetime('now'))")
+        .bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_tenanttokenbudget (id, tenant_id, daily_limit, monthly_limit, created_at, updated_at) VALUES ('budget-1', ?, 1000, 5000, datetime('now'), datetime('now'))")
+        .bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_tenanttokenusage (id, tenant_id, status, reserved_tokens, consumed_tokens, expires_at, settled_at, scope_ref) VALUES ('usage-1', ?, 'settled', 0, 18, datetime('now'), datetime('now'), 'agent-chat:thread-1')")
+        .bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_tenanttokenusage (id, tenant_id, status, reserved_tokens, consumed_tokens, expires_at, settled_at, scope_ref) VALUES ('usage-2', ?, 'reserved', 7, 0, datetime('now', '+1 hour'), NULL, NULL)")
+        .bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_entitlementgrant (id, tenant_id, order_id, period, tokens, reason, created_at) VALUES ('grant-1', ?, 'order-1', 'monthly', 500, 'purchase', datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
     let data = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
@@ -99,4 +110,38 @@ async fn lists_purchasable_plans_and_authoritative_subscription() {
     assert_eq!(body["subscription"]["status"], "active");
     assert_eq!(body["subscription"]["cancel_at_period_end"], false);
     assert!(body["subscription"]["current_period_end"].is_string());
+}
+
+#[tokio::test]
+async fn reports_usage_ledger_grants_and_payment_capabilities() {
+    let state = state().await;
+    let (status, body) = call(&state, &format!("/api/v1/tenants/{TENANT}/billing/usage/")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["daily_limit"], 1000);
+    assert_eq!(body["monthly_limit"], 5000);
+    assert_eq!(body["daily_used"], 25);
+    assert_eq!(body["monthly_used"], 25);
+    assert_eq!(body["remaining_daily"], 975);
+    assert_eq!(body["remaining_monthly"], 4975);
+    assert_eq!(body["limits_source"], "tenant_budget");
+    assert_eq!(body["history"][0]["source"], "agent-chat:thread-1");
+    assert_eq!(body["history"][0]["consumed_tokens"], 18);
+    assert_eq!(body["grants"][0]["id"], "grant-1");
+    assert_eq!(body["grants"][0]["tokens"], 500);
+
+    let (status, body) = call(
+        &state,
+        &format!("/api/v1/tenants/{TENANT}/billing/capabilities/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["payment"]["available"], false);
+    assert_eq!(
+        body["payment"]["reason_code"],
+        "PAYMENT_PROVIDER_NOT_CONFIGURED"
+    );
+    let diagnostics = body["payment"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0]["channel"], "alipay");
+    assert_eq!(diagnostics[0]["missing"].as_array().unwrap().len(), 4);
 }

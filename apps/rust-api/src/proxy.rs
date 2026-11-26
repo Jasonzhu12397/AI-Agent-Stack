@@ -212,6 +212,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::billing_api::get_subscription),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/billing/usage/",
+                get(crate::billing_api::get_usage),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/capabilities/",
+                get(crate::billing_api::get_capabilities),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-chat/threads/",
                 get(crate::chat_api::list_threads).post(crate::chat_api::create_thread),
             )
