@@ -1422,4 +1422,9 @@ export const zhCN: Record<string, string> = {
     "审批通过后才修改 spec.replicas；扩容还需要足够的可用 BareMetalHost。",
   "Execute waits for status.replicas, ready replicas and observedGeneration to match.":
     "执行模式会等待 status.replicas、就绪副本数和 observedGeneration 全部匹配。",
+  "Repair unhealthy worker": "修复异常工作节点",
+  "CAPI deletes at most one unhealthy worker Machine per approved command; its existing BareMetalHost is reused.":
+    "每个已审批命令最多删除一个异常工作节点 Machine，并复用其现有 BareMetalHost。",
+  "Approval is required before one unhealthy Machine is deleted.":
+    "删除异常 Machine 前必须审批。",
 };

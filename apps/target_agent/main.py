@@ -66,6 +66,7 @@ from packages.agent_transport import (
 )
 
 from .capi_pivot import execute_capi_pivot
+from .cluster_repair import ClusterRepairExecutionError, execute_cluster_repair
 from .cluster_scale import ClusterScaleError, ClusterScaleExecutionError, execute_cluster_scale
 from .eph_cleanup import EphCleanupError, execute_eph_cleanup
 from .etcd_backup_exec import EtcdBackupExecutor
@@ -130,6 +131,7 @@ CAPABILITIES = [
     "target.worker.provision",
     "target.network.apply",
     "cluster.scale",
+    "cluster.worker.repair",
 ]
 
 
@@ -1815,6 +1817,42 @@ def execute(
                 "status": "blocked",
                 "error_code": str(exc) or "CLUSTER_SCALE_FAILED",
                 "output": {},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
+    if action == "cluster.worker.repair":
+        try:
+            payload = _command_payload(command)
+            if payload.get("execution_mode") == "execute":
+                verify_write_permissions(
+                    "cluster.worker.repair",
+                    runner=_kubectl,
+                    namespace=payload.get("target_namespace") or "default",
+                    lease_lost_event=lease_lost_event,
+                )
+            result = execute_cluster_repair(
+                payload,
+                _kubectl,
+                lease_lost_event,
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": result,
+                "side_effects": bool(result.get("side_effects")),
+            }
+        except ClusterRepairExecutionError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": exc.side_effects,
+            }
+        except (HandoffError, WritePermissionError, ValueError, TypeError, AttributeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": getattr(exc, "code", str(exc) or "CLUSTER_REPAIR_FAILED"),
+                "output": {"detail": getattr(exc, "detail", str(exc))},
                 "side_effects": getattr(exc, "side_effects", False),
             }
     if action == "cluster.kubernetes.version.upgrade":

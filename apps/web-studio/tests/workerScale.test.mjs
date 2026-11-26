@@ -21,3 +21,10 @@ test("worker scaling is blocked when the agent is offline or the count is invali
   assert.match(component, /value >= 1 && value <= 2500/);
   assert.match(component, /approval is required before replicas change/);
 });
+
+test("the fleet console requests repair through the approved agent command", () => {
+  assert.match(component, /Repair unhealthy worker/);
+  assert.match(component, /createAgentCommand\(targetAgent\.id, "cluster\.worker\.repair"/);
+  assert.match(component, /reason: "Day-2 repair from the fleet console"/);
+  assert.match(component, /at most one unhealthy worker Machine per approved command/);
+});

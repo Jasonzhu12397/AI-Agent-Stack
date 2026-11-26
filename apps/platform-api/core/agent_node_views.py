@@ -34,6 +34,10 @@ from packages.agent_contracts.agent_commands import (
     EPH_AGENT_COMMANDS,
     TARGET_AGENT_COMMANDS,
 )
+from packages.agent_contracts.cluster_repair import (
+    ClusterRepairError,
+    validate_request as validate_cluster_repair,
+)
 from packages.agent_contracts.cluster_scale import (
     ClusterScaleError,
     validate_request as validate_cluster_scale,
@@ -121,6 +125,7 @@ MUTATING_COMMANDS = {
     "target.worker.provision",
     "target.eph.cleanup",
     "cluster.scale",
+    "cluster.worker.repair",
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
     # A recurring snapshot writes files on the host, so it is treated as
@@ -172,6 +177,7 @@ APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
     "cluster.scale",
+    "cluster.worker.repair",
 }
 
 
@@ -461,6 +467,50 @@ def _validate_kubernetes_rollback_result(command, result):
         "/var/lib/etcd/member.pre-rollback-"
     ):
         return "A rollback must keep the previous etcd data directory on disk."
+    return None
+
+
+def _validate_cluster_repair_result(command, result):
+    if command.command_type != "cluster.worker.repair":
+        return None
+    if not isinstance(result, dict):
+        return "Cluster repair result must be an object."
+    expected = {
+        "cluster_name": command.payload.get("target_cluster_name"),
+        "namespace": command.payload.get("target_namespace") or "default",
+    }
+    if any(result.get(key) != value for key, value in expected.items()):
+        return "Cluster repair result does not match the approved command."
+    if not isinstance(result.get("machine_deployment"), str) or not result["machine_deployment"]:
+        return "Cluster repair result must name the MachineDeployment it inspected."
+    unhealthy = result.get("unhealthy_machines")
+    if not isinstance(unhealthy, list) or any(not isinstance(name, str) for name in unhealthy):
+        return "Cluster repair result must list unhealthy Machine names."
+    selected = result.get("selected_machine")
+    if unhealthy:
+        if not isinstance(selected, str) or selected not in unhealthy:
+            return "A repair with unhealthy Machines must select one of them."
+    elif selected is not None:
+        return "A repair with no unhealthy Machine cannot select one."
+    mode = command.payload.get("execution_mode")
+    if mode == "execute":
+        if result.get("repair_simulated") is not False:
+            return "An executed repair cannot report a simulation."
+        if result.get("repair_performed") is True:
+            if result.get("side_effects") is not True:
+                return "An executed repair must report side effects."
+            if result.get("deleted_machines") != [selected]:
+                return "An executed repair must report the selected Machine as deleted."
+        elif result.get("side_effects") is not False:
+            return "A no-op repair cannot report side effects."
+        return None
+    if (
+        result.get("approval_required") is not True
+        or result.get("repair_simulated") is not True
+        or result.get("repair_performed") is not False
+        or result.get("side_effects") is not False
+    ):
+        return "A repair plan must be simulation-only until approved."
     return None
 
 
@@ -2603,6 +2653,15 @@ class AgentNodeCommandListCreateView(APIView):
                 payload = validate_cluster_scale(payload, cluster_name=node.cluster_name)
             except ClusterScaleError as exc:
                 return legacy_error_response(exc.detail, http_status=400, code=exc.code)
+        if command_type == "cluster.worker.repair":
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return legacy_error_response(
+                    "Worker repair requires a Target Cluster Agent.", http_status=400
+                )
+            try:
+                payload = validate_cluster_repair(payload, cluster_name=node.cluster_name)
+            except ClusterRepairError as exc:
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         if command_type == "cluster.kubernetes.version.rollback":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
                 return legacy_error_response(
@@ -3140,6 +3199,7 @@ class AgentRuntimeResultView(APIView):
                 _validate_kubernetes_upgrade_result(command, result)
                 or _validate_kubernetes_rollback_result(command, result)
                 or _validate_cluster_scale_result(command, result)
+                or _validate_cluster_repair_result(command, result)
             )
             if outcome == "succeeded" and result_error:
                 return legacy_error_response(result_error, http_status=409)

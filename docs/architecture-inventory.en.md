@@ -212,6 +212,7 @@ The following documents previously followed the old wording that "the EPH perfor
 - Read-only global audit chain endpoints: `GET /api/v1/audit-events/global/` (paginated list) and `GET /api/v1/audit-events/global/verify/` (chain verification), readable by platform administrators only (`is_staff` / `is_superuser`), and rendered in the Audit page with the same 403-aware hidden state.
 - Project realtime events: Task / AuditEvent commits publish `pg_notify`; the Channels WebSocket and SSE endpoints consume them, and the frontend prefers WebSocket with SSE fallback. SQLite uses a bounded poll; PostgreSQL wakes on LISTEN.
 - Day-2 worker scaling: `cluster.scale` validates cluster identity and MachineDeployment ownership, blocks scale-out when available BareMetalHost capacity is short, patches only `spec.replicas`, and waits for replica, ready-replica and observedGeneration reconciliation. Simulation mode is side-effect free; execute mode requires approval. The fleet console exposes the same command.
+- Day-2 worker repair: `cluster.worker.repair` inspects worker Machines behind a target-owned MachineDeployment, selects one Machine whose `NodeHealthy` condition is false, and deletes exactly that Machine so CAPI recreates the replica on its reclaimed BareMetalHost. A healthy named Machine is refused, simulation deletes nothing, and execute mode requires approval. The fleet console exposes the same command.
 
 ### 9.2 Not yet production-complete (needs further development or real-environment acceptance)
 
@@ -225,7 +226,7 @@ The following documents previously followed the old wording that "the EPH perfor
 - Full CAPI / Metal3 / Ironic deployment, pivot, and BMH takeover in a real environment.
 - Real EPH cleanup, physical worker deployment, and hardware acceptance.
 - Real SR-IOV / DPDK data-plane traffic validation.
-- Real-environment acceptance of the implemented upgrade, rollback, recovery and worker scale execution against a live CAPI / Metal3 cluster; Day-2 repair orchestration remains.
+- Real-environment acceptance of the implemented upgrade, rollback, recovery, worker scale and worker repair execution against a live CAPI / Metal3 cluster.
 - Redis cache/queue/coordination channel landing and failure recovery; pgvector and S3 object storage integration.
 - Multi-provider model routing, primary/standby fallback, and native adaptation to domestic/foreign providers.
 

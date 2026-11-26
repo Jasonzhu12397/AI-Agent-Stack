@@ -127,6 +127,8 @@ const scaleMachineDeployments = ref<Record<string, string>>({});
 const selectedScaleModes = ref<Record<string, "simulation" | "execute">>({});
 const scaleBusy = ref<string | null>(null);
 const scaleMessages = ref<Record<string, string>>({});
+const repairBusy = ref<string | null>(null);
+const repairMessages = ref<Record<string, string>>({});
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
 const networkMachine = ref<FleetMachine | null>(null);
@@ -999,6 +1001,38 @@ async function applyWorkerScale(deployment: ClusterDeployment): Promise<void> {
     scaleMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request worker scaling.";
   } finally {
     scaleBusy.value = null;
+  }
+}
+
+async function requestWorkerRepair(deployment: ClusterDeployment): Promise<void> {
+  if (!deployment.target_node_id) {
+    repairMessages.value[deployment.id] = "A Target Agent must be assigned before repairing workers.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    repairMessages.value[deployment.id] = "The Target Agent must be online before repairing workers.";
+    return;
+  }
+  repairBusy.value = deployment.id;
+  repairMessages.value[deployment.id] = "";
+  try {
+    const command = await createAgentCommand(targetAgent.id, "cluster.worker.repair", {
+      target_cluster_name: deployment.cluster_name,
+      machine_deployment: (scaleMachineDeployments.value[deployment.id] ?? "").trim() || null,
+      target_namespace: "default",
+      execution_mode: scaleMode(deployment),
+      reason: "Day-2 repair from the fleet console",
+    });
+    repairMessages.value[deployment.id] =
+      scaleMode(deployment) === "execute"
+        ? "Repair request created (" + command.status + "); approval is required before one unhealthy Machine is deleted."
+        : "Repair plan created (" + command.status + "); approval is required and nothing is deleted in simulation.";
+    await refreshData();
+  } catch (cause) {
+    repairMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request worker repair.";
+  } finally {
+    repairBusy.value = null;
   }
 }
 
@@ -1948,6 +1982,20 @@ onUnmounted(() => {
                 Execute waits for status.replicas, ready replicas and observedGeneration to match.
               </small>
               <small v-if="scaleMessages[scope.row.id]" class="fleet-version-message">{{ scaleMessages[scope.row.id] }}</small>
+              <div class="fleet-version-control" style="margin-top: 6px">
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="repairBusy === scope.row.id"
+                  :disabled="!targetAgentOnline(scope.row)"
+                  @click="requestWorkerRepair(scope.row)"
+                >Repair unhealthy worker</el-button>
+              </div>
+              <small class="fleet-version-current">
+                CAPI deletes at most one unhealthy worker Machine per approved command; its existing BareMetalHost is reused.
+              </small>
+              <small v-if="repairMessages[scope.row.id]" class="fleet-version-message">{{ repairMessages[scope.row.id] }}</small>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
