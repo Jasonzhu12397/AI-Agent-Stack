@@ -53,7 +53,29 @@ pub async fn forward(
         .uri()
         .path_and_query()
         .map(|value| value.as_str().to_string());
-    let headers = request.headers().clone();
+    let mut headers = request.headers().clone();
+    for name in [
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "x-real-ip",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+    ] {
+        headers.remove(name);
+    }
+    if let Ok(value) = HeaderValue::from_str(&peer.ip().to_string()) {
+        headers.insert(HeaderName::from_static("x-forwarded-for"), value);
+    }
+    let forwarded_proto = if state.config.external_scheme == "https" {
+        HeaderValue::from_static("https")
+    } else {
+        HeaderValue::from_static("http")
+    };
+    headers.insert(
+        HeaderName::from_static("x-forwarded-proto"),
+        forwarded_proto,
+    );
     let target = match state
         .config
         .upstream_websocket_url(path_and_query.as_deref())
