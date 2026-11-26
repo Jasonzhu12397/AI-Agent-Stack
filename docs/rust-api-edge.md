@@ -17,10 +17,20 @@ domain model, permissions, audit and realtime code in the Django service.
   generates `X-Request-Id` when the caller did not send one.
 - Applies bounded upstream/request timeouts and returns a structured
   `UPSTREAM_UNAVAILABLE` error when the platform API cannot be reached.
+- Terminates WebSocket upgrades under `/ws/` and opens a matching upstream
+  handshake, relaying text, binary, ping, pong and close frames. The browser
+  `Cookie`, `Origin` and `Sec-WebSocket-Protocol` (including the
+  `session.<key>` subprotocol) reach Django Channels unchanged, so session
+  authentication and close code `4403` behave as they do without the edge.
+- When `RUST_API_NATIVE_IDENTITY=true`, serves `GET /api/v1/auth/me/` from
+  Rust. It reads the shared `django_session` row, verifies the Django
+  `TimestampSigner` signature, decrypts the optional zlib payload, then reads
+  `auth_user`. Cookie and `X-Session-Token` authentication both work, so a
+  session minted by Django is accepted by Rust and vice versa.
 
-Authentication, tenant resolution, RBAC and audit stay in Django during this
-stage. The edge deliberately does not parse credentials, so a rollback is a
-single routing change.
+Tenant resolution, RBAC, audit and login/logout still live in Django during
+this stage. The Rust identity handler is read-only and shares the same schema,
+so a rollback is a single routing change.
 
 ## Configuration
 
@@ -31,6 +41,9 @@ single routing change.
 | `RUST_API_UPSTREAM_TIMEOUT_SECONDS` | `3` | Capacity/health probe timeout |
 | `RUST_API_REQUEST_TIMEOUT_SECONDS` | `60` | Full proxied request budget |
 | `RUST_LOG` | unset | `tracing` filter, for example `info` |
+| `RUST_API_NATIVE_IDENTITY` | `false` | Serves `GET /api/v1/auth/me/` from Rust |
+| `DATABASE_URL` | unset | Shared Django database; required with native identity |
+| `DJANGO_SECRET_KEY` | unset | Session signing key; required with native identity |
 
 The service refuses an upstream URL that carries a path, a non-HTTP scheme, a
 zero timeout, or a request timeout shorter than the upstream timeout.
@@ -58,25 +71,26 @@ so both paths are available and either can be used for comparison.
 ## Cutover and rollback
 
 1. Start the canary and compare `/health/ready`, `/api/v1/auth/csrf/`, a
-   logged-in task list request and a websocket handshake against the direct
-   Django origin.
+   logged-in `/api/v1/auth/me/` request and a websocket handshake against the
+   direct Django origin.
 2. Point the frontend/reverse proxy at `api-edge` only after the comparison
    passes. Keep `RUST_API_UPSTREAM` pointed at the Django service.
 3. Roll back by pointing the frontend/reverse proxy at the Django origin again;
    the Rust edge holds no state and needs no data migration.
 
-WebSocket and SSE traffic currently has to terminate at Django because the edge
-is an HTTP/1.1 streaming proxy. When task realtime moves into Rust, that
-upgrade path and its authentication must be implemented before the proxy is
-made the only public entry point.
+HTTP streaming covers SSE. WebSocket upgrades are relayed by Rust to Django
+Channels, including the subprotocol-based session token, so the edge can
+already be placed in front of both realtime transports. A native Rust Channels
+replacement is a later step; until then Django still owns the realtime
+consumer and its authorization rules.
 
 ## Migration sequence
 
 The edge is the stable seam for moving routes into Rust:
 
-1. Edge proxy (this stage) with parity checks and rollback.
-2. Native Rust auth/session and tenant middleware, sharing the existing
-   PostgreSQL schema, while other routes still proxy to Django.
+1. Edge proxy and WebSocket relay (this stage) with parity checks and rollback.
+2. Native Rust identity: `GET /api/v1/auth/me/` reads Django sessions today.
+   Login, logout and CSRF move next, followed by tenant and RBAC middleware.
 3. Move model gateway, task read APIs and edge-native health/metrics.
-4. Retire the proxied Django route only after a side-by-side comparison and
+4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

@@ -28,7 +28,7 @@
 | 分层 | 目标组件 | 真实代码位置 | 现状 |
 |---|---|---|---|
 | 用户入口 | Web UI / Chat / Workflow / Agent 管理 / 插件市场 / 运维控制台 | `apps/web-studio/src/components/`、`src/services/api.ts` | 【基础】页面与 API 接线已存在；逐交互验收待核对（见 §6） |
-| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/`；`apps/rust-api` 提供 Rust Axum 边缘层（`/health/ready`、`/api/v1/edge/info`），其余 HTTP 流量带转发头、超时和上游健康闸门流式转给 Django（见 `docs/rust-api-edge.md`） | 【基础】大部分模块有实现；任务页实时推送已落地（Channels WebSocket 主通道 + SSE 回退），模型路由已支持管理员配置的主备链与可重试故障降级（见 §3） |
+| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/`；`apps/rust-api` 提供 Rust Axum 边缘层（`/health/ready`、`/api/v1/edge/info`），转发 `/ws/` 升级到 Django Channels，开启原生身份后由 Rust 基于 Django 会话提供 `GET /api/v1/auth/me/`，其余 HTTP 流量带转发头、超时和上游健康闸门流式转给 Django（见 `docs/rust-api-edge.md`） | 【基础】大部分模块有实现；任务页实时推送已落地（Channels WebSocket 主通道 + SSE 回退），模型路由已支持管理员配置的主备链与可重试故障降级（见 §3） |
 | 基础设施 Agent 控制面 | Cloud Control / EPH / Target 三 Agent | `apps/cloud_control_agent/`、`apps/eph_agent/`、`apps/target_agent/` | 【基础】三 Agent 独立入口、协议与状态机已存在；真实裸金属链路待验证（见 §4） |
 | Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/` | 【基础】契约与传输已实现（见 §7） |
 | 执行层 | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | 由三 Agent 内 skill / adapter 模块调用 `kubectl` / `clusterctl` / Ironic HTTP 客户端 | 【待验证】执行适配器以只读观察 + fail-closed 校验为主；真实安装/迁移/数据面转发待验收（见 §5） |

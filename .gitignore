@@ -32,3 +32,5 @@ media/
 
 # Rust build output
 target/
+
+.tmp/

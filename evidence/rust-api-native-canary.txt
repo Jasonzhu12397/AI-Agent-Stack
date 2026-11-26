@@ -1,0 +1,52 @@
+Rust API native identity and WebSocket canary
+Date: 2026-11-26
+Environment: local Django ASGI (daphne 127.0.0.1:18000), Rust edge 127.0.0.1:18081
+Database: SQLite workspace copy of the Django schema, real migrations and rows.
+Django SECRET_KEY: local-only-change-before-production (local test value)
+
+1. Native GET /api/v1/auth/me/ with a Django session cookie
+   Request: curl -H 'Cookie: sessionid=vqbfwzqggr2tugiw32s0ocwznnqm56db'
+            http://127.0.0.1:18081/api/v1/auth/me/
+   Response: HTTP/1.1 200 OK
+   Body: {"email":"edge-check@example.com","id":1,"is_staff":false,"username":"edge-check@example.com"}
+
+2. Native GET /api/v1/auth/me/ with X-Session-Token instead of a cookie
+   Request: curl -H 'X-Session-Token: vqbfwzqggr2tugiw32s0ocwznnqm56db'
+   Response: HTTP/1.1 200 OK (same body)
+
+3. Missing or invalid session
+   Request: curl http://127.0.0.1:18081/api/v1/auth/me/
+   Response: HTTP/1.1 401 Unauthorized
+             WWW-Authenticate: Session
+   Body: {"detail":"Authentication credentials were not provided."}
+
+4. WebSocket through the Rust edge to real Django Channels
+   URL: ws://127.0.0.1:18081/ws/tenants/8ef8d639-8346-4053-b55a-49db2d7449ec/
+        projects/ad75f855-c9b1-4951-9cb5-1647d3ceb8cf/events/
+   Subprotocols: aiagentstack, session.vqbfwzqggr2tugiw32s0ocwznnqm56db
+   Negotiated: aiagentstack
+   First frame: {"event":"ready","cursor":"2026-11-26T08:21:34.988554+00:00"}
+
+5. Same WebSocket directly against Django (parity baseline)
+   URL: ws://127.0.0.1:18000/...
+   Negotiated: aiagentstack
+   First frame: {"event":"ready","cursor":"2026-11-26T08:25:18.924849+00:00"}
+
+6. Unauthenticated WebSocket
+   Subprotocol: session.invalid-session-token-000000000000
+   The edge relayed the Django close (code 4403); the client received an
+   empty close and no `ready` frame.
+
+Native handler notes:
+- Verifies the Django TimestampSigner signature before decoding.
+- Supports Django's optional zlib-compressed session payload.
+- Reads django_session and auth_user through SQLx AnyPool, so the same query
+  runs on SQLite and PostgreSQL.
+- The native route is only registered when RUST_API_NATIVE_IDENTITY=true.
+
+Automated tests:
+- apps/rust-api/tests/native.rs: 3 passed (cookie, token, missing session).
+- apps/rust-api/tests/websocket.rs: 2 passed (header/frame forwarding, 1011
+  when the upstream is unreachable).
+- apps/rust-api/tests/proxy.rs: 4 passed.
+- cargo clippy --all-targets -- -D warnings: clean.

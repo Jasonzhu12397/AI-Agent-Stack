@@ -26,6 +26,7 @@ const HOP_BY_HOP: &[&str] = &[
 pub struct AppState {
     pub config: Config,
     pub client: reqwest::Client,
+    pub identity_pool: Option<sqlx::AnyPool>,
 }
 
 impl AppState {
@@ -34,16 +35,34 @@ impl AppState {
             .timeout(config.request_timeout)
             .build()
             .map_err(|error| format!("failed to build the upstream HTTP client: {error}"))?;
-        Ok(Self { config, client })
+        let identity_pool = match &config.database_url {
+            Some(url) => {
+                sqlx::any::install_default_drivers();
+                Some(
+                    sqlx::AnyPool::connect_lazy(url)
+                        .map_err(|error| format!("DATABASE_URL is invalid: {error}"))?,
+                )
+            }
+            None => None,
+        };
+        Ok(Self {
+            config,
+            client,
+            identity_pool,
+        })
     }
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let native_identity = state.config.native_identity;
+    let mut router = Router::new()
         .route("/health/ready", get(health))
         .route("/api/v1/edge/info", get(info))
-        .fallback(forward)
-        .with_state(state)
+        .route("/ws/{*path}", get(crate::ws::forward));
+    if native_identity {
+        router = router.route("/api/v1/auth/me/", get(crate::native::current_user));
+    }
+    router.fallback(forward).with_state(state)
 }
 
 async fn health(State(state): State<AppState>) -> Response {
@@ -88,6 +107,8 @@ struct EdgeInfo {
     service: &'static str,
     version: &'static str,
     upstream: String,
+    websocket: bool,
+    server_sent_events: bool,
 }
 
 async fn info(State(state): State<AppState>) -> Json<EdgeInfo> {
@@ -95,6 +116,8 @@ async fn info(State(state): State<AppState>) -> Json<EdgeInfo> {
         service: "rust-api-edge",
         version: env!("CARGO_PKG_VERSION"),
         upstream: state.config.upstream.to_string(),
+        websocket: true,
+        server_sent_events: true,
     })
 }
 

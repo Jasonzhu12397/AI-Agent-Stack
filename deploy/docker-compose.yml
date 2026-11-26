@@ -120,6 +120,9 @@ services:
       RUST_API_UPSTREAM: http://api:8000
       RUST_API_UPSTREAM_TIMEOUT_SECONDS: ${RUST_API_UPSTREAM_TIMEOUT_SECONDS:-3}
       RUST_API_REQUEST_TIMEOUT_SECONDS: ${RUST_API_REQUEST_TIMEOUT_SECONDS:-60}
+      RUST_API_NATIVE_IDENTITY: ${RUST_API_NATIVE_IDENTITY:-false}
+      DATABASE_URL: postgresql://agent:agent_dev_password@postgres:5432/agent_stack
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-}
     ports: ["8080:8080"]
     security_opt:
       - no-new-privileges:true
