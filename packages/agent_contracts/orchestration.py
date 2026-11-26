@@ -108,6 +108,8 @@ TARGET_ACTIONS: frozenset[str] = frozenset(
         "target.network.apply",
         "cluster.scale",
         "cluster.worker.repair",
+        "target.network.upgrade",
+        "target.network.rollback",
     }
 )
 

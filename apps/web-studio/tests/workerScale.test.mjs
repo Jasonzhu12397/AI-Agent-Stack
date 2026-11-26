@@ -28,3 +28,11 @@ test("the fleet console requests repair through the approved agent command", () 
   assert.match(component, /reason: "Day-2 repair from the fleet console"/);
   assert.match(component, /at most one unhealthy worker Machine per approved command/);
 });
+
+test("the network plugin dialog submits real upgrade and rollback commands", () => {
+  assert.match(component, /target\.network\.upgrade/);
+  assert.match(component, /target\.network\.rollback/);
+  assert.match(component, /documents: networkDocuments\.value/);
+  assert.match(component, /target_version: networkVersion\.value\.trim\(\)/);
+  assert.match(component, /dry-runs the bundle, writes a revision ConfigMap/);
+});

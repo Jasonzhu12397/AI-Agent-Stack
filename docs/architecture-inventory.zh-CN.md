@@ -211,6 +211,9 @@
 - `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 - 全局审计链（认证事件）的只读对外接口：`GET /api/v1/audit-events/global/`（分页列表）与 `GET /api/v1/audit-events/global/verify/`（链校验），仅平台管理员（`is_staff` / `is_superuser`）可读。
 - 项目级实时事件：Task / AuditEvent 提交后 `pg_notify`，Channels WebSocket 与 SSE 端点均消费同一事件源；前端优先 WebSocket、SSE 回退；SQLite 下为有界轮询，PostgreSQL 下为 LISTEN 唤醒。
+- Day-2 工作节点扩缩容：`cluster.scale` 校验集群身份与 MachineDeployment 归属，扩容时可用 BareMetalHost 容量不足会在修改前阻断，只 patch `spec.replicas`，并等待副本数、就绪副本数与 observedGeneration 收敛。模拟模式无副作用；执行模式必须审批。舰队控制台已提供同一命令入口。
+- Day-2 工作节点修复：`cluster.worker.repair` 检查目标集群自有 MachineDeployment 下的工作节点 Machine，选择一个 `NodeHealthy` 条件为假的节点，只删除该 Machine，由 CAPI 在其回收的 BareMetalHost 上重建副本。指名健康节点会被拒绝，模拟模式不删除任何对象，执行模式必须审批。舰队控制台已提供同一命令入口。
+- 网络插件升级与回滚：`target.network.upgrade` 解析一个或多个 Kubernetes YAML 文档，拒绝 Secret，先对整个 bundle 做服务端 dry-run，再把所有已存在对象和原本不存在的对象写入修订 ConfigMap，随后应用新 bundle，并等待 Deployment/DaemonSet/StatefulSet 就绪。`target.network.rollback` 读取该修订，重放捕获对象并删除升级新增对象。两者只允许 Target Agent、必须审批，并已在舰队控制台提供入口。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 
@@ -220,7 +223,7 @@
 - Workflow 拖拽画布、并行、循环、人工审批恢复等高级节点。
 - 插件隔离执行、SSRF 防护的全量供应商集成验收。
 - 完整 GUI 与参考仓库逐页面、逐交互一致（按钮接真实 API、持久化、失败态）。
-- 网络插件（Multus / SR-IOV CNI·Device Plugin / OVS / Calico / DPDK）完整安装、升级与回滚。
+- Multus / SR-IOV CNI·Device Plugin / OVS / Calico / DPDK 的安装、升级、回滚真机验收，包括 CRD 与自定义资源同 bundle、宿主机数据面流量验证。
 - CAPI / Metal3 / Ironic 在真实环境的完整部署、Pivot 与 BMH 接管。
 - EPH 实际清理、物理 Worker 部署与硬件验收。
 - SR-IOV / DPDK 真实数据面流量验证。

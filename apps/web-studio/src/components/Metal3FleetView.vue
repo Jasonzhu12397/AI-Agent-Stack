@@ -129,6 +129,15 @@ const scaleBusy = ref<string | null>(null);
 const scaleMessages = ref<Record<string, string>>({});
 const repairBusy = ref<string | null>(null);
 const repairMessages = ref<Record<string, string>>({});
+const networkUpgradeVisible = ref(false);
+const networkUpgradeDeployment = ref<ClusterDeployment | null>(null);
+const networkPlugin = ref("calico");
+const networkVersion = ref("");
+const networkDocuments = ref("");
+const networkUpgradeMode = ref<"simulation" | "execute">("simulation");
+const networkRevision = ref("");
+const networkUpgradeBusy = ref(false);
+const networkUpgradeMessage = ref("");
 const versionApplyMessages = ref<Record<string, string>>({});
 const networkDialogVisible = ref(false);
 const networkMachine = ref<FleetMachine | null>(null);
@@ -1033,6 +1042,61 @@ async function requestWorkerRepair(deployment: ClusterDeployment): Promise<void>
     repairMessages.value[deployment.id] = cause instanceof Error ? cause.message : "Unable to request worker repair.";
   } finally {
     repairBusy.value = null;
+  }
+}
+
+function openNetworkUpgrade(deployment: ClusterDeployment): void {
+  networkUpgradeDeployment.value = deployment;
+  networkPlugin.value = "calico";
+  networkVersion.value = "";
+  networkDocuments.value = "";
+  networkRevision.value = "";
+  networkUpgradeMode.value = "simulation";
+  networkUpgradeMessage.value = "";
+  networkUpgradeVisible.value = true;
+}
+
+async function submitNetworkUpgrade(rollback: boolean): Promise<void> {
+  const deployment = networkUpgradeDeployment.value;
+  if (!deployment || !deployment.target_node_id) {
+    networkUpgradeMessage.value = "A Target Agent must be assigned first.";
+    return;
+  }
+  const targetAgent = nodes.value.find((node) => node.id === deployment.target_node_id);
+  if (!targetAgent || targetAgent.node_type !== "target_cluster" || targetAgent.status !== "online") {
+    networkUpgradeMessage.value = "The Target Agent must be online.";
+    return;
+  }
+  if (!rollback && (!networkVersion.value.trim() || !networkDocuments.value.trim())) {
+    networkUpgradeMessage.value = "A target version and at least one YAML document are required.";
+    return;
+  }
+  networkUpgradeBusy.value = true;
+  networkUpgradeMessage.value = "";
+  try {
+    const base = {
+      target_cluster_name: deployment.cluster_name,
+      target_namespace: "default",
+      plugin: networkPlugin.value,
+      execution_mode: networkUpgradeMode.value,
+      reason: rollback ? "Network plugin rollback from the fleet console" : "Network plugin upgrade from the fleet console",
+    };
+    const payload = rollback
+      ? { ...base, revision: networkRevision.value.trim() || null }
+      : { ...base, target_version: networkVersion.value.trim(), documents: networkDocuments.value };
+    const command = await createAgentCommand(
+      targetAgent.id,
+      rollback ? "target.network.rollback" : "target.network.upgrade",
+      payload,
+    );
+    networkUpgradeMessage.value =
+      (rollback ? "Rollback" : "Upgrade") +
+      " request created (" + command.status + "); approval is required before any object changes.";
+    await refreshData();
+  } catch (cause) {
+    networkUpgradeMessage.value = cause instanceof Error ? cause.message : "Unable to request the network plugin change.";
+  } finally {
+    networkUpgradeBusy.value = false;
   }
 }
 
@@ -1996,6 +2060,14 @@ onUnmounted(() => {
                 CAPI deletes at most one unhealthy worker Machine per approved command; its existing BareMetalHost is reused.
               </small>
               <small v-if="repairMessages[scope.row.id]" class="fleet-version-message">{{ repairMessages[scope.row.id] }}</small>
+              <div class="fleet-version-control" style="margin-top: 6px">
+                <el-button
+                  size="small"
+                  text
+                  :disabled="!targetAgentOnline(scope.row)"
+                  @click="openNetworkUpgrade(scope.row)"
+                >Network plugin upgrade</el-button>
+              </div>
             </template>
           </el-table-column>
           <el-table-column prop="status" label="Workflow Status" min-width="130">
@@ -2394,6 +2466,36 @@ onUnmounted(() => {
           :loading="backupPolicySaving"
           @click="saveBackupPolicy"
         >Save policy</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="networkUpgradeVisible" title="Network Plugin Upgrade" width="720px">
+      <div v-if="networkUpgradeDeployment" class="fleet-version-control" style="margin-bottom: 12px">
+        <strong>{{ networkUpgradeDeployment.cluster_name }}</strong>
+        <el-select v-model="networkPlugin" size="small" style="width: 120px">
+          <el-option v-for="plugin in ['calico', 'multus', 'ovs', 'sriov', 'dpdk']" :key="plugin" :label="plugin" :value="plugin" />
+        </el-select>
+        <el-select v-model="networkUpgradeMode" size="small" style="width: 108px">
+          <el-option v-for="mode in upgradeModes" :key="mode" :label="mode" :value="mode" />
+        </el-select>
+      </div>
+      <el-input v-model="networkVersion" size="small" placeholder="Target version, e.g. 1.14.2" />
+      <el-input
+        v-model="networkDocuments"
+        type="textarea"
+        :rows="12"
+        placeholder="Paste one or more Kubernetes YAML documents. The current bundle is captured first; rollback replays it."
+        style="margin-top: 10px"
+      />
+      <el-input v-model="networkRevision" size="small" placeholder="Optional rollback revision; blank uses the latest captured revision" style="margin-top: 10px" />
+      <small class="fleet-version-current">
+        Upgrade dry-runs the bundle, writes a revision ConfigMap, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created.
+      </small>
+      <small v-if="networkUpgradeMessage" class="fleet-version-message">{{ networkUpgradeMessage }}</small>
+      <template #footer>
+        <el-button size="small" @click="networkUpgradeVisible = false">Cancel</el-button>
+        <el-button size="small" :loading="networkUpgradeBusy" @click="submitNetworkUpgrade(true)">Rollback</el-button>
+        <el-button size="small" type="primary" :loading="networkUpgradeBusy" @click="submitNetworkUpgrade(false)">Upgrade</el-button>
       </template>
     </el-dialog>
   </section>

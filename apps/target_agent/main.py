@@ -95,6 +95,11 @@ from .network_stack_adapter import (
     apply_network_stack,
     wait_for_network_stack_ready,
 )
+from .network_upgrade import (
+    NetworkUpgradeExecutionError,
+    execute_network_rollback,
+    execute_network_upgrade,
+)
 from .ntp_attestation import NtpAttestationError, verify_control_plane_ntp_bootstrap
 from .ntp_policy import (
     NtpPolicyError,
@@ -130,6 +135,8 @@ CAPABILITIES = [
     "target.eph.cleanup",
     "target.worker.provision",
     "target.network.apply",
+    "target.network.upgrade",
+    "target.network.rollback",
     "cluster.scale",
     "cluster.worker.repair",
 ]
@@ -1783,6 +1790,44 @@ def execute(
             "output": report,
             "side_effects": False,
         }
+    if action in ("target.network.upgrade", "target.network.rollback"):
+        upgrade = action == "target.network.upgrade"
+        try:
+            payload = _command_payload(command)
+            if payload.get("execution_mode") == "execute":
+                verify_write_permissions(
+                    action,
+                    runner=_kubectl,
+                    namespace=payload.get("target_namespace") or "default",
+                    lease_lost_event=lease_lost_event,
+                )
+            executor = execute_network_upgrade if upgrade else execute_network_rollback
+            result = executor(
+                payload,
+                _kubectl,
+                lease_lost_event,
+                cluster_name=os.environ.get("TARGET_CLUSTER_NAME") or None,
+            )
+            return {
+                "status": "succeeded",
+                "error_code": None,
+                "output": result,
+                "side_effects": bool(result.get("side_effects")),
+            }
+        except NetworkUpgradeExecutionError as exc:
+            return {
+                "status": "blocked",
+                "error_code": exc.code,
+                "output": {"detail": exc.detail},
+                "side_effects": exc.side_effects,
+            }
+        except (HandoffError, WritePermissionError, ValueError, TypeError, AttributeError) as exc:
+            return {
+                "status": "blocked",
+                "error_code": getattr(exc, "code", "NETWORK_UPGRADE_FAILED"),
+                "output": {"detail": getattr(exc, "detail", str(exc))},
+                "side_effects": getattr(exc, "side_effects", False),
+            }
     if action == "cluster.scale":
         try:
             payload = _command_payload(command)

@@ -34,6 +34,11 @@ from packages.agent_contracts.agent_commands import (
     EPH_AGENT_COMMANDS,
     TARGET_AGENT_COMMANDS,
 )
+from packages.agent_contracts.network_upgrade import (
+    NetworkUpgradeError,
+    validate_rollback_request as validate_network_rollback,
+    validate_upgrade_request as validate_network_upgrade,
+)
 from packages.agent_contracts.cluster_repair import (
     ClusterRepairError,
     validate_request as validate_cluster_repair,
@@ -126,6 +131,8 @@ MUTATING_COMMANDS = {
     "target.eph.cleanup",
     "cluster.scale",
     "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
     "cluster.kubernetes.version.upgrade",
     "cluster.kubernetes.version.rollback",
     # A recurring snapshot writes files on the host, so it is treated as
@@ -178,6 +185,8 @@ APPROVAL_REQUIRED_COMMANDS = {
     "cluster.kubernetes.version.rollback",
     "cluster.scale",
     "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
 }
 
 
@@ -467,6 +476,73 @@ def _validate_kubernetes_rollback_result(command, result):
         "/var/lib/etcd/member.pre-rollback-"
     ):
         return "A rollback must keep the previous etcd data directory on disk."
+    return None
+
+
+def _validate_network_upgrade_result(command, result):
+    rollback = command.command_type == "target.network.rollback"
+    if command.command_type not in {"target.network.upgrade", "target.network.rollback"}:
+        return None
+    if not isinstance(result, dict):
+        return "Network upgrade result must be an object."
+    expected = {
+        "cluster_name": command.payload.get("target_cluster_name"),
+        "namespace": command.payload.get("target_namespace") or "default",
+        "plugin": command.payload.get("plugin"),
+    }
+    if any(result.get(key) != value for key, value in expected.items()):
+        return "Network plugin result does not match the approved command."
+    mode = command.payload.get("execution_mode")
+    if rollback:
+        revision = command.payload.get("revision")
+        result_revision = result.get("revision")
+        if not isinstance(result_revision, str) or not result_revision:
+            return "A network rollback must name the revision it replayed."
+        if revision and result_revision != revision:
+            return "A network rollback replayed a different revision."
+        if mode == "execute":
+            if result.get("rollback_simulated") is not False:
+                return "An executed rollback cannot report a simulation."
+            if result.get("rollback_performed") is not True:
+                return "An executed rollback must report that it replayed the revision."
+            if result.get("side_effects") is not True:
+                return "An executed rollback must report side effects."
+            restored = result.get("restored_objects")
+            removed = result.get("removed_objects")
+            if not isinstance(restored, list) or not isinstance(removed, list):
+                return "A network rollback must report restored and removed objects."
+            if not restored and not removed:
+                return "A network rollback must replay at least one object."
+            return None
+        if (
+            result.get("approval_required") is not True
+            or result.get("rollback_simulated") is not True
+            or result.get("rollback_performed") is not False
+            or result.get("side_effects") is not False
+        ):
+            return "A rollback plan must be simulation-only until approved."
+        return None
+    if result.get("target_version") != command.payload.get("target_version"):
+        return "The upgrade result changed the approved target version."
+    if mode == "execute":
+        if result.get("upgrade_simulated") is not False:
+            return "An executed upgrade cannot report a simulation."
+        if result.get("upgrade_performed") is not True:
+            return "An executed upgrade must report that it applied the bundle."
+        if result.get("side_effects") is not True:
+            return "An executed upgrade must report side effects."
+        if not isinstance(result.get("revision"), str) or not result["revision"]:
+            return "An executed upgrade must report its captured revision."
+        if not isinstance(result.get("ready_workloads"), list) or not result["ready_workloads"]:
+            return "An executed upgrade must report ready workload objects."
+        return None
+    if (
+        result.get("approval_required") is not True
+        or result.get("upgrade_simulated") is not True
+        or result.get("upgrade_performed") is not False
+        or result.get("side_effects") is not False
+    ):
+        return "An upgrade plan must be simulation-only until approved."
     return None
 
 
@@ -2653,6 +2729,18 @@ class AgentNodeCommandListCreateView(APIView):
                 payload = validate_cluster_scale(payload, cluster_name=node.cluster_name)
             except ClusterScaleError as exc:
                 return legacy_error_response(exc.detail, http_status=400, code=exc.code)
+        if command_type in {"target.network.upgrade", "target.network.rollback"}:
+            if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
+                return legacy_error_response(
+                    "Network plugin changes require a Target Cluster Agent.", http_status=400
+                )
+            try:
+                if command_type == "target.network.upgrade":
+                    payload = validate_network_upgrade(payload, cluster_name=node.cluster_name)
+                else:
+                    payload = validate_network_rollback(payload, cluster_name=node.cluster_name)
+            except NetworkUpgradeError as exc:
+                return legacy_error_response(exc.detail, http_status=400, code=exc.code)
         if command_type == "cluster.worker.repair":
             if node.node_type != AgentNode.NodeType.TARGET_CLUSTER:
                 return legacy_error_response(
@@ -3200,6 +3288,7 @@ class AgentRuntimeResultView(APIView):
                 or _validate_kubernetes_rollback_result(command, result)
                 or _validate_cluster_scale_result(command, result)
                 or _validate_cluster_repair_result(command, result)
+                or _validate_network_upgrade_result(command, result)
             )
             if outcome == "succeeded" and result_error:
                 return legacy_error_response(result_error, http_status=409)

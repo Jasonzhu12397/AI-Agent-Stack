@@ -213,6 +213,7 @@ The following documents previously followed the old wording that "the EPH perfor
 - Project realtime events: Task / AuditEvent commits publish `pg_notify`; the Channels WebSocket and SSE endpoints consume them, and the frontend prefers WebSocket with SSE fallback. SQLite uses a bounded poll; PostgreSQL wakes on LISTEN.
 - Day-2 worker scaling: `cluster.scale` validates cluster identity and MachineDeployment ownership, blocks scale-out when available BareMetalHost capacity is short, patches only `spec.replicas`, and waits for replica, ready-replica and observedGeneration reconciliation. Simulation mode is side-effect free; execute mode requires approval. The fleet console exposes the same command.
 - Day-2 worker repair: `cluster.worker.repair` inspects worker Machines behind a target-owned MachineDeployment, selects one Machine whose `NodeHealthy` condition is false, and deletes exactly that Machine so CAPI recreates the replica on its reclaimed BareMetalHost. A healthy named Machine is refused, simulation deletes nothing, and execute mode requires approval. The fleet console exposes the same command.
+- Network plugin upgrade and rollback: `target.network.upgrade` parses one or more Kubernetes YAML documents, refuses Secret objects, dry-runs the whole bundle server-side, captures every existing object and every object that does not exist yet in a revision ConfigMap, applies the bundle, and waits for Deployment/DaemonSet/StatefulSet readiness. `target.network.rollback` reads that revision, re-applies captured objects and deletes objects the upgrade introduced. Both are Target-only, approval-gated, and exposed in the fleet console.
 
 ### 9.2 Not yet production-complete (needs further development or real-environment acceptance)
 
@@ -222,7 +223,7 @@ The following documents previously followed the old wording that "the EPH perfor
 - Advanced Workflow nodes: drag-and-drop canvas, parallel, loop, human-approval resume.
 - Isolated plugin execution and full provider integration acceptance with SSRF protection.
 - Full GUI parity with the reference repository, page by page and interaction by interaction (buttons on real APIs, persistence, failure states).
-- Network plugins (Multus / SR-IOV CNI·Device Plugin / OVS / Calico / DPDK) full install, upgrade, and rollback.
+- Real-environment acceptance of Multus / SR-IOV CNI·Device Plugin / OVS / Calico / DPDK install, upgrade and rollback, including CRD-plus-custom-resource bundles and host data-plane traffic.
 - Full CAPI / Metal3 / Ironic deployment, pivot, and BMH takeover in a real environment.
 - Real EPH cleanup, physical worker deployment, and hardware acceptance.
 - Real SR-IOV / DPDK data-plane traffic validation.

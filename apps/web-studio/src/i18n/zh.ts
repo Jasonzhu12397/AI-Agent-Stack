@@ -1427,4 +1427,17 @@ export const zhCN: Record<string, string> = {
     "每个已审批命令最多删除一个异常工作节点 Machine，并复用其现有 BareMetalHost。",
   "Approval is required before one unhealthy Machine is deleted.":
     "删除异常 Machine 前必须审批。",
+  "Network Plugin Upgrade": "网络插件升级",
+  "Network plugin upgrade": "网络插件升级",
+  "Target version, e.g. 1.14.2": "目标版本，例如 1.14.2",
+  "Paste one or more Kubernetes YAML documents. The current bundle is captured first; rollback replays it.":
+    "粘贴一个或多个 Kubernetes YAML 文档。系统会先捕获当前对象，回滚时重放该修订。",
+  "Optional rollback revision; blank uses the latest captured revision":
+    "可选回滚修订号；留空使用最近一次捕获的修订",
+  "Upgrade dry-runs the bundle, writes a revision ConfigMap, applies the bundle, then waits for workloads. Rollback re-applies captured objects and removes objects the upgrade created.":
+    "升级会先服务端 dry-run，写入修订 ConfigMap，再应用新对象并等待工作负载就绪。回滚会重放捕获的对象，并删除升级新增的对象。",
+  "A target version and at least one YAML document are required.":
+    "必须填写目标版本和至少一个 YAML 文档。",
+  "Unable to request the network plugin change.":
+    "无法请求网络插件变更。",
 };

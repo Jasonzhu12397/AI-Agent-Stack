@@ -52,6 +52,8 @@ TARGET_DIRECT_COMMANDS: Final[frozenset[str]] = frozenset(
         "cluster.kubernetes.upgrade.readiness",
         "cluster.kubernetes.recovery.report",
         "cluster.worker.repair",
+        "target.network.upgrade",
+        "target.network.rollback",
         "cluster.kubernetes.backup.run",
         "cluster.kubernetes.backup.status",
         "k8s.resource.read",
