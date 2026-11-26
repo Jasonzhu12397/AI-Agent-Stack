@@ -4,8 +4,8 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures_util::TryStreamExt;
@@ -233,7 +233,6 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(csrf_middleware))
         .with_state(state)
 }
-
 
 async fn csrf_middleware(request: Request<Body>, next: Next) -> Response {
     let method = request.method();
