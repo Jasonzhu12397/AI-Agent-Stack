@@ -8,6 +8,7 @@ from core.models import (
     ModelConfig,
     ModelProvider,
     Project,
+    ProjectMembership,
     Tenant,
     TenantMembership,
 )
@@ -21,6 +22,9 @@ def chat_workspace(db):
     tenant = Tenant.objects.create(name="Chat tenant", slug="chat-tenant")
     TenantMembership.objects.create(tenant=tenant, user=user, role="member")
     project = Project.objects.create(tenant=tenant, name="Chat project", slug="chat-project")
+    ProjectMembership.objects.create(
+        project=project, user=user, role=ProjectMembership.Role.VIEWER
+    )
     provider = ModelProvider.objects.create(
         tenant=tenant,
         created_by=user,
@@ -206,6 +210,40 @@ def test_other_tenant_cannot_read_a_thread(chat_workspace):
     other = APIClient()
     other.force_authenticate(user=outsider)
     assert other.get(f"/api/v1/agent-chat/threads/{thread['id']}/").status_code == 404
+
+@pytest.mark.django_db
+def test_chat_resources_are_isolated_to_project_members(chat_workspace):
+    user, tenant, _project, model, _installation = chat_workspace
+    hidden_project = Project.objects.create(
+        tenant=tenant, name="Restricted project", slug="restricted-project"
+    )
+    hidden_thread = AgentChatThread.objects.create(
+        tenant=tenant,
+        project=hidden_project,
+        created_by=user,
+        title="Restricted conversation",
+        model_config=model,
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    context_url = (
+        f"/api/v1/tenants/{tenant.id}/projects/{hidden_project.id}/agent-chat/context/"
+    )
+    thread_list_url = (
+        f"/api/v1/tenants/{tenant.id}/projects/{hidden_project.id}/agent-chat/threads/"
+    )
+    message_url = f"/api/v1/agent-chat/threads/{hidden_thread.id}/messages/"
+    attachment_url = f"/api/v1/agent-chat/threads/{hidden_thread.id}/attachments/"
+
+    assert client.get(context_url).status_code == 404
+    assert client.get(thread_list_url).status_code == 404
+    assert client.post(thread_list_url, {"title": "No access"}, format="json").status_code == 404
+    assert client.get(f"/api/v1/agent-chat/threads/{hidden_thread.id}/").status_code == 404
+    assert client.get(message_url).status_code == 404
+    assert client.post(message_url, {"content": "read restricted data"}, format="json").status_code == 404
+    assert client.get(attachment_url).status_code == 404
+
 
 
 @pytest.mark.django_db
