@@ -1155,9 +1155,7 @@ async fn fallback_usable(
         if !enabled || !capabilities.iter().any(|value| value == "chat") {
             return Ok(false);
         }
-        current = row
-            .try_get("fallback")
-            .map_err(|error| error.to_string())?;
+        current = row.try_get("fallback").map_err(|error| error.to_string())?;
     }
     Ok(current.is_none())
 }
