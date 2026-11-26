@@ -157,13 +157,12 @@ async fn concurrent_first_reads_create_only_one_default_budget() {
     let pool = sqlx::AnyPool::connect(&format!("sqlite://{path}"))
         .await
         .unwrap();
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM core_tenanttokenbudget WHERE tenant_id = ?",
-    )
-    .bind(TENANT)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM core_tenanttokenbudget WHERE tenant_id = ?")
+            .bind(TENANT)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count, 1);
     let _ = std::fs::remove_file(path);
 }
