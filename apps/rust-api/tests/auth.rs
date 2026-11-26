@@ -219,3 +219,56 @@ async fn rejects_login_without_csrf_and_appends_denied_events() {
     assert_eq!(count, 0, "a rejected CSRF request must not reach auditing");
     let _ = std::fs::remove_file(path);
 }
+
+
+#[tokio::test]
+async fn does_not_record_a_successful_login_when_session_persistence_fails() {
+    let (state, path) = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query("DROP TABLE django_session")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let csrf = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/csrf/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csrf_cookie = cookie_pair(&csrf).first().unwrap().to_string();
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(csrf.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let csrf_token = body["csrf_token"].as_str().unwrap();
+
+    let response = router(state.clone())
+        .oneshot(with_peer(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login/")
+                .header("content-type", "application/json")
+                .header("cookie", &csrf_cookie)
+                .header("x-csrftoken", csrf_token)
+                .body(Body::from(
+                    serde_json::json!({"username": USERNAME, "password": PASSWORD}).to_string(),
+                ))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM core_auditevent")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let _ = std::fs::remove_file(path);
+}
