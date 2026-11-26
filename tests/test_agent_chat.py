@@ -246,7 +246,10 @@ def test_chat_resources_are_isolated_to_project_members(chat_workspace):
     assert client.post(thread_list_url, {"title": "No access"}, format="json").status_code == 404
     assert client.get(f"/api/v1/agent-chat/threads/{hidden_thread.id}/").status_code == 404
     assert client.get(message_url).status_code == 404
-    assert client.post(message_url, {"content": "read restricted data"}, format="json").status_code == 404
+    denied_message = client.post(
+        message_url, {"content": "read restricted data"}, format="json"
+    )
+    assert denied_message.status_code == 404
 
 
 
