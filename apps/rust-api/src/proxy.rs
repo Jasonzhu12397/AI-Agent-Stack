@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::middleware::{self, Next};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures_util::TryStreamExt;
@@ -229,7 +230,39 @@ pub fn router(state: AppState) -> Router {
     router
         .fallback(forward)
         .layer(RequestBodyLimitLayer::new(25 * 1024 * 1024))
+        .layer(middleware::from_fn(csrf_middleware))
         .with_state(state)
+}
+
+
+async fn csrf_middleware(request: Request<Body>, next: Next) -> Response {
+    let method = request.method();
+    let is_mutating = method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE;
+    let headers = request.headers();
+    let has_session_cookie = headers
+        .get("cookie")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|cookie| {
+            cookie.split(';').any(|pair| {
+                pair.trim()
+                    .split_once('=')
+                    .is_some_and(|(name, _)| name.trim() == "sessionid")
+            })
+        });
+    let uses_session_header = headers
+        .get("x-session-token")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.trim().is_empty());
+
+    if is_mutating && has_session_cookie && !uses_session_header {
+        if let Err(response) = crate::auth::enforce_csrf(headers) {
+            return *response;
+        }
+    }
+    next.run(request).await
 }
 
 async fn edge_liveness(State(state): State<AppState>) -> Response {
