@@ -373,7 +373,7 @@ jobs:
             fi
             sleep 2
           done
-          echo "Qdrant did not become ready"
+          echo "Qdrant did not become ready after $attempt attempts"
           exit 1
       - name: Live collection lifecycle and RAG chain
         run: |
