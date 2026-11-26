@@ -97,6 +97,22 @@ def test_reviewer_reports_bare_except_sql_and_secrets(tmp_path):
     bare = next(finding for finding in report.findings if finding.rule == "bare-except")
     assert "except Exception:" in bare.diff
 
+def test_reviewer_timeout_rule_ignores_orm_and_mapping_methods(tmp_path):
+    (tmp_path / "network.py").write_text(
+        "import requests as rq\\n"
+        "from requests import get as http_get\\n"
+        "def check(payload, queryset):\\n"
+        "    payload.get('name')\\n"
+        "    queryset.get(pk=1)\\n"
+        "    rq.get('https://example.test/api')\\n"
+        "    http_get('https://example.test/other', timeout=5)\\n"
+    )
+    report = review_paths(tmp_path)
+    findings = [item for item in report.findings if item.rule == "missing-network-timeout"]
+    assert len(findings) == 1
+    assert findings[0].line == 5
+
+
 
 def test_patch_requires_matching_one_time_approval(project):
     agent = SoftwareAgent(project)
