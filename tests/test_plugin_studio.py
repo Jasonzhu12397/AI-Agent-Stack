@@ -604,3 +604,105 @@ def test_openapi_rejects_unbounded_variant_unions(monkeypatch):
             document=document,
         )
     assert exc.value.code == "PLUGIN_SCHEMA_UNSUPPORTED"
+
+
+def test_oauth_authorization_code_flow_persists_a_refreshable_credential(
+    studio_workspace, monkeypatch
+):
+    user, tenant, _project, client = studio_workspace
+    monkeypatch.setattr(
+        plugin_studio,
+        "validate_public_url",
+        lambda value, field="url": str(value),
+    )
+    calls = []
+
+    def fake_token_request(contract, timeout=15.0):
+        calls.append(dict(contract))
+        if contract["grant"] == "authorization_code":
+            assert contract["code"] == "provider-code"
+            assert contract["code_verifier"]
+            return {
+                "access_token": "access-1",
+                "refresh_token": "refresh-1",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            }
+        assert contract["grant"] == "refresh_token"
+        assert contract["refresh_token"] == "refresh-1"
+        return {"access_token": "access-2", "expires_in": 3600}
+
+    monkeypatch.setattr(plugin_studio, "_oauth_token_request", fake_token_request)
+
+    started = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/authorize/",
+        {
+            "authorization_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+            "redirect_uri": "https://console.example.com/plugins/oauth/callback",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "scope": "read:tools",
+        },
+        format="json",
+    )
+    assert started.status_code == 201, started.data
+    url = started.data["authorize_url"]
+    assert "response_type=code" in url
+    assert "code_challenge=" in url
+    assert "code_challenge_method=S256" in url
+    state = started.data["state"]
+
+    completed = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/callback/",
+        {"code": "provider-code", "state": state},
+        format="json",
+    )
+    assert completed.status_code == 201, completed.data
+    reference = completed.data["credential"]
+    assert reference.startswith("plugin://")
+    stored = resolve(reference, tenant_id=tenant.id)
+    assert stored == {"type": "bearer", "token": "access-2"}
+    assert calls[0]["grant"] == "authorization_code"
+    assert calls[1]["grant"] == "refresh_token"
+
+    from core.models import AgentPluginCredential
+
+    credential = AgentPluginCredential.objects.get(pk=reference.split("://", 1)[1])
+    import json
+
+    contract = json.loads(
+        plugin_studio.open_sealed(credential.sealed_value, plugin_studio.CREDENTIAL_SCOPE)
+    )
+    assert contract["grant"] == "refresh_token"
+    assert contract["refresh_token"] == "refresh-1"
+    assert "code" not in contract
+    assert "code_verifier" not in contract
+
+
+def test_oauth_callback_rejects_an_expired_state(studio_workspace, monkeypatch):
+    _user, tenant, _project, client = studio_workspace
+    monkeypatch.setattr(
+        plugin_studio,
+        "validate_public_url",
+        lambda value, field="url": str(value),
+    )
+    monkeypatch.setattr(plugin_studio, "OAUTH_STATE_TTL_SECONDS", -1)
+    started = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/authorize/",
+        {
+            "authorization_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+            "redirect_uri": "https://console.example.com/plugins/oauth/callback",
+            "client_id": "client-id",
+        },
+        format="json",
+    )
+    assert started.status_code == 201
+    completed = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/callback/",
+        {"code": "provider-code", "state": started.data["state"]},
+        format="json",
+    )
+    assert completed.status_code == 400
+    assert "expired" in completed.data["error"]["message"].lower()

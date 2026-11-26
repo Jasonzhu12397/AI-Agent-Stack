@@ -423,6 +423,53 @@ class AgentPluginCatalogView(APIView):
         return Response(_definition_data(plugin), status=201)
 
 
+class AgentPluginOAuthAuthorizeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, tenant_id):
+        tenant = _tenant_for_user(request, tenant_id)
+        if not _is_tenant_admin(request.user, tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.", http_status=403
+            )
+        payload = request.data
+        if not isinstance(payload, dict):
+            return legacy_error_response("OAuth authorization payload must be an object.")
+        try:
+            result = plugin_studio.build_authorization_request(
+                payload,
+                tenant.id,
+                request.user.id,
+            )
+        except plugin_studio.PluginStudioError as exc:
+            return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
+        return Response(result, status=201)
+
+
+class AgentPluginOAuthCallbackView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tenant_id):
+        return self._complete(request, tenant_id, request.query_params)
+
+    def post(self, request, tenant_id):
+        payload = request.data if isinstance(request.data, dict) else {}
+        return self._complete(request, tenant_id, payload)
+
+    def _complete(self, request, tenant_id, payload):
+        tenant = _tenant_for_user(request, tenant_id)
+        try:
+            result = plugin_studio.complete_authorization_code(
+                tenant,
+                request.user,
+                payload.get("code"),
+                payload.get("state"),
+            )
+        except plugin_studio.PluginStudioError as exc:
+            return legacy_error_response(str(exc), http_status=exc.http_status, code=exc.code)
+        return Response(result, status=201)
+
+
 class AgentPluginStudioDiscoverView(APIView):
     """Discover a remote plugin surface and generate its technical contract.
 

@@ -40,6 +40,8 @@ from core.agent_plugin_views import (
     AgentPluginInstallationListCreateView,
     AgentPluginInstallationStatusView,
     AgentPluginCredentialRotateView,
+    AgentPluginOAuthAuthorizeView,
+    AgentPluginOAuthCallbackView,
     AgentPluginStudioDiscoverView,
     AgentPluginStudioPublishView,
     AgentPluginStudioTestView,
@@ -362,6 +364,16 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/agent-plugins/",
         AgentPluginCatalogView.as_view(),
         name="agent-plugin-catalog",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/agent-plugins/studio/oauth/authorize/",
+        AgentPluginOAuthAuthorizeView.as_view(),
+        name="agent-plugin-oauth-authorize",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/agent-plugins/studio/oauth/callback/",
+        AgentPluginOAuthCallbackView.as_view(),
+        name="agent-plugin-oauth-callback",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/agent-plugins/studio/discover/",

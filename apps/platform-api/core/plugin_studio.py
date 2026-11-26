@@ -15,12 +15,15 @@ validated by :mod:`core.agent_plugin_manifest` before a definition is stored.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
+import secrets
 import socket
-from datetime import datetime, UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -37,6 +40,8 @@ DEFAULT_TIMEOUT_SECONDS = 15
 VERIFIED_PUBLIC_HOSTS: set[str] = set()
 CREDENTIAL_SCOPE = "agent-plugin-credential"
 CREDENTIAL_PREFIX = "plugin://"
+OAUTH_STATE_SCOPE = "agent-plugin-oauth-state"
+OAUTH_STATE_TTL_SECONDS = 600
 
 _SUPPORTED_METHODS = {"get", "post"}
 _SKIPPED_METHODS = {"put", "patch", "delete", "head", "options", "trace"}
@@ -203,6 +208,186 @@ def _auth_from_request(payload: dict[str, Any]) -> dict[str, Any]:
     return contract
 
 
+def _oauth_token_data(contract: dict[str, Any]) -> dict[str, str]:
+    grant = contract.get("grant") or "client_credentials"
+    data: dict[str, str] = {"grant_type": grant}
+    if grant == "refresh_token":
+        data["refresh_token"] = contract.get("refresh_token", "")
+    elif grant == "authorization_code":
+        data["code"] = contract.get("code", "")
+        data["redirect_uri"] = contract.get("redirect_uri", "")
+        if contract.get("code_verifier"):
+            data["code_verifier"] = contract["code_verifier"]
+    data["client_id"] = contract.get("client_id", "")
+    if contract.get("client_secret"):
+        data["client_secret"] = contract["client_secret"]
+    if contract.get("scope"):
+        data["scope"] = contract["scope"]
+    return data
+
+
+def _oauth_token_request(contract: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+    """Exchange a grant for an access token and return the token document."""
+
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+            response = client.post(
+                validate_public_url(contract["token_url"], "OAuth token URL"),
+                data=_oauth_token_data(contract),
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        raise PluginStudioError(
+            "PLUGIN_AUTH_UNREACHABLE", "The OAuth token endpoint is unreachable."
+        ) from exc
+    if response.status_code in {401, 403}:
+        raise PluginStudioError(
+            "PLUGIN_AUTH_REJECTED", "The OAuth token endpoint rejected the OAuth grant."
+        )
+    if response.status_code >= 400:
+        raise PluginStudioError(
+            "PLUGIN_AUTH_REJECTED", "The OAuth token endpoint rejected the OAuth grant."
+        )
+    try:
+        token = response.json()
+    except ValueError as exc:
+        raise PluginStudioError(
+            "PLUGIN_AUTH_INVALID", "The OAuth token endpoint returned a non-JSON response."
+        ) from exc
+    if not isinstance(token, dict) or not isinstance(token.get("access_token"), str):
+        raise PluginStudioError(
+            "PLUGIN_AUTH_INVALID", "The OAuth token endpoint did not return an access token."
+        )
+    return token
+
+
+def _pkce_pair() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def build_authorization_request(
+    payload: dict[str, Any], tenant_id, user_id
+) -> dict[str, Any]:
+    """Build a provider authorize URL and seal the matching PKCE verifier.
+
+    The sealed state binds the pending grant to the workspace and user, and
+    carries the client secret so the callback can redeem the code without a
+    second round trip through the browser.
+    """
+
+    authorization_url = validate_public_url(
+        payload.get("authorization_url"), "authorization_url"
+    )
+    token_url = validate_public_url(payload.get("token_url"), "token_url")
+    redirect_uri = validate_public_url(payload.get("redirect_uri"), "redirect_uri")
+    client_id = payload.get("client_id")
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 client_id is required.")
+    scope = payload.get("scope") or ""
+    if not isinstance(scope, str):
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 scope must be a string.")
+    client_secret = payload.get("client_secret") or ""
+    if not isinstance(client_secret, str):
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 client_secret must be a string.")
+    verifier, challenge = _pkce_pair()
+    state_payload = {
+        "version": 1,
+        "tenant_id": str(tenant_id),
+        "user_id": str(user_id),
+        "authorization_url": authorization_url,
+        "token_url": token_url,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id.strip(),
+        "client_secret": client_secret,
+        "scope": scope,
+        "code_verifier": verifier,
+        "expires_at": (datetime.now(UTC) + timedelta(seconds=OAUTH_STATE_TTL_SECONDS)).isoformat(),
+    }
+    state = seal(json.dumps(state_payload, separators=(",", ":")), OAUTH_STATE_SCOPE)
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": state_payload["client_id"],
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    separator = "&" if "?" in authorization_url else "?"
+    return {
+        "authorize_url": f"{authorization_url}{separator}{query}",
+        "state": state,
+        "expires_in": OAUTH_STATE_TTL_SECONDS,
+    }
+
+
+def complete_authorization_code(tenant, user, code, state) -> dict[str, Any]:
+    """Redeem an authorization code and persist a refreshable credential."""
+
+    if not isinstance(code, str) or not code.strip():
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The authorization code is required.")
+    if not isinstance(state, str) or not state.strip():
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The OAuth state is required.")
+    plaintext = open_sealed(state, OAUTH_STATE_SCOPE)
+    if not plaintext:
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The OAuth state could not be read.")
+    try:
+        pending = json.loads(plaintext)
+    except ValueError as exc:
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The OAuth state is invalid.") from exc
+    if not isinstance(pending, dict) or pending.get("version") != 1:
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The OAuth state is invalid.")
+    try:
+        expires_at = datetime.fromisoformat(str(pending.get("expires_at")))
+    except ValueError as exc:
+        raise PluginStudioError("PLUGIN_AUTH_INVALID", "The OAuth state is invalid.") from exc
+    if expires_at <= datetime.now(UTC):
+        raise PluginStudioError("PLUGIN_AUTH_EXPIRED", "The OAuth state has expired.")
+    if str(pending.get("tenant_id")) != str(tenant.id) or str(pending.get("user_id")) != str(
+        user.id
+    ):
+        raise PluginStudioError(
+            "PLUGIN_AUTH_STATE_MISMATCH", "The OAuth state belongs to another workspace or user."
+        )
+    contract = {
+        "type": "oauth2",
+        "grant": "authorization_code",
+        "token_url": pending["token_url"],
+        "client_id": pending["client_id"],
+        "client_secret": pending.get("client_secret", ""),
+        "scope": pending.get("scope", ""),
+        "redirect_uri": pending["redirect_uri"],
+        "code": code.strip(),
+        "code_verifier": pending["code_verifier"],
+    }
+    token = _oauth_token_request(contract)
+    refresh_token = token.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token.strip():
+        raise PluginStudioError(
+            "PLUGIN_AUTH_INVALID",
+            "The provider did not issue a refresh token; offline access is required.",
+        )
+    stored = dict(contract)
+    stored.pop("code", None)
+    stored.pop("code_verifier", None)
+    stored["grant"] = "refresh_token"
+    stored["refresh_token"] = refresh_token.strip()
+    if isinstance(token.get("scope"), str) and token["scope"]:
+        stored["scope"] = token["scope"]
+    credential = seal_credential(tenant, user, "OAuth plugin credential", stored)
+    return {
+        "credential": credential,
+        "expires_in": token.get("expires_in"),
+        "scope": stored.get("scope", ""),
+        "token_type": token.get("token_type", "Bearer"),
+    }
+
+
 def credential_headers(contract: dict[str, Any], timeout: float = 15.0) -> dict[str, str]:
     """Turn a credential contract into request headers, acquiring OAuth tokens."""
 
@@ -214,44 +399,8 @@ def credential_headers(contract: dict[str, Any], timeout: float = 15.0) -> dict[
     if kind == "header":
         return {contract["name"]: contract["value"]}
     if kind == "oauth2":
-        grant = contract.get("grant") or "client_credentials"
-        data: dict[str, str] = {"grant_type": grant}
-        if grant == "refresh_token":
-            data["refresh_token"] = contract.get("refresh_token", "")
-        data["client_id"] = contract.get("client_id", "")
-        if contract.get("client_secret"):
-            data["client_secret"] = contract["client_secret"]
-        if contract.get("scope"):
-            data["scope"] = contract["scope"]
-        try:
-            with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-                response = client.post(
-                    validate_public_url(contract["token_url"], "OAuth token URL"),
-                    data=data,
-                    headers={"Accept": "application/json"},
-                )
-        except httpx.HTTPError as exc:
-            raise PluginStudioError(
-                "PLUGIN_AUTH_UNREACHABLE", "The OAuth token endpoint is unreachable."
-            ) from exc
-        if response.status_code in {401, 403}:
-            raise PluginStudioError(
-                "PLUGIN_AUTH_REJECTED", "The OAuth token endpoint rejected the OAuth grant."
-            )
-        if response.status_code >= 400:
-            raise PluginStudioError(
-                "PLUGIN_AUTH_FAILED",
-                f"The OAuth token endpoint returned HTTP {response.status_code}.",
-            )
-        try:
-            token = json.loads(response.content.decode("utf-8")).get("access_token")
-        except (ValueError, UnicodeDecodeError, AttributeError):
-            token = None
-        if not isinstance(token, str) or not token:
-            raise PluginStudioError(
-                "PLUGIN_AUTH_FAILED", "The OAuth token response did not contain an access token."
-            )
-        return {"Authorization": f"Bearer {token}"}
+        token = _oauth_token_request(contract, timeout=timeout)
+        return {"Authorization": f"Bearer {token['access_token']}"}
     raise PluginStudioError("PLUGIN_AUTH_UNSUPPORTED", "Unsupported credential contract.")
 
 
