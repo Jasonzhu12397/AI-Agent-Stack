@@ -385,59 +385,144 @@ export function subscribeProjectEvents(
   handlers: ProjectStreamHandlers,
 ): () => void {
   let stopped = false;
-  let controller: AbortController | null = null;
-  let lastEventId = "";
-  const since = new Date().toISOString();
-  let retryMs = 1000;
+  let socket: WebSocket | null = null;
+  let socketTimer: number | undefined;
+  let stopSse: (() => void) | undefined;
+  let fallbackStarted = false;
+  let socketRetry = 1000;
 
-  const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const startSse = (): void => {
+    if (stopped || fallbackStarted) return;
+    fallbackStarted = true;
+    let controller: AbortController | null = null;
+    let lastEventId = "";
+    const since = new Date().toISOString();
+    let retryMs = 1000;
 
-  async function run(): Promise<void> {
-    while (!stopped) {
-      controller = new AbortController();
-      const headers = new Headers({ Accept: "text/event-stream" });
-      const token = storedSessionToken();
-      if (token) headers.set("X-Session-Token", token);
-      if (lastEventId) headers.set("Last-Event-ID", lastEventId);
-      const query = lastEventId ? "" : `?since=${encodeURIComponent(since)}`;
-      try {
-        const response = await fetch(
-          `${apiBase}/api/v1/tenants/${tenantId}/projects/${projectId}/events/stream/${query}`,
-          { headers, credentials: "include", signal: controller.signal },
-        );
-        if (!response.ok || !response.body) {
-          throw new Error(`Event stream failed with status ${response.status}.`);
-        }
-        retryMs = 1000;
-        handlers.onOpen?.();
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (!stopped) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const drained = drainSseFrames(buffer);
-          buffer = drained.rest;
-          for (const frame of drained.frames) {
-            if (frame.id) lastEventId = frame.id;
-            handlers.onEvent(frame);
+    const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+    async function run(): Promise<void> {
+      while (!stopped) {
+        controller = new AbortController();
+        const headers = new Headers({ Accept: "text/event-stream" });
+        const token = storedSessionToken();
+        if (token) headers.set("X-Session-Token", token);
+        if (lastEventId) headers.set("Last-Event-ID", lastEventId);
+        const query = lastEventId ? "" : `?since=${encodeURIComponent(since)}`;
+        try {
+          const response = await fetch(
+            `${apiBase}/api/v1/tenants/${tenantId}/projects/${projectId}/events/stream/${query}`,
+            { headers, credentials: "include", signal: controller.signal },
+          );
+          if (!response.ok || !response.body) {
+            throw new Error(`Event stream failed with status ${response.status}.`);
           }
+          retryMs = 1000;
+          handlers.onOpen?.();
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (!stopped) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const drained = drainSseFrames(buffer);
+            buffer = drained.rest;
+            for (const frame of drained.frames) {
+              if (frame.id) lastEventId = frame.id;
+              handlers.onEvent(frame);
+            }
+          }
+        } catch (error) {
+          if (stopped) return;
+          handlers.onError?.(error);
         }
-      } catch (error) {
         if (stopped) return;
-        handlers.onError?.(error);
+        await sleep(retryMs);
+        retryMs = Math.min(retryMs * 2, 15000);
       }
-      if (stopped) return;
-      await sleep(retryMs);
-      retryMs = Math.min(retryMs * 2, 15000);
     }
-  }
 
-  void run();
+    void run();
+    stopSse = () => {
+      stopped = true;
+      controller?.abort();
+    };
+  };
+
+  const connect = (): void => {
+    if (stopped) return;
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const token = storedSessionToken();
+    const protocols = token ? ["aiagentstack", `session.${token}`] : ["aiagentstack"];
+    const url = `${scheme}://${window.location.host}/ws/tenants/${tenantId}/projects/${projectId}/events/`;
+    try {
+      socket = new WebSocket(url, protocols);
+    } catch (error) {
+      handlers.onError?.(error);
+      startSse();
+      return;
+    }
+    let opened = false;
+    socketTimer = window.setTimeout(() => {
+      if (opened || stopped) return;
+      // An intermediary can hold a WebSocket handshake without completing it.
+      socket?.close();
+      startSse();
+    }, 5000);
+    socket.onopen = () => {
+      opened = true;
+      socketRetry = 1000;
+      if (socketTimer !== undefined) window.clearTimeout(socketTimer);
+      handlers.onOpen?.();
+    };
+    socket.onmessage = (message) => {
+      try {
+        const payload = JSON.parse(String(message.data)) as {
+          event?: string;
+          data?: Record<string, unknown>;
+          cursor?: string;
+        };
+        if (payload.event === "ready") {
+          handlers.onOpen?.();
+          return;
+        }
+        if (payload.event !== "task" && payload.event !== "audit") return;
+        const id =
+          payload.cursor ??
+          (payload.data?.updated_at as string | undefined) ??
+          (payload.data?.created_at as string | undefined) ??
+          "";
+        handlers.onEvent({
+          id,
+          event: payload.event,
+          data: JSON.stringify(payload.data ?? {}),
+        });
+      } catch {
+        // A malformed frame must not tear down the subscription.
+      }
+    };
+    socket.onclose = (event) => {
+      if (stopped) return;
+      if (event.code === 4403) {
+        handlers.onError?.(new Error("Event stream authorization failed."));
+        startSse();
+        return;
+      }
+      window.setTimeout(connect, socketRetry);
+      socketRetry = Math.min(socketRetry * 2, 15000);
+    };
+    socket.onerror = () => {
+      // onclose follows and owns the reconnect/fallback decision.
+    };
+  };
+
+  connect();
   return () => {
     stopped = true;
-    controller?.abort();
+    if (socketTimer !== undefined) window.clearTimeout(socketTimer);
+    socket?.close();
+    stopSse?.();
   };
 }
 
