@@ -236,6 +236,12 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::list_identities),
             )
             .route(
+                "/api/v1/users/me/preferences/{namespace}/",
+                get(crate::preferences_api::get_preferences)
+                    .put(crate::preferences_api::update_preferences)
+                    .patch(crate::preferences_api::update_preferences),
+            )
+            .route(
                 "/api/v1/users/me/sessions/",
                 get(crate::account_api::list_sessions),
             )
