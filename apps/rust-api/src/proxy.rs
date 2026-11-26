@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
@@ -6,10 +7,13 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
+use tokio::sync::Semaphore;
 use futures_util::TryStreamExt;
 use serde_json::json;
 
 use crate::config::Config;
+
+const MAX_WEBSOCKET_CONNECTIONS: usize = 256;
 
 const HOP_BY_HOP: &[&str] = &[
     "connection",
@@ -27,6 +31,7 @@ pub struct AppState {
     pub config: Config,
     pub client: reqwest::Client,
     pub identity_pool: Option<sqlx::AnyPool>,
+    pub websocket_slots: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -49,6 +54,7 @@ impl AppState {
             config,
             client,
             identity_pool,
+            websocket_slots: Arc::new(Semaphore::new(MAX_WEBSOCKET_CONNECTIONS)),
         })
     }
 }
