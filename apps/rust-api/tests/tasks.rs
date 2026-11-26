@@ -223,7 +223,6 @@ async fn cancels_a_queued_task_and_records_the_audit_event() {
     assert_eq!(events, 1);
 }
 
-
 #[tokio::test]
 async fn project_viewers_cannot_cancel_tasks() {
     let (state, path) = state().await;
