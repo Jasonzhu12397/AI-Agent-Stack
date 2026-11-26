@@ -403,3 +403,29 @@ def test_token_reservation_rejects_invalid_idempotency_keys(token_budget_run, ke
             idempotency_key=key,
             requested_tokens=10,
         )
+
+
+def test_run_token_guard_scopes_reservation_keys_to_the_current_task_lease(monkeypatch):
+    from types import SimpleNamespace
+
+    from core import token_guard
+
+    captured = []
+
+    def fake_reserve(**kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(token_guard, "reserve_tenant_tokens", fake_reserve)
+    task = SimpleNamespace(lease_token="lease-one")
+    guard = token_guard.RunTokenGuard(task=task, agent_run=object())
+
+    guard.reserve(idempotency_key="workflow-step-1", requested_tokens=100)
+    first_key = captured[-1]["idempotency_key"]
+    guard.reserve(idempotency_key="workflow-step-1", requested_tokens=100)
+    assert captured[-1]["idempotency_key"] == first_key
+
+    task.lease_token = "lease-two"
+    guard.reserve(idempotency_key="workflow-step-1", requested_tokens=100)
+    assert captured[-1]["idempotency_key"] != first_key
+    assert len(captured[-1]["idempotency_key"]) == 64
