@@ -116,7 +116,7 @@ def test_reviewer_timeout_rule_ignores_orm_and_mapping_methods(tmp_path):
 def test_reviewer_ignores_test_assertions_and_marker_strings(tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
-    (tests_dir / "test_example.py").write_text("assert True\\nvalue = 'TODO'\\n")
+    (tests_dir / "test_example.py").write_text("assert True\nvalue = 'TODO'\n")
     report = review_paths(tmp_path)
     rules = {finding.rule for finding in report.findings}
     assert "assert-for-validation" not in rules
@@ -124,7 +124,7 @@ def test_reviewer_ignores_test_assertions_and_marker_strings(tmp_path):
 
 
 def test_reviewer_reports_unfinished_markers_in_comments(tmp_path):
-    (tmp_path / "sample.py").write_text("# TODO: add request timeout\\n")
+    (tmp_path / "sample.py").write_text("# TODO: add request timeout\n")
     report = review_paths(tmp_path)
     finding = next(item for item in report.findings if item.rule == "unfinished-marker")
     assert finding.line == 1
