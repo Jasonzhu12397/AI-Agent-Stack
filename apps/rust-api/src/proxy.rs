@@ -249,7 +249,7 @@ async fn info(State(state): State<AppState>) -> Json<EdgeInfo> {
     Json(EdgeInfo {
         service: "rust-api-edge",
         version: env!("CARGO_PKG_VERSION"),
-        upstream: state.config.upstream.to_string(),
+        upstream: state.config.upstream.host_str().unwrap_or("configured").to_string(),
         websocket: true,
         server_sent_events: true,
     })
@@ -320,7 +320,7 @@ async fn forward(
     let upstream_response = match builder.send().await {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!(%target, %error, "rust api edge could not reach the upstream");
+            tracing::warn!(%error, "rust api edge could not reach the upstream");
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({
