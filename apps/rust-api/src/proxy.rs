@@ -368,7 +368,6 @@ async fn forward(
     response
 }
 
-
 pub(crate) fn set_trusted_forwarded_headers(
     headers: &mut HeaderMap,
     peer: SocketAddr,
