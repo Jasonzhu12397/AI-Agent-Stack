@@ -2,7 +2,7 @@
 
 import pytest
 from core.chat_models import AgentChatThread
-from core.models import Project, Tenant, TenantMembership
+from core.models import Project, ProjectMembership, Tenant, TenantMembership
 from django.contrib.auth import get_user_model
 from django.test import Client
 
@@ -14,6 +14,9 @@ def test_post_with_override_header_is_treated_as_delete():
     TenantMembership.objects.create(tenant=tenant, user=user, role="member")
     project = Project.objects.create(
         tenant=tenant, name="Override project", slug="override-project"
+    )
+    ProjectMembership.objects.create(
+        project=project, user=user, role=ProjectMembership.Role.VIEWER
     )
     thread = AgentChatThread.objects.create(
         tenant=tenant, project=project, created_by=user, title="Temporary"
@@ -38,6 +41,9 @@ def test_plain_post_without_override_still_creates_a_message():
     tenant = Tenant.objects.create(name="Plain tenant", slug="plain-tenant")
     TenantMembership.objects.create(tenant=tenant, user=user, role="member")
     project = Project.objects.create(tenant=tenant, name="Plain project", slug="plain-project")
+    ProjectMembership.objects.create(
+        project=project, user=user, role=ProjectMembership.Role.VIEWER
+    )
     client = Client()
     client.force_login(user)
     response = client.post(
