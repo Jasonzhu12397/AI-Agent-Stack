@@ -42,6 +42,7 @@ const moreItems = [
   { to: "/marketplace", label: t("Agent marketplace") },
   { to: "/registry", label: t("Image registry") },
   { to: "/infrastructure", label: t("Metal3 fleet") },
+  { to: "/cloud-vms", label: t("Cloud VMs") },
   { to: "/governance", label: t("Governance") },
   { to: "/audit", label: t("Audit and activity") },
   { to: "/organization", label: t("Organization") },

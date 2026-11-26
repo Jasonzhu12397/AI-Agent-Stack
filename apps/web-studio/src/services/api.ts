@@ -1545,6 +1545,88 @@ export function getClusterDeploymentEtcdBackup(
   return request("/api/v1/cluster-deployments/" + deploymentId + "/etcd-backup/");
 }
 
+export type CloudVmProvider = {
+  key: string;
+  type: string;
+  display_name: string;
+  region: string;
+};
+
+export type CloudVm = {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  provider_key: string;
+  server_id: string;
+  name: string;
+  flavor_ref: string;
+  image_ref: string;
+  network_ids: string[];
+  status: string;
+  ip_address: string | null;
+  provider_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CloudVmList = {
+  count: number;
+  results: CloudVm[];
+  warnings: string[];
+};
+
+export function getCloudVmProviders(
+  tenantId: string,
+  projectId: string,
+): Promise<{ count: number; results: CloudVmProvider[] }> {
+  return request(
+    "/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cloud-vms/providers/",
+  );
+}
+
+export function getCloudVms(
+  tenantId: string,
+  projectId: string,
+  refresh = false,
+): Promise<CloudVmList> {
+  return request(
+    "/api/v1/tenants/" +
+      tenantId +
+      "/projects/" +
+      projectId +
+      "/cloud-vms/" +
+      (refresh ? "?refresh=1" : ""),
+  );
+}
+
+export function createCloudVm(
+  tenantId: string,
+  projectId: string,
+  payload: {
+    provider: string;
+    name: string;
+    flavor_ref: string;
+    image_ref: string;
+    network_ids: string[];
+  },
+): Promise<CloudVm> {
+  return request("/api/v1/tenants/" + tenantId + "/projects/" + projectId + "/cloud-vms/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCloudVm(vmId: string): Promise<CloudVm> {
+  return request("/api/v1/cloud-vms/" + vmId + "/", { method: "DELETE" });
+}
+
+export function cloudVmAction(vmId: string, action: string): Promise<CloudVm> {
+  return request("/api/v1/cloud-vms/" + vmId + "/actions/", {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+}
+
 export function getClusterDeployments(
   tenantId: string,
   projectId: string,

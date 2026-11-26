@@ -105,6 +105,14 @@ export const zhCN: Record<string, string> = {
   "Next": "下一个",
   "Previous": "上一个",
   "Refresh": "刷新",
+  "worker-a": "worker-a",
+  "flavor-id-or-name": "规格 ID 或名称",
+  "image-id-or-name": "镜像 ID 或名称",
+  "network-id, network-id": "网络 ID, 网络 ID",
+  "Cloud VM {0} requested with status {1}.": "云主机 {0} 已提交，状态 {1}。",
+  "Cloud VM {0} -> {1}.": "云主机 {0} -> {1}。",
+  "{0} virtual machines": "{0} 台云主机",
+
   "Refresh data": "刷新数据",
   "Refresh catalog": "刷新目录",
   "Reload": "重新加载",
@@ -1094,6 +1102,28 @@ export const zhCN: Record<string, string> = {
   "Agent marketplace": "智能体市场",
   "Image registry": "镜像仓库",
   "Metal3 fleet": "Metal3 集群",
+  "Cloud VMs": "云主机",
+  "Infrastructure": "基础设施",
+  "Create a VM": "创建云主机",
+  "Create VM": "创建云主机",
+  "Create and operate virtual machines on operator-configured OpenStack providers.":
+    "在运维预配置的 OpenStack 服务商上创建和操作云主机。",
+  "No cloud provider is configured. Set CLOUD_VM_PROVIDERS in the deployment environment.":
+    "未配置云服务商，请在部署环境设置 CLOUD_VM_PROVIDERS。",
+  "Provider": "服务商",
+  "Flavor ref": "规格引用",
+  "Image ref": "镜像引用",
+  "Networks": "网络",
+  "Comma-separated provider network ids; at least one is required.":
+    "填写服务商网络 ID，用逗号分隔，至少一个。",
+  "No virtual machines in this project yet.": "该项目还没有云主机。",
+  "Select a tenant and project first.": "请先选择租户和项目。",
+  "No address yet": "暂无地址",
+  "Flavor": "规格",
+  "Start": "启动",
+  "Reboot": "重启",
+
+
   "Audit and activity": "审计与动态",
   "Docs and matrix": "文档与能力矩阵",
   "Local machine": "本地电脑",

@@ -1312,3 +1312,59 @@ from core.chat_models import (  # noqa: E402,F401
 from core.knowledge_models import KnowledgeBase, KnowledgeDocument  # noqa: E402,F401
 from core.registry_models import RegistryEvent, RegistryImage  # noqa: E402,F401
 from core.scheduled_models import ScheduledChatJob  # noqa: E402,F401
+
+
+class CloudVmInstance(models.Model):
+    """A virtual machine created through an operator-configured cloud provider.
+
+    The platform never stores provider credentials. A deployment operator
+    exports ``CLOUD_VM_PROVIDERS`` and this row only records which provider
+    key produced the server plus the provider-side identifier needed to
+    reconcile or delete it.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name="cloud_vm_instances",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="cloud_vm_instances",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_cloud_vm_instances",
+    )
+    provider_key = models.CharField(max_length=64)
+    server_id = models.CharField(max_length=128)
+    name = models.CharField(max_length=128)
+    flavor_ref = models.CharField(max_length=128)
+    image_ref = models.CharField(max_length=128)
+    network_ids = models.JSONField(default=list)
+    status = models.CharField(max_length=32, blank=True, default="UNKNOWN")
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    provider_metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "project", "provider_key", "server_id"],
+                name="uniq_cloud_vm_server",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["tenant", "project", "provider_key"],
+                name="cloud_vm_scope_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"cloud-vm:{self.provider_key}:{self.server_id}"

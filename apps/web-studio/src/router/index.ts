@@ -9,6 +9,7 @@ import WorkspaceView from "../components/WorkspaceView.vue";
 import ChatWorkspaceView from "../components/ChatWorkspaceView.vue";
 import ScheduledJobsView from "../components/ScheduledJobsView.vue";
 import Metal3FleetView from "../components/Metal3FleetView.vue";
+import CloudVmsView from "../components/CloudVmsView.vue";
 import type { CurrentUser } from "../services/api";
 
 type AuthStatus = "unknown" | "authenticated" | "unauthenticated" | "forbidden";
@@ -79,6 +80,12 @@ const legacyRoutes: RouteRecordRaw[] = [
     path: "/infrastructure",
     name: "infrastructure",
     component: Metal3FleetView,
+    meta: { section: "overview", requiresAuth: true },
+  },
+  {
+    path: "/cloud-vms",
+    name: "cloud-vms",
+    component: CloudVmsView,
     meta: { section: "overview", requiresAuth: true },
   },
 ];

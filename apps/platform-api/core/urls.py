@@ -53,6 +53,12 @@ from core.agent_plugin_views import (
     AgentPluginDiscoverView,
 )
 from core.infra_network_views import InfrastructureNetworkProfileView
+from core.cloud_vm_views import (
+    CloudVmActionView,
+    CloudVmDetailView,
+    CloudVmListCreateView,
+    CloudVmProviderListView,
+)
 from core.agent_team_views import (
     AgentTeamDetailView,
     AgentTeamListCreateView,
@@ -193,6 +199,26 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/",
         ClusterDeploymentListCreateView.as_view(),
         name="cluster-deployment-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cloud-vms/providers/",
+        CloudVmProviderListView.as_view(),
+        name="cloud-vm-provider-list",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cloud-vms/",
+        CloudVmListCreateView.as_view(),
+        name="cloud-vm-list-create",
+    ),
+    path(
+        "api/v1/cloud-vms/<uuid:vm_id>/",
+        CloudVmDetailView.as_view(),
+        name="cloud-vm-detail",
+    ),
+    path(
+        "api/v1/cloud-vms/<uuid:vm_id>/actions/",
+        CloudVmActionView.as_view(),
+        name="cloud-vm-actions",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/cluster-deployments/ironic-template/",
