@@ -211,6 +211,36 @@ pub async fn update_profile(
     }
 }
 
+pub async fn list_identities(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let password: Result<Option<String>, _> =
+        sqlx::query_scalar("SELECT password FROM auth_user WHERE id = ?")
+            .bind(user.id)
+            .fetch_optional(pool)
+            .await;
+    let has_password = match password {
+        Ok(Some(value)) => !value.is_empty() && !value.starts_with('!'),
+        Ok(None) => false,
+        Err(error) => {
+            tracing::error!(%error, "rust account could not read the password state");
+            return unavailable();
+        }
+    };
+    Json(json!({
+        "has_password": has_password,
+        "methods": if has_password { vec!["password"] } else { Vec::<&str>::new() },
+        "bound_identities": 0,
+        "providers": [],
+    }))
+    .into_response()
+}
+
 pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user = match require_user(&state, &headers).await {
         Ok(user) => user,

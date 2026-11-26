@@ -232,6 +232,10 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
             )
             .route(
+                "/api/v1/users/me/identities/",
+                get(crate::account_api::list_identities),
+            )
+            .route(
                 "/api/v1/users/me/sessions/",
                 get(crate::account_api::list_sessions),
             )

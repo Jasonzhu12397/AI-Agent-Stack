@@ -19,16 +19,16 @@ async fn state() -> AppState {
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
     for statement in [
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
-        "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
+        "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_useraccountprofile (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, display_name VARCHAR(160) NOT NULL, timezone VARCHAR(64) NOT NULL, locale VARCHAR(16) NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_sessionactivity (session_key VARCHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
-    sqlx::query("INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
+    sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 'pbkdf2_sha256$demo', 0, 1)")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (2, 'bob', 'bob@example.com', 0, 1)")
+    sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (2, 'bob', 'bob@example.com', '!disabled', 0, 1)")
         .execute(&pool).await.unwrap();
     let data = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
@@ -200,4 +200,28 @@ async fn lists_and_revokes_only_owned_sessions() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["revoked"], false);
+}
+
+#[tokio::test]
+async fn reports_password_identity_state() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/users/me/identities/")
+        .header(
+            "cookie",
+            format!("sessionid={SESSION}; csrftoken=0123456789abcdef0123456789abcdef"),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["has_password"], json!(true));
+    assert_eq!(body["methods"], json!(["password"]));
+    assert_eq!(body["bound_identities"], json!(0));
+    assert_eq!(body["providers"], json!([]));
 }
