@@ -227,6 +227,15 @@ class ModelConfig(models.Model):
     )
     version = models.PositiveIntegerField(default=1)
     enabled = models.BooleanField(default=True)
+    #: Standby for retryable provider failures. A chain is formed by following
+    #: this pointer, so routing never needs a separate policy table.
+    fallback_model = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fallback_for",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

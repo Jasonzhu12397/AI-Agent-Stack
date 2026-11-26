@@ -126,6 +126,7 @@ export const zhCN: Record<string, string> = {
   "Copy token": "复制令牌",
   "Test connection": "测试连接",
   "Test model": "测试模型",
+  "No fallback": "无备用模型",
   "Submit firmware upgrade": "提交固件升级",
   "Run workflow": "运行工作流",
   "Run team": "运行团队",

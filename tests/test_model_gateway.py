@@ -480,3 +480,134 @@ def test_gateway_names_the_model_and_provider_reason_on_404(monkeypatch):
     assert raised.value.code == "MODEL_NOT_FOUND"
     assert "gpt-5.6-luna" in str(raised.value)
     assert "The model does not exist" in str(raised.value)
+
+
+def _openai_models(tenant, user, names):
+    providers = []
+    models = []
+    for name in names:
+        provider = ModelProvider.objects.create(
+            tenant=tenant,
+            created_by=user,
+            name=f"{name} provider",
+            provider_type=ModelProvider.ProviderType.OPENAI_COMPATIBLE,
+            base_url=f"https://{name}.example.test/v1",
+            credential_ref="env:MODEL_API_KEY",
+        )
+        model = ModelConfig.objects.create(
+            provider=provider,
+            model_name=f"{name}-chat",
+            display_name=f"{name.title()} Chat",
+            capabilities=["chat"],
+        )
+        providers.append(provider)
+        models.append(model)
+    return providers, models
+
+
+@pytest.mark.django_db
+def test_retryable_primary_failure_uses_the_configured_fallback(model_tenant, monkeypatch):
+    _, tenant, _, _ = model_tenant
+    user = tenant.memberships.first().user
+    _, (primary, standby) = _openai_models(tenant, user, ["primary", "standby"])
+    primary.fallback_model = standby
+    primary.save(update_fields=["fallback_model"])
+    calls = []
+
+    def fake_post(self, provider, endpoint, body, timeout_seconds, credential_ref=None):
+        calls.append(provider.name)
+        if provider.name == "primary provider":
+            raise ModelGatewayError("MODEL_PROVIDER_UNAVAILABLE", "down", retryable=True)
+        return {
+            "choices": [{"message": {"content": "standby answered"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+        }
+
+    monkeypatch.setattr(ModelGateway, "_post_json", fake_post)
+
+    result = ModelGateway(guard=_StubGuard()).complete(
+        primary, [{"role": "user", "content": "hello"}]
+    )
+
+    assert calls == ["primary provider", "standby provider"]
+    assert result.content == "standby answered"
+    assert result.provider == "standby provider"
+    assert result.model == "standby-chat"
+    assert result.fallback_attempts == [
+        {
+            "provider": "primary provider",
+            "model": "primary-chat",
+            "error_code": "MODEL_PROVIDER_UNAVAILABLE",
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_non_retryable_failure_does_not_use_the_fallback(model_tenant, monkeypatch):
+    _, tenant, _, _ = model_tenant
+    user = tenant.memberships.first().user
+    _, (primary, standby) = _openai_models(tenant, user, ["primary", "standby"])
+    primary.fallback_model = standby
+    primary.save(update_fields=["fallback_model"])
+
+    def fake_post(self, provider, endpoint, body, timeout_seconds, credential_ref=None):
+        if provider.name == "standby provider":
+            pytest.fail("a non-retryable error must not reach the standby")
+        raise ModelGatewayError(
+            "MODEL_PROVIDER_INVALID_RESPONSE", "broken payload", retryable=False
+        )
+
+    monkeypatch.setattr(ModelGateway, "_post_json", fake_post)
+
+    with pytest.raises(ModelGatewayError) as raised:
+        ModelGateway(guard=_StubGuard()).complete(
+            primary, [{"role": "user", "content": "hello"}]
+        )
+
+    assert raised.value.code == "MODEL_PROVIDER_INVALID_RESPONSE"
+
+
+@pytest.mark.django_db
+def test_fallback_is_skipped_when_it_cannot_accept_tools(model_tenant):
+    _, tenant, _, _ = model_tenant
+    user = tenant.memberships.first().user
+    _, (primary, standby) = _openai_models(tenant, user, ["primary", "standby"])
+    primary.fallback_model = standby
+    primary.save(update_fields=["fallback_model"])
+
+    assert ModelGateway._fallback_model(
+        primary,
+        [{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+    ) is None
+
+
+@pytest.mark.django_db
+def test_api_sets_fallback_and_rejects_a_cycle(model_tenant):
+    _, tenant, _, base = model_tenant
+    user = tenant.memberships.first().user
+    _, (primary, standby) = _openai_models(tenant, user, ["route-a", "route-b"])
+    client = APIClient()
+    client.force_authenticate(user=user)
+    url = f"/api/v1/tenants/{tenant.id}/model-configs/{{}}/"
+
+    set_primary = client.patch(
+        url.format(primary.id), {"fallback_model": str(standby.id)}, format="json"
+    )
+    assert set_primary.status_code == 200
+    assert str(set_primary.data["fallback_model"]) == str(standby.id)
+    assert set_primary.data["fallback_model_name"] == "Route-B Chat"
+
+    cycle = client.patch(
+        url.format(standby.id), {"fallback_model": str(primary.id)}, format="json"
+    )
+    assert cycle.status_code == 400
+
+    self_reference = client.patch(
+        url.format(primary.id), {"fallback_model": str(primary.id)}, format="json"
+    )
+    assert self_reference.status_code == 400
+
+    cleared = client.patch(url.format(primary.id), {"fallback_model": None}, format="json")
+    assert cleared.status_code == 200
+    assert cleared.data["fallback_model"] is None
+    assert base.fallback_model_id is None

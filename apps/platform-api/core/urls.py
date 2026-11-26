@@ -118,6 +118,7 @@ from core.provider_oauth_views import (
 
 from core.model_views import (
     ModelConfigListCreateView,
+    ModelConfigUpdateView,
     ModelProviderAccountView,
     ModelProviderCatalogView,
     ModelProviderListCreateView,
@@ -653,6 +654,11 @@ urlpatterns = [
         "api/v1/tenants/<uuid:tenant_id>/model-providers/<uuid:provider_id>/models/",
         ModelConfigListCreateView.as_view(),
         name="model-config-list-create",
+    ),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/model-configs/<uuid:model_config_id>/",
+        ModelConfigUpdateView.as_view(),
+        name="model-config-update",
     ),
     path(
         "api/v1/tenants/<uuid:tenant_id>/model-configs/<uuid:model_config_id>/test/",

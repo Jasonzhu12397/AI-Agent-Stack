@@ -83,6 +83,9 @@ export type ModelConfig = {
   context_window: number;
   max_output_tokens: number;
   version: number;
+  enabled: boolean;
+  fallback_model: string | null;
+  fallback_model_name: string | null;
 };
 export type AgentDraft = {
   id: string;
@@ -596,6 +599,20 @@ export function createModelConfig(
         context_window: 32768,
         max_output_tokens: 4096,
       }),
+    },
+  );
+}
+
+export function updateModelFallback(
+  tenantId: string,
+  modelConfigId: string,
+  fallbackModelId: string | null,
+): Promise<ModelConfig> {
+  return request<ModelConfig>(
+    `/api/v1/tenants/${tenantId}/model-configs/${modelConfigId}/`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ fallback_model: fallbackModelId }),
     },
   );
 }

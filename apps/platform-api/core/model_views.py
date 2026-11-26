@@ -145,6 +145,14 @@ class ModelConfigListCreateView(APIView):
             provider = ModelProvider.objects.select_for_update().get(pk=provider.pk)
             serializer = ModelConfigSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
+            fallback = serializer.validated_data.get("fallback_model")
+            if fallback is not None and not _fallback_is_usable(
+                tenant, request.user, None, fallback
+            ):
+                return Response(
+                    {"detail": "The fallback must be an enabled visible chat model."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             latest_version = (
                 ModelConfig.objects.filter(
                     provider=provider,
@@ -174,6 +182,87 @@ class ModelConfigListCreateView(APIView):
             ModelConfigSerializer(model_config).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+def visible_model_configs(tenant, user):
+    return ModelConfig.objects.filter(provider_accounts.model_config_scope_q(tenant, user))
+
+
+def _fallback_is_usable(tenant, user, model_config, fallback):
+    """Reject a standby that cannot serve this model or would form a loop."""
+
+    if fallback is None:
+        return True
+    if model_config is not None and str(fallback.id) == str(model_config.id):
+        return False
+    if not visible_model_configs(tenant, user).filter(pk=fallback.pk).exists():
+        return False
+    seen = {str(getattr(model_config, "id", ""))}
+    current = fallback
+    for _ in range(3):
+        if current is None:
+            return True
+        if str(current.id) in seen:
+            return False
+        if not current.enabled or "chat" not in (current.capabilities or []):
+            return False
+        seen.add(str(current.id))
+        current = current.fallback_model
+    return current is None
+
+
+class ModelConfigUpdateView(APIView):
+    """Set the standby model used when a call fails with a retryable error."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, tenant_id, model_config_id):
+        tenant = get_tenant(request, tenant_id)
+        if not is_tenant_admin(request, tenant):
+            return legacy_error_response(
+                "Tenant administrator permission required.",
+                http_status=status.HTTP_403_FORBIDDEN,
+                code="TENANT_ADMIN_REQUIRED",
+            )
+        model_config = get_object_or_404(
+            visible_model_configs(tenant, request.user),
+            pk=model_config_id,
+        )
+        serializer = ModelConfigSerializer(
+            model_config,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        if "fallback_model" in serializer.validated_data:
+            fallback = serializer.validated_data["fallback_model"]
+            if not _fallback_is_usable(tenant, request.user, model_config, fallback):
+                return Response(
+                    {
+                        "detail": (
+                            "The fallback must be an enabled chat model in this tenant's "
+                            "visible providers, and must not form a cycle."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            model_config.fallback_model = fallback
+            model_config.save(update_fields=["fallback_model"])
+        record_audit_event(
+            request,
+            tenant,
+            "model.config.routing.updated",
+            "model_config",
+            model_config.id,
+            metadata={
+                "fallback_model_id": (
+                    str(model_config.fallback_model_id)
+                    if model_config.fallback_model_id
+                    else None
+                )
+            },
+        )
+        return Response(ModelConfigSerializer(model_config).data)
 
 
 class ModelTestView(APIView):

@@ -11,6 +11,7 @@ import {
   linkProviderAccount,
   testModel,
   unlinkProviderAccount,
+  updateModelFallback,
   type ModelConfig,
   type ModelProvider,
   type ProviderCatalog,
@@ -20,6 +21,7 @@ import {
 const props = defineProps<{ tenantId: string }>();
 const providers = ref<ModelProvider[]>([]);
 const models = ref<ModelConfig[]>([]);
+const routingCandidates = ref<ModelConfig[]>([]);
 const selectedProviderId = ref("");
 const providerName = ref("Local Fake Provider");
 const fakeResponse = ref("Hello. I am the local test model.");
@@ -148,6 +150,7 @@ async function loadProviders(): Promise<void> {
     if (!providers.value.some((provider) => provider.id === selectedProviderId.value)) {
       selectedProviderId.value = providers.value[0]?.id ?? "";
     }
+    await loadRoutingCandidates();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to load model providers.";
   }
@@ -165,6 +168,48 @@ async function loadModels(): Promise<void> {
   }
 }
 
+async function loadRoutingCandidates(): Promise<void> {
+  if (!props.tenantId || !providers.value.length) {
+    routingCandidates.value = [];
+    return;
+  }
+  const lists = await Promise.all(
+    providers.value.map((provider) =>
+      getModelConfigs(props.tenantId, provider.id).catch(() => [] as ModelConfig[]),
+    ),
+  );
+  routingCandidates.value = lists.flat();
+}
+
+function fallbackCandidatesFor(model: ModelConfig): ModelConfig[] {
+  return routingCandidates.value.filter(
+    (candidate) =>
+      candidate.id !== model.id &&
+      candidate.capabilities.includes("chat") &&
+      (candidate.enabled ?? true),
+  );
+}
+
+async function setFallback(model: ModelConfig, fallbackModelId: string): Promise<void> {
+  busy.value = true;
+  error.value = "";
+  try {
+    const updated = await updateModelFallback(
+      props.tenantId,
+      model.id,
+      fallbackModelId || null,
+    );
+    models.value = models.value.map((item) => (item.id === updated.id ? updated : item));
+    routingCandidates.value = routingCandidates.value.map((item) =>
+      item.id === updated.id ? updated : item,
+    );
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "Unable to set the fallback model.";
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function addFakeProvider(): Promise<void> {
   busy.value = true;
   error.value = "";
@@ -176,6 +221,7 @@ async function addFakeProvider(): Promise<void> {
     );
     providers.value = [...providers.value, provider];
     selectedProviderId.value = provider.id;
+    await loadRoutingCandidates();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create provider.";
   } finally {
@@ -195,6 +241,7 @@ async function addOpenAIProvider(): Promise<void> {
     );
     providers.value = [...providers.value, provider];
     selectedProviderId.value = provider.id;
+    await loadRoutingCandidates();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create model provider.";
   } finally {
@@ -215,6 +262,7 @@ async function addEmbeddingModel(): Promise<void> {
       ["embeddings"],
     );
     models.value = [model, ...models.value];
+    routingCandidates.value = [model, ...routingCandidates.value];
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create embedding model.";
   } finally {
@@ -234,6 +282,7 @@ async function addModel(): Promise<void> {
       modelDisplayName.value.trim(),
     );
     models.value = [model, ...models.value];
+    routingCandidates.value = [model, ...routingCandidates.value];
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to create model.";
   } finally {
@@ -380,12 +429,30 @@ watch(selectedProviderId, () => void loadModels());
           <strong>{{ model.display_name }}</strong>
           <p>{{ model.model_name }} · v{{ model.version }} · {{ model.context_window }} context</p>
         </div>
-        <el-button
-          v-if="model.capabilities.includes('chat')"
-          size="small"
-          :loading="busy"
-          @click="runModelTest(model)"
-        >Test model</el-button>
+        <div class="model-row-actions">
+          <el-select
+            v-if="model.capabilities.includes('chat')"
+            :model-value="model.fallback_model ?? ''"
+            size="small"
+            placeholder="No fallback"
+            class="fallback-select"
+            @change="(value: string) => setFallback(model, value)"
+          >
+            <el-option label="No fallback" value="" />
+            <el-option
+              v-for="candidate in fallbackCandidatesFor(model)"
+              :key="candidate.id"
+              :label="candidate.display_name"
+              :value="candidate.id"
+            />
+          </el-select>
+          <el-button
+            v-if="model.capabilities.includes('chat')"
+            size="small"
+            :loading="busy"
+            @click="runModelTest(model)"
+          >Test model</el-button>
+        </div>
       </div>
     </div>
     <el-empty v-else description="Select a provider or add a local fake provider" :image-size="72" />

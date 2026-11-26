@@ -190,6 +190,12 @@ class ModelProviderWriteSerializer(serializers.ModelSerializer):
 
 class ModelConfigSerializer(serializers.ModelSerializer):
     provider_id = serializers.UUIDField(read_only=True)
+    fallback_model = serializers.PrimaryKeyRelatedField(
+        queryset=ModelConfig.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    fallback_model_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ModelConfig
@@ -205,9 +211,14 @@ class ModelConfigSerializer(serializers.ModelSerializer):
             "output_cost_per_million",
             "version",
             "enabled",
+            "fallback_model",
+            "fallback_model_name",
             "created_at",
         ]
         read_only_fields = ["id", "provider_id", "version", "created_at"]
+
+    def get_fallback_model_name(self, obj):
+        return obj.fallback_model.display_name if obj.fallback_model_id else None
 
     def validate_capabilities(self, value):
         allowed = {"chat", "json", "tools", "vision", "embeddings"}

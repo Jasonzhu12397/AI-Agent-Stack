@@ -34,6 +34,8 @@ class ModelResponse:
     model: str
     latency_ms: int
     tool_calls: list[dict] = field(default_factory=list)
+    #: Retryable failures that were bypassed before this response was produced.
+    fallback_attempts: list[dict] = field(default_factory=list)
 
     def as_dict(self):
         return asdict(self)
@@ -116,6 +118,9 @@ def _intent_tool(offered: list[str], instruction: str) -> str | None:
     return None
 
 
+MAX_FALLBACK_HOPS = 3
+
+
 class ModelGateway:
     def __init__(self, guard=None, account=None):
         self._guard = guard
@@ -164,7 +169,13 @@ class ModelGateway:
         tools=None,
         tool_choice=None,
         idempotency_key=None,
+        _fallback_attempts=None,
+        _fallback_depth=0,
+        _visited_config_ids=None,
     ):
+        fallback_attempts = list(_fallback_attempts or [])
+        visited_config_ids = set(_visited_config_ids or [])
+        visited_config_ids.add(str(getattr(model_config, "id", "")))
         if not isinstance(messages, list) or not messages:
             raise ModelGatewayError("INVALID_MESSAGES", "At least one chat message is required.")
         for message in messages:
@@ -365,6 +376,7 @@ class ModelGateway:
                     provider=provider.name,
                     model=model_config.model_name,
                     latency_ms=int((time.monotonic() - started) * 1000),
+                    fallback_attempts=fallback_attempts,
                 )
             else:
                 if provider.provider_type != ModelProvider.ProviderType.OPENAI_COMPATIBLE:
@@ -438,7 +450,37 @@ class ModelGateway:
                     model=model_config.model_name,
                     latency_ms=int((time.monotonic() - started) * 1000),
                     tool_calls=tool_calls,
+                    fallback_attempts=fallback_attempts,
                 )
+        except ModelGatewayError as exc:
+            guard.release(reservation=reservation)
+            fallback = self._fallback_model(model_config, tools)
+            if (
+                exc.retryable
+                and fallback is not None
+                and _fallback_depth < MAX_FALLBACK_HOPS
+                and str(fallback.id) not in visited_config_ids
+            ):
+                fallback_attempts.append(
+                    {
+                        "provider": provider.name,
+                        "model": model_config.model_name,
+                        "error_code": exc.code,
+                    }
+                )
+                return self.complete(
+                    fallback,
+                    messages,
+                    max_tokens=max_tokens,
+                    timeout_seconds=timeout_seconds,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    idempotency_key=idempotency_key,
+                    _fallback_attempts=fallback_attempts,
+                    _fallback_depth=_fallback_depth + 1,
+                    _visited_config_ids=visited_config_ids,
+                )
+            raise
         except BaseException:
             guard.release(reservation=reservation)
             raise
@@ -447,6 +489,25 @@ class ModelGateway:
             consumed_tokens=resolved_input + resolved_output,
         )
         return response
+
+    @staticmethod
+    def _fallback_model(model_config, tools):
+        """The configured standby, when it can serve this same request.
+
+        A standby that is disabled, or that cannot accept the tool schema the
+        caller offered, is not a usable fallback: retrying there would fail on
+        schema instead of availability, so the original error is kept.
+        """
+
+        fallback = getattr(model_config, "fallback_model", None)
+        if fallback is None or not getattr(fallback, "enabled", False):
+            return None
+        capabilities = getattr(fallback, "capabilities", None) or []
+        if tools and "tools" not in capabilities:
+            return None
+        if "chat" not in capabilities:
+            return None
+        return fallback
 
     def embed(self, model_config, inputs, timeout_seconds=45, idempotency_key=None):
         if (
