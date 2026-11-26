@@ -11,6 +11,8 @@ success, and releases the reservation on failure. Two guard flavors exist:
   free-form ``scope_ref``.
 """
 
+import hashlib
+
 from core.token_budget import (
     release_tenant_tokens,
     reserve_adhoc_tokens,
@@ -34,11 +36,18 @@ class RunTokenGuard:
         return self.agent_run is not None or self.workflow_run is not None
 
     def reserve(self, *, idempotency_key: str, requested_tokens: int, **_kwargs):
+        lease_token = getattr(self.task, "lease_token", None)
+        if lease_token:
+            lease_scoped_key = hashlib.sha256(
+                f"{idempotency_key}:{lease_token}".encode()
+            ).hexdigest()
+        else:
+            lease_scoped_key = idempotency_key
         return reserve_tenant_tokens(
             task=self.task,
             agent_run=self.agent_run,
             workflow_run=self.workflow_run,
-            idempotency_key=idempotency_key,
+            idempotency_key=lease_scoped_key,
             requested_tokens=requested_tokens,
         )
 
