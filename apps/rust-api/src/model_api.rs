@@ -2136,3 +2136,607 @@ pub async fn delete_provider_account(
     payload["auth_mode"] = json!(row.auth_mode);
     Json(payload).into_response()
 }
+
+fn chat_model_names(document: &Value) -> Vec<String> {
+    let items = document
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| document.get("models").and_then(Value::as_array));
+    let Some(items) = items else {
+        return Vec::new();
+    };
+    let skipped = [
+        "embedding",
+        "embed-",
+        "image",
+        "audio",
+        "speech",
+        "transcribe",
+        "tts",
+        "moderation",
+        "rerank",
+        "realtime",
+        "search",
+        "davinci",
+        "babbage",
+        "ada-",
+        "curie",
+    ];
+    let mut names = Vec::new();
+    for item in items {
+        let Some(name) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("name").and_then(Value::as_str))
+        else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let lowered = name.to_lowercase();
+        if skipped.iter().any(|part| lowered.contains(part)) {
+            continue;
+        }
+        if !names.iter().any(|existing| existing == name) {
+            names.push(name.to_string());
+        }
+    }
+    names.truncate(60);
+    names
+}
+
+fn probe_candidates(preset_key: &str, available: &[String]) -> Vec<String> {
+    let preset_names: Vec<String> = preset(preset_key)
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("model_name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut candidates = Vec::new();
+    if available.is_empty() {
+        candidates.extend(preset_names);
+    } else {
+        candidates.extend(
+            preset_names
+                .iter()
+                .filter(|name| available.iter().any(|listed| listed == *name))
+                .cloned(),
+        );
+        candidates.extend(
+            available
+                .iter()
+                .filter(|name| !preset_names.iter().any(|preset_name| preset_name == *name))
+                .cloned(),
+        );
+    }
+    candidates.truncate(8);
+    candidates
+}
+
+async fn verify_account_credential(
+    state: &AppState,
+    provider_name: &str,
+    base_url: &str,
+    preset_key: &str,
+    credential: &str,
+) -> Result<Value, Response> {
+    if credential.is_empty() {
+        return Err(legacy_error(
+            "A credential reference for your own account is required.",
+            StatusCode::BAD_REQUEST,
+            "PROVIDER_ACCOUNT_CREDENTIAL_REQUIRED",
+        ));
+    }
+    if credential.chars().any(char::is_whitespace) {
+        return Err(legacy_error(
+            "The API key contains whitespace; copy it again without spaces or newlines.",
+            StatusCode::BAD_REQUEST,
+            "PROVIDER_ACCOUNT_CREDENTIAL_INVALID",
+        ));
+    }
+    if credential.contains("://") || credential.starts_with("env:") {
+        return Ok(json!({"verified": null, "reason": "reference", "available_models": []}));
+    }
+    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+    let response = state
+        .client
+        .get(&models_url)
+        .header("Authorization", format!("Bearer {credential}"))
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await;
+    let mut available: Vec<String> = Vec::new();
+    match response {
+        Ok(response) => {
+            let status = response.status();
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                return Err(legacy_error(
+                    &format!(
+                        "{provider_name} rejected this API key (HTTP {}). Copy a fresh key from the platform's API page and paste it again.",
+                        status.as_u16()
+                    ),
+                    StatusCode::BAD_REQUEST,
+                    "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
+                ));
+            }
+            if !status.is_success()
+                && status != StatusCode::NOT_FOUND
+                && status != StatusCode::METHOD_NOT_ALLOWED
+            {
+                return Ok(json!({
+                    "verified": false,
+                    "reason": format!("http_{}", status.as_u16()),
+                    "available_models": [],
+                }));
+            }
+            if status.is_success() {
+                if let Ok(bytes) = response.bytes().await {
+                    if let Ok(document) = serde_json::from_slice::<Value>(&bytes) {
+                        available = chat_model_names(&document);
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            return Ok(json!({"verified": false, "reason": "unreachable", "available_models": []}))
+        }
+    }
+    let candidates = probe_candidates(preset_key, &available);
+    if candidates.is_empty() {
+        return Ok(json!({
+            "verified": false,
+            "reason": "chat_unprobed",
+            "available_models": available,
+        }));
+    }
+    let completion_url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let mut last_status = None;
+    let mut last_detail = String::new();
+    for model in candidates {
+        let body = json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 16,
+        });
+        let response = state
+            .client
+            .post(&completion_url)
+            .header("Authorization", format!("Bearer {credential}"))
+            .header("Accept", "application/json")
+            .timeout(std::time::Duration::from_secs(10))
+            .json(&body)
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(_) => {
+                return Ok(json!({
+                    "verified": false,
+                    "reason": "chat_unreachable",
+                    "available_models": available,
+                    "model": model,
+                }))
+            }
+        };
+        let status = response.status();
+        if status.is_success() {
+            return Ok(json!({
+                "verified": true,
+                "reason": "chat_completion",
+                "model": model,
+                "available_models": available,
+            }));
+        }
+        last_status = Some(status);
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(legacy_error(
+                &format!(
+                    "{provider_name} rejected this API key for chat completion (HTTP {}). The key may be restricted to model listing; create a key with chat permission and paste it again.",
+                    status.as_u16()
+                ),
+                StatusCode::BAD_REQUEST,
+                "PROVIDER_ACCOUNT_CREDENTIAL_REJECTED",
+            ));
+        }
+        if status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST {
+            last_detail = response
+                .text()
+                .await
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(300)
+                .collect();
+            continue;
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return Ok(json!({
+                "verified": false,
+                "reason": format!("chat_{}", status.as_u16()),
+                "available_models": available,
+                "model": model,
+            }));
+        }
+        return Ok(json!({
+            "verified": false,
+            "reason": format!("chat_{}", status.as_u16()),
+            "available_models": available,
+            "model": model,
+        }));
+    }
+    let detail = if last_detail.is_empty() {
+        String::new()
+    } else {
+        format!(" Provider said: {last_detail}")
+    };
+    Err(legacy_error(
+        &format!(
+            "{provider_name} accepted the API key, but none of the configured models could run a completion (last HTTP {}). The model id or endpoint id is not available to this account. Add the exact id from the provider console in Model Manager, then link the account again.{detail}",
+            last_status.map(|status| status.as_u16()).unwrap_or(400)
+        ),
+        StatusCode::BAD_REQUEST,
+        "PROVIDER_ACCOUNT_NO_CHAT_MODEL",
+    ))
+}
+
+async fn refresh_preset_models(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    postgres: bool,
+    provider_id: &str,
+    preset_key: &str,
+) -> Result<(), String> {
+    seed_preset_models(transaction, postgres, provider_id, preset_key).await?;
+    let wanted: Vec<String> = preset(preset_key)
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("model_name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, model_name, capabilities, CAST(enabled AS INTEGER) AS enabled_int, \
+         input_cost_per_million, output_cost_per_million FROM core_modelconfig \
+         WHERE CAST(provider_id AS TEXT) = ?",
+    )
+    .bind(provider_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    for row in rows {
+        let model_name = row.try_get::<String, _>("model_name").unwrap_or_default();
+        if wanted.iter().any(|name| name == &model_name) {
+            continue;
+        }
+        if row.try_get::<i64, _>("enabled_int").unwrap_or(0) == 0 {
+            continue;
+        }
+        let capabilities = row.try_get::<String, _>("capabilities").unwrap_or_default();
+        if capabilities.replace(' ', "") != "[\"chat\",\"tools\"]" {
+            continue;
+        }
+        let input = row
+            .try_get::<f64, _>("input_cost_per_million")
+            .unwrap_or(0.0);
+        let output = row
+            .try_get::<f64, _>("output_cost_per_million")
+            .unwrap_or(0.0);
+        if input != 0.0 || output != 0.0 {
+            continue;
+        }
+        sqlx::query("UPDATE core_modelconfig SET enabled = 0 WHERE CAST(id AS TEXT) = ?")
+            .bind(row.try_get::<String, _>("id").unwrap_or_default())
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+async fn sync_account_models(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    provider_id: &str,
+    preset_key: &str,
+    wanted: &[String],
+) -> Result<(), String> {
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    for name in wanted {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM core_modelconfig WHERE CAST(provider_id AS TEXT) = ? \
+             AND model_name = ? AND version = 1",
+        )
+        .bind(provider_id)
+        .bind(name)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+        if exists > 0 {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO core_modelconfig (id, provider_id, model_name, display_name, capabilities, \
+             context_window, max_output_tokens, input_cost_per_million, output_cost_per_million, version, \
+             enabled, created_at) VALUES (?, ?, ?, ?, '[\"chat\", \"tools\"]', 32768, 4096, 0, 0, 1, 1, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().simple().to_string())
+        .bind(provider_id)
+        .bind(name)
+        .bind(name)
+        .bind(&now)
+        .execute(&mut **transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    let preset_names: Vec<String> = preset(preset_key)
+        .and_then(|value| value.get("models"))
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("model_name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, model_name, capabilities, CAST(enabled AS INTEGER) AS enabled_int, \
+         input_cost_per_million, output_cost_per_million FROM core_modelconfig \
+         WHERE CAST(provider_id AS TEXT) = ?",
+    )
+    .bind(provider_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| error.to_string())?;
+    for row in rows {
+        let model_name = row.try_get::<String, _>("model_name").unwrap_or_default();
+        if wanted.iter().any(|name| name == &model_name) {
+            continue;
+        }
+        if !preset_names.iter().any(|name| name == &model_name) {
+            continue;
+        }
+        if row.try_get::<i64, _>("enabled_int").unwrap_or(0) == 0 {
+            continue;
+        }
+        let capabilities = row.try_get::<String, _>("capabilities").unwrap_or_default();
+        if capabilities.replace(' ', "") != "[\"chat\",\"tools\"]" {
+            continue;
+        }
+        let input = row
+            .try_get::<f64, _>("input_cost_per_million")
+            .unwrap_or(0.0);
+        let output = row
+            .try_get::<f64, _>("output_cost_per_million")
+            .unwrap_or(0.0);
+        if input != 0.0 || output != 0.0 {
+            continue;
+        }
+        sqlx::query("UPDATE core_modelconfig SET enabled = 0 WHERE CAST(id AS TEXT) = ?")
+            .bind(row.try_get::<String, _>("id").unwrap_or_default())
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Link the caller's own API key after verifying it can actually run inference.
+pub async fn link_provider_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, provider_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable();
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let Some(credential) = payload.get("credential_ref").and_then(Value::as_str) else {
+        return legacy_error(
+            "credential_ref and account_label must be strings.",
+            StatusCode::BAD_REQUEST,
+            "PROVIDER_ACCOUNT_INPUT_INVALID",
+        );
+    };
+    let Some(label) = payload.get("account_label").and_then(Value::as_str) else {
+        return legacy_error(
+            "credential_ref and account_label must be strings.",
+            StatusCode::BAD_REQUEST,
+            "PROVIDER_ACCOUNT_INPUT_INVALID",
+        );
+    };
+    let credential = credential.trim();
+    let account_label: String = label.trim().chars().take(120).collect();
+    let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error_message(error),
+    };
+    let Some(row) = rows.first() else {
+        return not_found();
+    };
+    if row.auth_mode != "user_account" {
+        return legacy_error(
+            "This provider is billed to the tenant; account linking does not apply.",
+            StatusCode::CONFLICT,
+            "PROVIDER_AUTH_MODE_NOT_ACCOUNT",
+        );
+    }
+    let verification = match verify_account_credential(
+        &state,
+        &row.name,
+        &row.base_url,
+        &row.preset_key,
+        credential,
+    )
+    .await
+    {
+        Ok(verification) => verification,
+        Err(response) => return response,
+    };
+    let available_models: Vec<String> = verification
+        .get("available_models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let reference = if credential.contains("://") || credential.starts_with("env:") {
+        credential.to_string()
+    } else {
+        let sealed = match seal_value(secret_key, credential, MEMBER_SECRET_SCOPE) {
+            Ok(sealed) => sealed,
+            Err(_) => return unavailable(),
+        };
+        let secret_id = uuid::Uuid::new_v4().simple().to_string();
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+        if let Err(error) = sqlx::query(
+            "INSERT INTO core_membercredentialsecret (id, sealed_value, created_at, updated_at, user_id) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&secret_id)
+        .bind(&sealed)
+        .bind(&now)
+        .bind(&now)
+        .bind(user.id)
+        .execute(pool)
+        .await
+        {
+            return database_error_message(error.to_string());
+        }
+        format!("member://{secret_id}")
+    };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    if let Err(error) =
+        refresh_preset_models(&mut transaction, postgres, &provider_id, &row.preset_key).await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if !available_models.is_empty() {
+        if let Err(error) = sync_account_models(
+            &mut transaction,
+            &provider_id,
+            &row.preset_key,
+            &available_models,
+        )
+        .await
+        {
+            let _ = transaction.rollback().await;
+            return database_error_message(error);
+        }
+    }
+    let existing_link = match sqlx::query_scalar::<_, String>(
+        "SELECT CAST(id AS TEXT) FROM core_provideraccountlink WHERE user_id = ? \
+         AND CAST(provider_id AS TEXT) = ? AND status = 'linked' LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(&provider_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(link) => link,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let linked = if let Some(link_id) = existing_link {
+        sqlx::query(
+            "UPDATE core_provideraccountlink SET credential_ref = ?, account_label = ?, linked_at = ?, \
+             updated_at = ? WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&reference)
+        .bind(&account_label)
+        .bind(&now)
+        .bind(&now)
+        .bind(&link_id)
+        .execute(&mut *transaction)
+        .await
+    } else {
+        sqlx::query(
+            "INSERT INTO core_provideraccountlink (id, status, account_label, credential_ref, linked_at, \
+             revoked_at, updated_at, provider_id, user_id) VALUES (?, 'linked', ?, ?, ?, NULL, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().simple().to_string())
+        .bind(&account_label)
+        .bind(&reference)
+        .bind(&now)
+        .bind(&now)
+        .bind(&provider_id)
+        .bind(user.id)
+        .execute(&mut *transaction)
+        .await
+    };
+    if let Err(error) = linked {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "model.provider.account.linked",
+            resource_type: "model_provider",
+            resource_id: &provider_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({"account_label": account_label, "auth_mode": row.auth_mode}),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error_message(error.to_string());
+    }
+    let mut account = match account_payload(pool, &state, &provider_id, user.id).await {
+        Ok(account) => account,
+        Err(error) => return database_error_message(error),
+    };
+    account["verification"] = verification;
+    (StatusCode::CREATED, Json(account)).into_response()
+}

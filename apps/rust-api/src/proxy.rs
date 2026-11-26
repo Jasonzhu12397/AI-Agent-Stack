@@ -178,6 +178,7 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/tenants/{tenant_id}/model-providers/{provider_id}/account/",
                 get(crate::model_api::get_provider_account)
+                    .post(crate::model_api::link_provider_account)
                     .delete(crate::model_api::delete_provider_account),
             )
             .route(

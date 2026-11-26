@@ -292,3 +292,96 @@ async fn reads_and_revokes_the_callers_account_link() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "PROVIDER_AUTH_MODE_NOT_ACCOUNT");
 }
+
+#[tokio::test]
+async fn links_operator_references_without_touching_the_network() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    let provider = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?, ?, 1, 'OpenRouter (my account)', 'openai_compatible', 'user_account', 'openrouter', \
+         'http://127.0.0.1:1', '', '{}', 1, '', datetime('now'), datetime('now'))",
+    )
+    .bind(&provider)
+    .bind(TENANT)
+    .execute(pool)
+    .await
+    .unwrap();
+    let uri = format!("/api/v1/tenants/{TENANT}/model-providers/{provider}/account/");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        Some(json!({"credential_ref": "env://MY_OPENROUTER_KEY", "account_label": "  ops  "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["linked"], true);
+    assert_eq!(body["account_label"], "ops");
+    assert_eq!(body["verification"]["verified"], Value::Null);
+    assert_eq!(body["verification"]["reason"], "reference");
+    let reference = sqlx::query_scalar::<_, String>(
+        "SELECT credential_ref FROM core_provideraccountlink WHERE CAST(provider_id AS TEXT) = ? \
+         AND status = 'linked'",
+    )
+    .bind(&provider)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(reference, "env://MY_OPENROUTER_KEY");
+    let secrets = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_membercredentialsecret WHERE user_id = 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(secrets, 0);
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        Some(json!({"credential_ref": " ", "account_label": "ops"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"]["code"],
+        "PROVIDER_ACCOUNT_CREDENTIAL_REQUIRED"
+    );
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        Some(json!({"credential_ref": "sk-with space", "account_label": "ops"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "PROVIDER_ACCOUNT_CREDENTIAL_INVALID");
+
+    let tenant_provider = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?, ?, 1, 'Tenant billed', 'openai_compatible', 'tenant_secret', '', \
+         'http://127.0.0.1:1', 'env://KEY', '{}', 1, '', datetime('now'), datetime('now'))",
+    )
+    .bind(&tenant_provider)
+    .bind(TENANT)
+    .execute(pool)
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/model-providers/{tenant_provider}/account/"),
+        Some(json!({"credential_ref": "env://KEY", "account_label": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "PROVIDER_AUTH_MODE_NOT_ACCOUNT");
+}
