@@ -101,6 +101,7 @@ from core.membership_views import (
     TenantMemberDetailView,
     TenantMemberListCreateView,
 )
+from core.mcp_server import McpServerView
 from core.provider_oauth_views import (
     ProviderOAuthExchangeView,
     ProviderOAuthStartView,
@@ -533,6 +534,11 @@ urlpatterns = [
     ),
     path("health/live", liveness, name="health-live"),
     path("health/ready", readiness, name="health-ready"),
+    path(
+        "api/v1/tenants/<uuid:tenant_id>/projects/<uuid:project_id>/mcp/",
+        McpServerView.as_view(),
+        name="mcp-server",
+    ),
     path("api/v1/tenants/", TenantListView.as_view(), name="tenant-list"),
     path(
         "api/v1/tenants/<uuid:tenant_id>/projects/",

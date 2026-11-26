@@ -42,7 +42,7 @@
 | Agent Runtime | Agent 生命周期、上下文、工具调用 | `apps/worker/worker_app/tasks.py`：DB 任务记录、原子认领、lease token/过期、心跳续约、有限重试、协作取消；`core/agent_views.py`：Agent 定义 / 版本 / 发布 / 运行记录 | 【基础】 | 多步工具调用的上下文保持、失败恢复待在真实模型链路复核 |
 | Workflow Engine | 多步骤编排、状态流转 | `core/workflow_engine.py`：节点类型 `start / llm / condition / knowledge_search / tool / end`；`core/workflow_views.py`：validate / publish / runs | 【基础】 | 【待开发】并行分支、循环、人工审批节点与审批恢复；当前无 `parallel / loop / approval` 节点类型 |
 | Model Router | 国内外模型统一接入与路由 | `core/model_gateway.py`：`ProviderType` 仅 `fake` 与 `openai_compatible`；chat `/chat/completions`、embeddings `/embeddings` HTTP 调用；错误按 5xx/429 标记可重试 | 【基础】 | 【待开发】多供应商主备路由、故障降级链、fallback；国内供应商靠 OpenAI-compatible 接口接入，无原生 SDK；FAKE 仅供测试 |
-| Plugin / MCP Gateway | 插件、MCP Server、第三方系统集成 | `core/plugin_views.py`：连接器目录、审批、项目安装、显式授权、连接记录；`core/http_connector.py`：`register_connector_tool` 按连接器类型分发（`http` / `openapi` / `mcp`），并保留 `register_http_tool` 兼容别名；`core/mcp_connector.py`：MCP JSON-RPC 客户端，同时支持 streamable HTTP（initialize / tools/list / tools/call、SSE 响应解析、协议版本协商、重定向与 host allowlist 拒绝）与本地 stdio（无 shell 启动、行分隔 JSON-RPC、stderr 排空、超时终止、`MCP_STDIO_ALLOWED_COMMANDS` 可执行白名单、env 仅允许 `env:` 引用）；`core/mcp_tool_sync.py` + `core/mcp_views.py`：`POST /api/v1/plugin-connections/<id>/sync-tools/` 发现并导入远端工具（新工具 `enabled=False` 待审，单连接上限 256） | 【基础】（HTTP / OpenAPI / MCP 三通道） | 【待验证】真实 MCP Server 联调与工具导入后的人工审批闭环；stdio 传输【已实现/已测试】；【待开发】OAuth 授权码流程与 token 刷新（当前凭据仅解析 bearer / env 引用），MCP 服务端模式（平台自身作为 MCP Server 暴露） |
+| Plugin / MCP Gateway | 插件、MCP Server、第三方系统集成 | `core/plugin_views.py`：连接器目录、审批、项目安装、显式授权、连接记录；`core/http_connector.py`：`register_connector_tool` 按连接器类型分发（`http` / `openapi` / `mcp`），并保留 `register_http_tool` 兼容别名；`core/mcp_connector.py`：MCP JSON-RPC 客户端，同时支持 streamable HTTP（initialize / tools/list / tools/call、SSE 响应解析、协议版本协商、重定向与 host allowlist 拒绝）与本地 stdio（无 shell 启动、行分隔 JSON-RPC、stderr 排空、超时终止、`MCP_STDIO_ALLOWED_COMMANDS` 可执行白名单、env 仅允许 `env:` 引用）；`core/mcp_tool_sync.py` + `core/mcp_views.py`：`POST /api/v1/plugin-connections/<id>/sync-tools/` 发现并导入远端工具（新工具 `enabled=False` 待审，单连接上限 256） | 【基础】（HTTP / OpenAPI / MCP 三通道） | 【待验证】真实 MCP Server 联调与工具导入后的人工审批闭环；stdio 传输【已实现/已测试】；服务端模式【已实现/已测试】（项目级 JSON-RPC：initialize、tools/list、tools/call；暴露任务查询/创建与连接器能力调用，复用项目成员权限与能力审批门禁）；【待开发】OAuth 授权码流程与 token 刷新（当前凭据仅解析 bearer / env 引用） |
 | Knowledge / RAG | 文档、向量检索、知识库 | `core/knowledge_models.py`、`core/knowledge_views.py`、`core/rag_runtime.py`、`core/vector_store.py`：知识库/文档/嵌入模型绑定；`QdrantVectorStore`（urllib HTTP，需 `QDRANT_URL` / collection / api-key env 引用）；集合按 embedding 模型和维度版本化（`collection_for_model` / `for_model`，如 `agent_knowledge__bge-m3-1024`）；首次 ingest 幂等建集合（`ensure_collection`）；ingest 结果回写 `vector_collection` / `vector_dimensions`，删除与重试按该集合清理；`core/management/commands/reindex_knowledge.py`：按当前模型重新嵌入（默认跳过已在目标集合的文档，`--force` 重嵌、`--dry-run` 只报告、`--document` 定向重试，单文档失败不中断整批）；`core/management/commands/prune_qdrant_collections.py`：只列举或删除配置命名空间下、未被任何 `KnowledgeDocument.vector_collection` 引用的旧集合，默认 dry-run，必须显式 `--apply` 才删除；本地余弦相似度计算 | 【基础】 | 【已验证】真实 Qdrant v1.20.2 实例通过集合创建/列举/删除、向量写入/检索；`tests/integration/test_qdrant_live.py` 覆盖嵌入服务调用、按模型建集合、ingest、retrieve 全链路（无 `QDRANT_LIVE_URL` 时跳过）；pgvector、S3-compatible 对象存储【待开发】（见 §7.3） |
 | Token Budget | 预算预留、用量结算、防超额消耗 | `core/token_budget.py`、`core/token_budget_views.py`：租户级预算预留、结算、幂等、超额保护；含回归测试 | 【待验证】 | 多轮修复后本地测试全绿；需在并发 worker 与真实模型上报用量下复核结算一致性 |
 | Task Queue / Scheduler | 缓存、任务队列、异步执行 | `apps/worker/worker_app/main.py` 轮询 `process_once`；任务认领与租约基于 PostgreSQL 记录；依赖含 `redis`，`settings.py` 仅定义 `REDIS_URL` | 【基础】（DB 队列） | 【待开发】Redis 实际作为缓存 / 队列 / 协调通道：代码中未见 `CACHES`、channel_layer 或 redis 客户端调用；队列故障恢复、积压与重放需继续验证 |
@@ -58,7 +58,7 @@
 | 天气 | 天气 API / 天气服务 | 模板含 open-meteo（HTTP，无需 key） | 【基础】（模板）；真实连接器待验收 |
 | 研发协作 | GitHub、Jira | 模板含 `github-readonly`（HTTP）；无 Jira 模板或专用执行器 | GitHub 只读【基础/待验证】；Jira【待开发】 |
 | 办公协作 | Microsoft 365、Teams | 模板含 `microsoft-graph-readonly`（HTTP）；无 Teams 专用连接器 | 【基础】（只读模板）；完整 Graph 范围、OAuth 与 Teams 集成【待开发】 |
-| 扩展能力 | MCP、第三方 API、自定义插件 | 连接器目录/安装/授权/连接测试框架存在；执行器支持 HTTP / OpenAPI / MCP（streamable HTTP + 工具发现导入） | 框架【基础】；MCP 运行时【基础/待验证】（HTTP 与 stdio 已实现，OAuth【待开发】）；自定义插件隔离执行【待开发】 |
+| 扩展能力 | MCP、第三方 API、自定义插件 | 连接器目录/安装/授权/连接测试框架存在；执行器支持 HTTP / OpenAPI / MCP（streamable HTTP + 工具发现导入） | 框架【基础】；MCP 运行时【基础/待验证】（HTTP、stdio、服务端模式已实现，OAuth【待开发】）；自定义插件隔离执行【待开发】 |
 | 模型 | 国内外供应商、OpenAI-compatible、路由与降级 | 网关仅 `openai_compatible` + `fake`；OpenAI-compatible 通道可复用接入各家兼容端点 | 【基础】（兼容通道）；供应商覆盖、显式路由、主备降级【待开发】 |
 
 > 以上连接器模板属于产品规划与元数据声明，不代表对应 OAuth 流程、真实供应商联调和生产级凭据托管已经完成。
@@ -205,14 +205,14 @@
 - Token 预算预留、结算、幂等与超额保护。
 - Agent、Workflow、插件、知识库相关 API 与前端页面基础。
 - 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify（租户链 + 全局认证链）。
-- MCP 客户端运行时（streamable HTTP 与 stdio JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）与工具发现导入接口。
+- MCP 客户端运行时（streamable HTTP 与 stdio JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）、项目级 MCP Server（`/api/v1/tenants/<tenant>/projects/<project>/mcp/`）与工具发现导入接口。
 - Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录。
 - `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 - 全局审计链（认证事件）的只读对外接口：`GET /api/v1/audit-events/global/`（分页列表）与 `GET /api/v1/audit-events/global/verify/`（链校验），仅平台管理员（`is_staff` / `is_superuser`）可读。
 
 ### 9.2 仍未达到生产完成（需继续开发或真实环境验收）
 
-- MCP 的服务端模式与真实 MCP Server 联调（streamable HTTP、stdio 客户端与工具发现已落地）。
+- 与真实 MCP Server 的双向联调（客户端与服务端实现均已落地，尚未接入外部真实 Server 做端到端验收）。
 - 完整第三方连接器与 OAuth 凭据授权、token 刷新流程。
 - 更细粒度的资源级/工具级授权策略闭环。
 - Workflow 拖拽画布、并行、循环、人工审批恢复等高级节点。
