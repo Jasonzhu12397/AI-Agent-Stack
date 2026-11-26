@@ -168,7 +168,6 @@ async fn health_fails_when_the_upstream_is_down() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
-
 #[tokio::test]
 async fn rejects_session_cookie_mutations_without_csrf_tokens() {
     let app = router(state("http://127.0.0.1:9".into()));
