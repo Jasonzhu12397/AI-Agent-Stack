@@ -287,6 +287,26 @@ pub async fn cancel_task(
         Ok(None) => return not_found(),
         Err(error) => return database_error_message(error),
     };
+    let role = match tenant_role(pool, &task.tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    let can_cancel = if role == "owner" || role == "admin" {
+        true
+    } else {
+        match project_editor(pool, &task.project_id, user.id).await {
+            Ok(value) => value,
+            Err(error) => return database_error_message(error),
+        }
+    };
+    if !can_cancel {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "Project editor permission required to cancel tasks."})),
+        )
+            .into_response();
+    }
     let postgres = is_postgres(&state);
     let mut transaction = match pool.begin().await {
         Ok(transaction) => transaction,
