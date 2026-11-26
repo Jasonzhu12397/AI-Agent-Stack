@@ -167,7 +167,8 @@ async fn completes_the_native_login_logout_flow() {
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/auth/logout/")
-                .header("cookie", &session)
+                .header("cookie", format!("{}; {}", session, csrf_cookie))
+                .header("x-csrftoken", &csrf_token)
                 .body(Body::empty())
                 .unwrap(),
         ))

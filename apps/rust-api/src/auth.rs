@@ -167,6 +167,9 @@ pub async fn logout(
     let Some(secret_key) = state.config.django_secret_key.as_deref() else {
         return unavailable("DJANGO_SECRET_KEY is not configured.");
     };
+    if let Err(response) = enforce_csrf(&headers) {
+        return *response;
+    }
     let Some(session_key) = crate::identity::session_key_from_headers(&headers) else {
         return unauthenticated("Authentication credentials were not provided.");
     };
