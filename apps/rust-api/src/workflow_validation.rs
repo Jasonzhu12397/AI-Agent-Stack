@@ -723,9 +723,8 @@ async fn validate_node_references(
                 return Err("Workflow knowledge search models must support embeddings.".into());
             }
             let provider_tenant: Option<String> = row
-                .try_get::<Option<String>, _>("provider_tenant")
-                .ok()
-                .flatten();
+                .try_get("provider_tenant")
+                .map_err(|error| error.to_string())?;
             if provider_tenant
                 .as_deref()
                 .is_some_and(|value| value != tenant_id)
@@ -1013,18 +1012,23 @@ async fn model_row(
         .fetch_optional(pool)
         .await
         .map_err(|error| error.to_string())?;
-    Ok(row.map(|row| ModelRow {
-        capabilities: capabilities_value(
-            row.try_get::<Option<String>, _>("capabilities")
-                .ok()
-                .flatten(),
-        ),
-        max_output_tokens: row.try_get("max_output_tokens").unwrap_or(0),
-        provider_tenant: row
-            .try_get::<Option<String>, _>("provider_tenant")
-            .ok()
-            .flatten(),
-    }))
+    match row {
+        Some(row) => {
+            let provider_tenant = row
+                .try_get::<Option<String>, _>("provider_tenant")
+                .map_err(|error| error.to_string())?;
+            Ok(Some(ModelRow {
+                capabilities: capabilities_value(
+                    row.try_get::<Option<String>, _>("capabilities")
+                        .ok()
+                        .flatten(),
+                ),
+                max_output_tokens: row.try_get("max_output_tokens").unwrap_or(0),
+                provider_tenant,
+            }))
+        }
+        None => Ok(None),
+    }
 }
 
 fn capabilities_value(value: Option<String>) -> Vec<String> {
