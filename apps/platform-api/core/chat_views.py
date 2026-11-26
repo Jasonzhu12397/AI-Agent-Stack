@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -31,6 +32,7 @@ from core.models import (
     ModelProvider,
     Project,
     Tenant,
+    TenantMembership,
 )
 
 MAX_MESSAGE_CHARS = 20000
@@ -46,8 +48,23 @@ def get_tenant(request, tenant_id):
     )
 
 
+def visible_projects(request, tenant=None):
+    """Projects visible to this member under tenant and project membership rules."""
+
+    projects = Project.objects.filter(tenant__memberships__user=request.user)
+    if tenant is not None:
+        projects = projects.filter(tenant=tenant)
+    admin_tenants = TenantMembership.objects.filter(
+        user=request.user,
+        role__in=[TenantMembership.Role.OWNER, TenantMembership.Role.ADMIN],
+    ).values("tenant_id")
+    return projects.filter(
+        Q(memberships__user=request.user) | Q(tenant_id__in=admin_tenants)
+    ).distinct()
+
+
 def get_project(request, tenant, project_id):
-    return get_object_or_404(Project, tenant=tenant, pk=project_id)
+    return get_object_or_404(visible_projects(request, tenant), pk=project_id)
 
 
 def thread_payload(thread, last_message=None):
@@ -169,9 +186,10 @@ class AgentChatThreadDetailView(APIView):
 
     def _thread(self, request, thread_id):
         thread = get_object_or_404(
-            AgentChatThread.objects.select_related("tenant", "project", "model_config"),
+            AgentChatThread.objects.select_related("tenant", "project", "model_config").filter(
+                project__in=visible_projects(request)
+            ),
             pk=thread_id,
-            tenant__memberships__user=request.user,
         )
         return thread
 
@@ -218,7 +236,7 @@ class AgentChatMessageListCreateView(APIView):
 
     def get(self, request, thread_id):
         thread = get_object_or_404(
-            AgentChatThread.objects.filter(tenant__memberships__user=request.user),
+            AgentChatThread.objects.filter(project__in=visible_projects(request)),
             pk=thread_id,
         )
         messages = thread.messages.select_related("author").all()
@@ -227,7 +245,7 @@ class AgentChatMessageListCreateView(APIView):
     def post(self, request, thread_id):
         thread = get_object_or_404(
             AgentChatThread.objects.select_related("tenant", "project", "model_config").filter(
-                tenant__memberships__user=request.user
+                project__in=visible_projects(request)
             ),
             pk=thread_id,
         )
@@ -244,7 +262,7 @@ class AgentChatMessageListCreateView(APIView):
                 http_status=status.HTTP_400_BAD_REQUEST,
                 code="INVALID_MESSAGE",
             )
-        context = _normalize_context(thread, request.data.get("context"))
+        context = _normalize_context(request, thread, request.data.get("context"))
         if isinstance(context, str):
             return legacy_error_response(context, http_status=400, code="INVALID_CONTEXT")
         model_config = (
@@ -378,7 +396,7 @@ class AgentChatContextView(APIView):
                     ],
                 }
             )
-        projects = Project.objects.filter(tenant=tenant).order_by("name")
+        projects = visible_projects(request, tenant).order_by("name")
         provider_accounts.sync_platform_providers(tenant=tenant, user=request.user)
         models = _available_models(request, tenant)
         return Response(
@@ -515,7 +533,7 @@ def _resolve_model_config(request, tenant, model_config_id):
     return model_config
 
 
-def _normalize_context(thread, raw):
+def _normalize_context(request, thread, raw):
     """Validate composer attachments and keep only what exists in this project."""
     context: dict = {
         "project_id": str(thread.project_id),
@@ -531,7 +549,7 @@ def _normalize_context(thread, raw):
     project_id = raw.get("project_id")
     if project_id:
         project = (
-            Project.objects.filter(tenant=thread.tenant, pk=project_id).first()
+            visible_projects(request, thread.tenant).filter(pk=project_id).first()
             if _is_uuid(project_id)
             else None
         )
@@ -825,7 +843,7 @@ class AgentChatAttachmentDetailView(APIView):
     def _attachment(self, request, attachment_id):
         return get_object_or_404(
             AgentChatAttachment.objects.select_related("thread").filter(
-                thread__tenant__memberships__user=request.user
+                thread__project__in=visible_projects(request)
             ),
             pk=attachment_id,
         )
