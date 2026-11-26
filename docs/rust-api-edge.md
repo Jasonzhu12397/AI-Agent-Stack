@@ -33,10 +33,15 @@ domain model, permissions, audit and realtime code in the Django service.
   cookie. `/me/` accepts the cookie or `X-Session-Token`.
 - Sessions are interchangeable: a Rust-minted session is accepted by Django
   and a Django-minted session is accepted by Rust.
+- Owns the tenant bootstrap surface: tenant list/create, project list/create,
+  tenant member list/add/update/remove and project member list/add/update/remove.
+  The same RBAC rules as Django apply, including owner-only grants, the last
+  owner and last project administrator protections, project membership requiring
+  tenant membership first, and tenant/project audit events written into the
+  Django hash chain inside the same transaction as the business row.
 
-Tenant resolution, RBAC and every non-auth route still live in Django during
-this stage. The Rust auth handlers share the same schema, so a rollback is a
-single routing change.
+All other business routes still live in Django during this stage. The Rust
+handlers share the same schema, so a rollback is a single routing change.
 
 ## Configuration
 
@@ -96,8 +101,9 @@ consumer and its authorization rules.
 The edge is the stable seam for moving routes into Rust:
 
 1. Edge proxy and WebSocket relay (this stage) with parity checks and rollback.
-2. Native Rust auth: CSRF, login, logout and me now run in Rust against the
-   shared session and audit tables. Tenant and RBAC middleware move next.
+2. Native Rust auth and tenancy: CSRF, login, logout, me, tenants, projects and
+   both membership scopes now run in Rust against the shared session, RBAC and
+   audit tables. Model gateway and task APIs move next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

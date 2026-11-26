@@ -85,3 +85,11 @@ logout and the CSRF rejection without audit noise.
 - Native logout now rejects requests without a valid CSRF cookie/header pair.
 - Rust tests: 15 passed; clippy -D warnings clean.
 - CI run 45786600907: quality gate passed.
+
+2026-11-26 tenancy batch
+- Native routes: GET/POST /api/v1/tenants/, tenant projects, tenant members,
+  project members, including PATCH/DELETE membership routes.
+- RBAC: tenant owner/admin gates, owner-only owner grants, last-owner and
+  last-project-admin protection, project membership requires tenant membership.
+- Tenant/project audit events are appended inside the same transaction.
+- Tests: tests/tenancy.rs 3 passed; full suite 19 passed; clippy -D warnings clean.

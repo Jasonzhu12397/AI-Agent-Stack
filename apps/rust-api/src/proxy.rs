@@ -4,7 +4,7 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures_util::TryStreamExt;
 use serde_json::json;
@@ -64,7 +64,34 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/auth/csrf/", get(crate::auth::csrf))
             .route("/api/v1/auth/login/", post(crate::auth::login))
             .route("/api/v1/auth/logout/", post(crate::auth::logout))
-            .route("/api/v1/auth/me/", get(crate::native::current_user));
+            .route("/api/v1/auth/me/", get(crate::native::current_user))
+            .route(
+                "/api/v1/tenants/",
+                get(crate::tenancy::list_tenants).post(crate::tenancy::create_tenant),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/",
+                get(crate::tenancy::list_projects).post(crate::tenancy::create_project),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/members/",
+                get(crate::tenancy::list_tenant_members).post(crate::tenancy::create_tenant_member),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/members/{membership_id}/",
+                patch(crate::tenancy::update_tenant_member)
+                    .delete(crate::tenancy::delete_tenant_member),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/members/",
+                get(crate::tenancy::list_project_members)
+                    .post(crate::tenancy::create_project_member),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/members/{membership_id}/",
+                patch(crate::tenancy::update_project_member)
+                    .delete(crate::tenancy::delete_project_member),
+            );
     }
     router.fallback(forward).with_state(state)
 }
