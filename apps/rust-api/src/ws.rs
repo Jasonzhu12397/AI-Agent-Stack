@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::ws::{CloseCode, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::protocol::CloseFrame as UpstreamCloseFrame;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
-use crate::proxy::AppState;
+use crate::proxy::{set_trusted_forwarded_headers, AppState};
 
 const FORWARDED_HEADERS: &[&str] = &[
     "origin",
@@ -54,28 +54,7 @@ pub async fn forward(
         .path_and_query()
         .map(|value| value.as_str().to_string());
     let mut headers = request.headers().clone();
-    for name in [
-        "forwarded",
-        "x-forwarded-host",
-        "x-forwarded-port",
-        "x-real-ip",
-        "x-forwarded-for",
-        "x-forwarded-proto",
-    ] {
-        headers.remove(name);
-    }
-    if let Ok(value) = HeaderValue::from_str(&peer.ip().to_string()) {
-        headers.insert(HeaderName::from_static("x-forwarded-for"), value);
-    }
-    let forwarded_proto = if state.config.external_scheme == "https" {
-        HeaderValue::from_static("https")
-    } else {
-        HeaderValue::from_static("http")
-    };
-    headers.insert(
-        HeaderName::from_static("x-forwarded-proto"),
-        forwarded_proto,
-    );
+    set_trusted_forwarded_headers(&mut headers, peer, &state.config.external_scheme);
     let target = match state
         .config
         .upstream_websocket_url(path_and_query.as_deref())
