@@ -47,6 +47,18 @@ impl Config {
         if !matches!(upstream.scheme(), "http" | "https") {
             return Err("RUST_API_UPSTREAM must use http or https".into());
         }
+        if !upstream.username().is_empty()
+            || upstream.password().is_some()
+            || upstream.query().is_some()
+            || upstream.fragment().is_some()
+        {
+            return Err(
+                "RUST_API_UPSTREAM must not contain credentials, a query, or a fragment".into(),
+            );
+        }
+        if upstream.host_str().is_none() {
+            return Err("RUST_API_UPSTREAM must include a host".into());
+        }
         if upstream.path() != "/" && !upstream.path().is_empty() {
             return Err(
                 "RUST_API_UPSTREAM must not contain a path; routes are forwarded as-is".into(),
@@ -141,4 +153,26 @@ fn parse_seconds(name: &str, default: u64) -> Result<Duration, String> {
         return Err(format!("{name} must be greater than zero"));
     }
     Ok(Duration::from_secs(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_credentials_and_url_suffixes_in_upstream_configuration() {
+        for upstream in [
+            "https://user:password@example.com",
+            "https://example.com/?token=secret",
+            "https://example.com/#fragment",
+        ] {
+            assert!(Config::new(
+                "127.0.0.1:8080".into(),
+                upstream.into(),
+                Duration::from_secs(3),
+                Duration::from_secs(60),
+            )
+            .is_err());
+        }
+    }
 }
