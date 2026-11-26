@@ -10,5 +10,6 @@ pub mod tasks;
 pub mod tenancy;
 pub mod token_budget;
 pub mod workflow_reads;
+pub mod workflow_validation;
 pub mod workflows;
 pub mod ws;

@@ -56,6 +56,12 @@ domain model, permissions, audit and realtime code in the Django service.
   administrator or project admin/editor rights, enforce project-scoped slug
   uniqueness and the 128 KiB draft ceiling, keep archived drafts read-only,
   and append `workflow.created` / `workflow.updated` in the same transaction.
+- Owns workflow validation and publication: the full graph contract (node
+  types, condition branches, join strategies, cycles, reachability, loop
+  bodies, UI positions, credential rejection) plus model, knowledge-base,
+  installed-tool and agent-version reference checks. Publication revalidates,
+  inserts a new immutable version, advances `current_version` and appends
+  `workflow.published` in one transaction.
 - Owns the workflow catalog and run surface: bound models, knowledge bases,
   installed tools and published agents for the studio, plus run listing with
   per-step records and idempotent run creation. Run creation requires a
@@ -129,7 +135,8 @@ The edge is the stable seam for moving routes into Rust:
    projects, both membership scopes and task list/create/detail/cancel now run
    in Rust against the shared session, RBAC and audit tables, together with
    audit listing, hash-chain verification, tenant token budgets and workflow
-   draft CRUD, catalog reads and workflow runs. Model gateway moves next.
+   draft CRUD, validation, publication, catalog reads and workflow runs. Model
+   gateway moves next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

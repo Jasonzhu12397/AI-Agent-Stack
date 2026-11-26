@@ -125,3 +125,10 @@ Workflow catalog and runs (Rust native)
 - GET/POST /api/v1/workflows/{workflow_id}/runs/
 - Verified by cargo test --test workflow_reads (2 tests): model knowledge-base
   tool and agent visibility, run creation, duplicate 200, conflicting 409.
+
+Workflow validation and publication (Rust native)
+- POST /api/v1/workflows/{workflow_id}/validate/
+- POST /api/v1/workflows/{workflow_id}/publish/
+- Verified by cargo test --test workflow_validation (4 tests) and
+  --test workflows (validation layers, publication version increment,
+  invalid graph 200/is_valid=false, publish 400, non-editor 403).

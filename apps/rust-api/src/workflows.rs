@@ -486,7 +486,7 @@ pub(crate) async fn workflow_access(
     }
 }
 
-async fn editor(role: &str, pool: &AnyPool, project_id: &str, user_id: i64) -> bool {
+pub(crate) async fn editor(role: &str, pool: &AnyPool, project_id: &str, user_id: i64) -> bool {
     if role == "owner" || role == "admin" {
         return true;
     }
@@ -632,4 +632,238 @@ fn sqlx_error(error: sqlx::Error) -> Response {
 fn database_error_message(message: String) -> Response {
     tracing::error!(%message, "rust workflow database operation failed");
     unavailable()
+}
+
+/// Native replacement for workflow validation.
+pub async fn validate_workflow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(workflow_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let record = match workflow_access(pool, &state, &workflow_id, user.id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    let role = match tenant_role(pool, &record.tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    if !editor(role.as_str(), pool, &record.project_id, user.id).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "Project editor permission required."})),
+        )
+            .into_response();
+    }
+    let definition = record.draft_definition.clone();
+    let node_count = definition
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let edge_count = definition
+        .get("edges")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let graph = match crate::workflow_validation::validate(&definition) {
+        Ok(graph) => graph,
+        Err(error) => {
+            return Json(json!({
+                "is_valid": false,
+                "errors": [error],
+                "execution_layers": [],
+                "node_count": node_count,
+                "edge_count": edge_count,
+            }))
+            .into_response();
+        }
+    };
+    if let Err(error) = crate::workflow_validation::validate_references(
+        &graph,
+        pool,
+        is_postgres(&state),
+        &record.tenant_id,
+        &record.project_id,
+    )
+    .await
+    {
+        return Json(json!({
+            "is_valid": false,
+            "errors": [error],
+            "execution_layers": [],
+            "node_count": node_count,
+            "edge_count": edge_count,
+        }))
+        .into_response();
+    }
+    Json(json!({
+        "is_valid": true,
+        "errors": [],
+        "execution_layers": crate::workflow_validation::execution_layers(&graph),
+        "node_count": node_count,
+        "edge_count": edge_count,
+    }))
+    .into_response()
+}
+
+/// Native replacement for workflow publication.
+pub async fn publish_workflow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(workflow_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let record = match workflow_access(pool, &state, &workflow_id, user.id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    let role = match tenant_role(pool, &record.tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    if !editor(role.as_str(), pool, &record.project_id, user.id).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "Project editor permission required."})),
+        )
+            .into_response();
+    }
+    if record.is_archived {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"detail": "Archived workflows cannot be published."})),
+        )
+            .into_response();
+    }
+    let definition = record.draft_definition.clone();
+    let graph = match crate::workflow_validation::validate(&definition) {
+        Ok(graph) => graph,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"detail": error}))).into_response();
+        }
+    };
+    if let Err(error) = crate::workflow_validation::validate_references(
+        &graph,
+        pool,
+        is_postgres(&state),
+        &record.tenant_id,
+        &record.project_id,
+    )
+    .await
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"detail": error}))).into_response();
+    }
+    let postgres = is_postgres(&state);
+    let version_number = match sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM core_workflowversion \
+         WHERE CAST(workflow_id AS TEXT) = ?",
+    )
+    .bind(&record.id)
+    .fetch_one(pool)
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let version_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return sqlx_error(error),
+    };
+    let insert = if postgres {
+        "INSERT INTO core_workflowversion (id, workflow_id, version, definition_snapshot, \
+         created_by_id, published_at) VALUES (?::uuid, ?::uuid, ?, ?::jsonb, ?, ?::timestamptz)"
+    } else {
+        "INSERT INTO core_workflowversion (id, workflow_id, version, definition_snapshot, \
+         created_by_id, published_at) VALUES (?, ?, ?, ?, ?, ?)"
+    };
+    if let Err(error) = sqlx::query(insert)
+        .bind(&version_id)
+        .bind(&record.id)
+        .bind(version_number)
+        .bind(definition.to_string())
+        .bind(user.id)
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    let update = if postgres {
+        "UPDATE core_workflowdefinition SET current_version = ?, updated_at = ?::timestamptz \
+         WHERE CAST(id AS TEXT) = ?"
+    } else {
+        "UPDATE core_workflowdefinition SET current_version = ?, updated_at = ? \
+         WHERE CAST(id AS TEXT) = ?"
+    };
+    if let Err(error) = sqlx::query(update)
+        .bind(version_number)
+        .bind(&now)
+        .bind(&record.id)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&record.tenant_id),
+            project_id: Some(&record.project_id),
+            event_type: "workflow.published",
+            resource_type: "workflow_version",
+            resource_id: &version_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({
+                "workflow_id": record.id,
+                "version": version_number,
+                "step_count": graph.nodes.len(),
+            }),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": version_id,
+            "workflow_id": record.id,
+            "version": version_number,
+            "definition_snapshot": definition,
+            "published_at": now,
+        })),
+    )
+        .into_response()
 }

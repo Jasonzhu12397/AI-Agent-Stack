@@ -136,6 +136,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::workflow_reads::catalog),
             )
             .route(
+                "/api/v1/workflows/{workflow_id}/validate/",
+                post(crate::workflows::validate_workflow),
+            )
+            .route(
+                "/api/v1/workflows/{workflow_id}/publish/",
+                post(crate::workflows::publish_workflow),
+            )
+            .route(
                 "/api/v1/workflows/{workflow_id}/runs/",
                 get(crate::workflow_reads::list_runs).post(crate::workflow_reads::create_run),
             );
