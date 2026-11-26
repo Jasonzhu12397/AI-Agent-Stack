@@ -102,7 +102,7 @@ async fn call(
     let request = Request::builder()
         .method(method)
         .uri(uri)
-        .header("cookie", format!("sessionid={SESSION}"));
+        .header("x-session-token", SESSION);
     let request = match body {
         Some(body) => request
             .header("content-type", "application/json")
@@ -217,7 +217,7 @@ async fn creates_lists_and_patches_agent_drafts() {
     let request = Request::builder()
         .method("POST")
         .uri(&runs)
-        .header("cookie", format!("sessionid={SESSION}"))
+        .header("x-session-token", SESSION)
         .header("content-type", "application/json")
         .header("idempotency-key", "agent-run-1")
         .body(Body::from(
