@@ -1,7 +1,9 @@
+import hashlib
 import json
 import math
 import os
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -19,10 +21,11 @@ class NoRedirectHandler(HTTPRedirectHandler):
 
 
 class ModelGatewayError(Exception):
-    def __init__(self, code, message, retryable=False):
+    def __init__(self, code, message, retryable=False, billable_uncertain=False):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.billable_uncertain = billable_uncertain
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,11 @@ def _intent_tool(offered: list[str], instruction: str) -> str | None:
 
 
 MAX_FALLBACK_HOPS = 3
+
+def _fallback_idempotency_key(idempotency_key, source_model_id, depth):
+    base_key = idempotency_key if isinstance(idempotency_key, str) and idempotency_key else uuid.uuid4().hex
+    material = f"{base_key}:{source_model_id}:{depth}".encode("utf-8")
+    return "fallback:" + hashlib.sha256(material).hexdigest()
 
 
 class ModelGateway:
@@ -272,6 +280,7 @@ class ModelGateway:
             model_config=model_config,
         )
         started = time.monotonic()
+        provider_request_started = False
         try:
             if provider.provider_type == ModelProvider.ProviderType.FAKE:
                 content = provider.config.get("response", "Fake model response")
@@ -390,6 +399,7 @@ class ModelGateway:
                         "LOCAL_MODEL_HOST_NOT_ALLOWED",
                         "HTTP model endpoints must use an explicitly allowlisted local model host.",
                     )
+                provider_request_started = True
                 payload = self._post_json(
                     provider,
                     "chat/completions",
@@ -434,6 +444,7 @@ class ModelGateway:
                     raise ModelGatewayError(
                         "MODEL_PROVIDER_INVALID_RESPONSE",
                         "The model provider returned an invalid chat completion.",
+                        billable_uncertain=True,
                     ) from exc
                 resolved_input, resolved_output = resolve_provider_token_usage(
                     provider_type=provider.provider_type,
@@ -453,7 +464,13 @@ class ModelGateway:
                     fallback_attempts=fallback_attempts,
                 )
         except ModelGatewayError as exc:
-            guard.release(reservation=reservation)
+            if provider_request_started and exc.billable_uncertain:
+                guard.settle(
+                    reservation=reservation,
+                    consumed_tokens=reservation.reserved_tokens,
+                )
+            else:
+                guard.release(reservation=reservation)
             fallback = self._fallback_model(model_config, tools)
             if (
                 exc.retryable
@@ -475,14 +492,22 @@ class ModelGateway:
                     timeout_seconds=timeout_seconds,
                     tools=tools,
                     tool_choice=tool_choice,
-                    idempotency_key=idempotency_key,
+                    idempotency_key=_fallback_idempotency_key(
+                        idempotency_key, model_config.id, _fallback_depth + 1
+                    ),
                     _fallback_attempts=fallback_attempts,
                     _fallback_depth=_fallback_depth + 1,
                     _visited_config_ids=visited_config_ids,
                 )
             raise
         except BaseException:
-            guard.release(reservation=reservation)
+            if provider_request_started:
+                guard.settle(
+                    reservation=reservation,
+                    consumed_tokens=reservation.reserved_tokens,
+                )
+            else:
+                guard.release(reservation=reservation)
             raise
         guard.settle(
             reservation=reservation,
@@ -560,6 +585,7 @@ class ModelGateway:
             model_config=model_config,
         )
         started = time.monotonic()
+        provider_request_started = True
         try:
             payload = self._post_json(
                 provider,
@@ -591,7 +617,13 @@ class ModelGateway:
                     "The model provider returned invalid embeddings.",
                 ) from exc
         except BaseException:
-            guard.release(reservation=reservation)
+            if provider_request_started:
+                guard.settle(
+                    reservation=reservation,
+                    consumed_tokens=reservation.reserved_tokens,
+                )
+            else:
+                guard.release(reservation=reservation)
             raise
         # Embedding responses carry no usage report, so the reserved input
         # estimate is charged as the settled consumption.
@@ -675,6 +707,7 @@ class ModelGateway:
                 raise ModelGatewayError(
                     "MODEL_PROVIDER_RESPONSE_TOO_LARGE",
                     "The model provider response exceeded the 16 MiB limit.",
+                    billable_uncertain=True,
                 )
             payload = json.loads(raw_payload.decode("utf-8"))
         except HTTPError as exc:
@@ -705,21 +738,25 @@ class ModelGateway:
                 f"The model provider returned HTTP {exc.code}."
                 + (f" {detail}" if detail else ""),
                 retryable=exc.code >= 500 or exc.code == 429,
+                billable_uncertain=exc.code >= 500,
             ) from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_UNAVAILABLE",
                 "The model provider could not be reached.",
                 retryable=True,
+                billable_uncertain=True,
             ) from exc
         except (ValueError, KeyError, TypeError) as exc:
             raise ModelGatewayError(
                 "MODEL_PROVIDER_INVALID_RESPONSE",
                 "The model provider returned an invalid response.",
+                billable_uncertain=True,
             ) from exc
         if not isinstance(payload, dict):
             raise ModelGatewayError(
                 "MODEL_PROVIDER_INVALID_RESPONSE",
                 "The model provider returned an invalid response.",
+                billable_uncertain=True,
             )
         return payload
