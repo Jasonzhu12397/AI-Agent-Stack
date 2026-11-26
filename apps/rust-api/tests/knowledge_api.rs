@@ -35,7 +35,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_modelprovider (id TEXT PRIMARY KEY, tenant_id TEXT, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, provider_type VARCHAR(32) NOT NULL, auth_mode VARCHAR(32) NOT NULL, preset_key VARCHAR(40) NOT NULL, base_url VARCHAR(500) NOT NULL, credential_ref VARCHAR(200) NOT NULL, config TEXT NOT NULL, enabled BOOLEAN NOT NULL, deployment_region VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_modelconfig (id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model_name VARCHAR(160) NOT NULL, display_name VARCHAR(160) NOT NULL, capabilities TEXT NOT NULL, context_window INTEGER NOT NULL, max_output_tokens INTEGER NOT NULL, input_cost_per_million REAL NOT NULL, output_cost_per_million REAL NOT NULL, version INTEGER NOT NULL, enabled BOOLEAN NOT NULL, fallback_model_id TEXT, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_knowledgebase (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, embedding_model_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, chunk_size INTEGER NOT NULL, chunk_overlap INTEGER NOT NULL, is_archived BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE (project_id, slug))",
-        "CREATE TABLE core_knowledgedocument (id TEXT PRIMARY KEY, knowledge_base_id TEXT NOT NULL, uploaded_by_id INTEGER NOT NULL, title VARCHAR(240) NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL, checksum VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, chunk_count INTEGER NOT NULL, vector_collection VARCHAR(200), vector_dimensions INTEGER, error TEXT, ingested_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_knowledgedocument (id TEXT PRIMARY KEY, knowledge_base_id TEXT NOT NULL, uploaded_by_id INTEGER NOT NULL, title VARCHAR(240) NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL, checksum VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, chunk_count INTEGER NOT NULL, vector_collection VARCHAR(200) NOT NULL, vector_dimensions INTEGER, error TEXT, ingested_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -250,4 +250,82 @@ async fn ingests_documents_and_queues_the_ingestion_task() {
     let (status, body) = call(&state, "GET", &collection, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["results"][0]["document_count"], 1);
+}
+
+#[tokio::test]
+async fn deletes_documents_and_retries_failed_ingestion() {
+    let state = state().await;
+    let collection = format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/knowledge-bases/");
+    let (_, body) = call(
+        &state,
+        "POST",
+        &collection,
+        Some(json!({"name": "Docs", "slug": "docs", "embedding_model_id": EMBEDDING})),
+    )
+    .await;
+    let kb = body["id"].as_str().unwrap().to_string();
+    let documents = format!("/api/v1/knowledge-bases/{kb}/documents/");
+
+    let (_, body) = call(
+        &state,
+        "POST",
+        &documents,
+        Some(json!({"title": "Delete me", "content": "temporary"})),
+    )
+    .await;
+    let document_id = body["id"].as_str().unwrap().to_string();
+    let detail = format!("/api/v1/knowledge-documents/{document_id}/");
+    let (status, _) = call(&state, "DELETE", &detail, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = call(&state, "GET", &documents, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"], 0);
+    let pool = state.identity_pool.as_ref().unwrap();
+    let cancelled: String = sqlx::query_scalar(
+        "SELECT status FROM core_task WHERE json_extract(payload, '$.knowledge_document_id') = ?",
+    )
+    .bind(&document_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(cancelled, "cancelled");
+
+    let (_, body) = call(
+        &state,
+        "POST",
+        &documents,
+        Some(json!({"title": "Retry me", "content": "failed once"})),
+    )
+    .await;
+    let retry_id = body["id"].as_str().unwrap().to_string();
+    sqlx::query(
+        "UPDATE core_knowledgedocument SET status = 'failed', chunk_count = 0, error = '{\"code\":\"FAILED\"}' WHERE id = ?",
+    )
+    .bind(&retry_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE core_task SET status = 'cancelled', finished_at = datetime('now') WHERE json_extract(payload, '$.knowledge_document_id') = ?",
+    )
+    .bind(&retry_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let retry_uri = format!("/api/v1/knowledge-documents/{retry_id}/retry/");
+    let (status, body) = call(&state, "POST", &retry_uri, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body["status"], json!("pending"));
+    assert_eq!(body["chunk_count"], json!(0));
+    assert!(body["error"].is_null());
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_task WHERE json_extract(payload, '$.knowledge_document_id') = ? AND status = 'queued'",
+    )
+    .bind(&retry_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(queued, 1);
+    let (status, _) = call(&state, "POST", &retry_uri, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

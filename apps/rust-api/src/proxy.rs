@@ -338,6 +338,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::knowledge_api::list_documents)
                     .post(crate::knowledge_api::create_document),
             )
+            .route(
+                "/api/v1/knowledge-documents/{document_id}/",
+                axum::routing::delete(crate::knowledge_api::delete_document),
+            )
+            .route(
+                "/api/v1/knowledge-documents/{document_id}/retry/",
+                axum::routing::post(crate::knowledge_api::retry_document),
+            )
             .route("/health/live", get(edge_liveness));
     }
     router

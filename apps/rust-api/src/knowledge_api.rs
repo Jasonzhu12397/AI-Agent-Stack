@@ -355,12 +355,12 @@ pub async fn create_document(
     };
     let insert_document = if postgres {
         "INSERT INTO core_knowledgedocument (id, knowledge_base_id, uploaded_by_id, title, content, \
-         metadata, checksum, status, chunk_count, created_at, updated_at) \
-         VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?, 'pending', 0, ?::timestamptz, ?::timestamptz)"
+         metadata, checksum, status, chunk_count, vector_collection, created_at, updated_at) \
+         VALUES (?::uuid, ?::uuid, ?, ?, ?, ?::jsonb, ?, 'pending', 0, '', ?::timestamptz, ?::timestamptz)"
     } else {
         "INSERT INTO core_knowledgedocument (id, knowledge_base_id, uploaded_by_id, title, content, \
-         metadata, checksum, status, chunk_count, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)"
+         metadata, checksum, status, chunk_count, vector_collection, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, ?)"
     };
     if let Err(error) = sqlx::query(insert_document)
         .bind(&document_id)
@@ -875,4 +875,358 @@ fn sqlx_error(error: sqlx::Error) -> Response {
 fn database_error(message: String) -> Response {
     tracing::error!(%message, "rust knowledge api database operation failed");
     unavailable()
+}
+
+struct DocumentScope {
+    knowledge_base_id: String,
+    tenant_id: String,
+    project_id: String,
+    vector_collection: String,
+    status: String,
+}
+
+pub async fn delete_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let scope = match document_scope(pool, &document_id, user.id).await {
+        Ok(Some(scope)) => scope,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    if !can_edit(pool, &scope.tenant_id, &scope.project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return legacy_error(
+            "Project editor permission required.",
+            StatusCode::FORBIDDEN,
+            "PERMISSION_DENIED",
+        );
+    }
+    match running_tasks(pool, &state, &document_id).await {
+        Ok(0) => {}
+        Ok(_) => {
+            return legacy_error(
+                "Document ingestion is running; retry deletion after it finishes.",
+                StatusCode::CONFLICT,
+                "KNOWLEDGE_INGESTION_RUNNING",
+            )
+        }
+        Err(error) => return database_error(error),
+    }
+    if let Err(error) = delete_vectors(&state, &scope, &document_id).await {
+        tracing::error!(%error, "rust knowledge could not clean up vectors");
+        return legacy_error(
+            "Vector cleanup failed; the source document was retained.",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "VECTOR_STORE_ERROR",
+        );
+    }
+    match cancel_queued_tasks(pool, &state, &document_id).await {
+        Ok(_) => {}
+        Err(error) => return database_error(error),
+    }
+    if let Some(database_url) = state.config.database_url.as_deref() {
+        let event = AuditEvent {
+            tenant_id: Some(&scope.tenant_id),
+            project_id: Some(&scope.project_id),
+            event_type: "knowledge.document.deleted",
+            resource_type: "knowledge_document",
+            resource_id: &document_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({"knowledge_base_id": scope.knowledge_base_id}),
+        };
+        if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
+            return database_error(error);
+        }
+    }
+    if let Err(error) = sqlx::query("DELETE FROM core_knowledgedocument WHERE CAST(id AS TEXT) = ?")
+        .bind(&document_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+pub async fn retry_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(document_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let scope = match document_scope(pool, &document_id, user.id).await {
+        Ok(Some(scope)) => scope,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    if !can_edit(pool, &scope.tenant_id, &scope.project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return legacy_error(
+            "Project editor permission required.",
+            StatusCode::FORBIDDEN,
+            "PERMISSION_DENIED",
+        );
+    }
+    if scope.status != "failed" {
+        return legacy_error(
+            "Only failed documents can be retried.",
+            StatusCode::CONFLICT,
+            "KNOWLEDGE_DOCUMENT_NOT_FAILED",
+        );
+    }
+    match active_tasks(pool, &state, &document_id).await {
+        Ok(0) => {}
+        Ok(_) => {
+            return legacy_error(
+                "A document ingestion task is already active.",
+                StatusCode::CONFLICT,
+                "KNOWLEDGE_INGESTION_ACTIVE",
+            )
+        }
+        Err(error) => return database_error(error),
+    }
+    if let Err(error) = delete_vectors(&state, &scope, &document_id).await {
+        tracing::error!(%error, "rust knowledge could not clean up vectors before retry");
+        return legacy_error(
+            "Vector cleanup failed; retry was not queued.",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "VECTOR_STORE_ERROR",
+        );
+    }
+    let postgres = is_postgres(&state);
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let update = if postgres {
+        "UPDATE core_knowledgedocument SET status = 'pending', chunk_count = 0, error = NULL, \
+         ingested_at = NULL, updated_at = ?::timestamptz WHERE CAST(id AS TEXT) = ?"
+    } else {
+        "UPDATE core_knowledgedocument SET status = 'pending', chunk_count = 0, error = NULL, \
+         ingested_at = NULL, updated_at = ? WHERE CAST(id AS TEXT) = ?"
+    };
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    if let Err(error) = sqlx::query(update)
+        .bind(&now)
+        .bind(&document_id)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let insert_task = if postgres {
+        "INSERT INTO core_task (id, tenant_id, project_id, created_by_id, task_type, payload, status, \
+         idempotency_key, attempts, max_attempts, available_at, created_at, updated_at) \
+         VALUES (?::uuid, ?::uuid, ?::uuid, ?, 'knowledge.ingest', ?::jsonb, 'queued', ?, 0, 3, \
+         ?::timestamptz, ?::timestamptz, ?::timestamptz)"
+    } else {
+        "INSERT INTO core_task (id, tenant_id, project_id, created_by_id, task_type, payload, status, \
+         idempotency_key, attempts, max_attempts, available_at, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, 'knowledge.ingest', ?, 'queued', ?, 0, 3, ?, ?, ?)"
+    };
+    if let Err(error) = sqlx::query(insert_task)
+        .bind(&task_id)
+        .bind(&scope.tenant_id)
+        .bind(&scope.project_id)
+        .bind(user.id)
+        .bind(json!({"knowledge_document_id": document_id}).to_string())
+        .bind(format!(
+            "knowledge-ingest-retry:{document_id}:{}",
+            uuid::Uuid::new_v4()
+        ))
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&scope.tenant_id),
+            project_id: Some(&scope.project_id),
+            event_type: "knowledge.document.retried",
+            resource_type: "knowledge_document",
+            resource_id: &document_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({"knowledge_base_id": scope.knowledge_base_id}),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    match document_rows(pool, &state, &scope.knowledge_base_id, Some(&document_id)).await {
+        Ok(rows) => match rows.first() {
+            Some(record) => (StatusCode::ACCEPTED, Json(document_json(record))).into_response(),
+            None => not_found(),
+        },
+        Err(error) => database_error(error),
+    }
+}
+
+async fn document_scope(
+    pool: &AnyPool,
+    document_id: &str,
+    user_id: i64,
+) -> Result<Option<DocumentScope>, String> {
+    let row = sqlx::query(
+        "SELECT CAST(doc.knowledge_base_id AS TEXT) AS knowledge_base_id, \
+         CAST(kb.tenant_id AS TEXT) AS tenant_id, CAST(kb.project_id AS TEXT) AS project_id, \
+         COALESCE(doc.vector_collection, '') AS vector_collection, doc.status \
+         FROM core_knowledgedocument doc \
+         JOIN core_knowledgebase kb ON kb.id = doc.knowledge_base_id \
+         JOIN core_tenantmembership membership ON membership.tenant_id = kb.tenant_id \
+         WHERE CAST(doc.id AS TEXT) = ? AND kb.is_archived = FALSE AND membership.user_id = ? \
+         LIMIT 1",
+    )
+    .bind(document_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| DocumentScope {
+        knowledge_base_id: row.try_get("knowledge_base_id").unwrap_or_default(),
+        tenant_id: row.try_get("tenant_id").unwrap_or_default(),
+        project_id: row.try_get("project_id").unwrap_or_default(),
+        vector_collection: row.try_get("vector_collection").unwrap_or_default(),
+        status: row.try_get("status").unwrap_or_default(),
+    }))
+}
+
+async fn running_tasks(pool: &AnyPool, state: &AppState, document_id: &str) -> Result<i64, String> {
+    let filter = if is_postgres(state) {
+        "payload->>'knowledge_document_id' = ?"
+    } else {
+        "json_extract(payload, '$.knowledge_document_id') = ?"
+    };
+    let sql = format!("SELECT COUNT(*) FROM core_task WHERE {filter} AND status = 'running'");
+    sqlx::query_scalar::<_, i64>(&sql)
+        .bind(document_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn active_tasks(pool: &AnyPool, state: &AppState, document_id: &str) -> Result<i64, String> {
+    let filter = if is_postgres(state) {
+        "payload->>'knowledge_document_id' = ?"
+    } else {
+        "json_extract(payload, '$.knowledge_document_id') = ?"
+    };
+    let sql = format!(
+        "SELECT COUNT(*) FROM core_task WHERE {filter} AND status IN ('queued', 'running')"
+    );
+    sqlx::query_scalar::<_, i64>(&sql)
+        .bind(document_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn cancel_queued_tasks(
+    pool: &AnyPool,
+    state: &AppState,
+    document_id: &str,
+) -> Result<(), String> {
+    let postgres = is_postgres(state);
+    let filter = if postgres {
+        "payload->>'knowledge_document_id' = ?"
+    } else {
+        "json_extract(payload, '$.knowledge_document_id') = ?"
+    };
+    let now = if postgres { "NOW()" } else { "datetime('now')" };
+    let error = if postgres { "?::jsonb" } else { "?" };
+    let sql = format!(
+        "UPDATE core_task SET status = 'cancelled', finished_at = {now}, \
+         error = {error}, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL \
+         WHERE {filter} AND status = 'queued'"
+    );
+    sqlx::query(&sql)
+        .bind(json!({"code": "KNOWLEDGE_DOCUMENT_DELETED", "message": "The source document was deleted before ingestion.", "retryable": false}).to_string())
+        .bind(document_id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn delete_vectors(
+    state: &AppState,
+    scope: &DocumentScope,
+    document_id: &str,
+) -> Result<(), String> {
+    if scope.vector_collection.trim().is_empty() {
+        return Ok(());
+    }
+    let base = std::env::var("QDRANT_URL").unwrap_or_default();
+    if !base.starts_with("http://") && !base.starts_with("https://") {
+        return Err("Qdrant URL must use HTTP or HTTPS.".to_string());
+    }
+    let api_key = std::env::var("QDRANT_API_KEY_REF")
+        .ok()
+        .filter(|reference| reference.starts_with("env:"))
+        .and_then(|reference| std::env::var(&reference[4..]).ok())
+        .unwrap_or_default();
+    let url = format!(
+        "{}/collections/{}/points/delete?wait=true",
+        base.trim_end_matches('/'),
+        scope.vector_collection
+    );
+    let body = json!({"filter": {"must": [
+        {"key": "tenant_id", "match": {"value": scope.tenant_id}},
+        {"key": "project_id", "match": {"value": scope.project_id}},
+        {"key": "metadata.document_id", "match": {"value": document_id}},
+    ]}});
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client.post(url).json(&body);
+    if !api_key.is_empty() {
+        request = request.header("api-key", api_key);
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Qdrant returned {}", response.status()));
+    }
+    let _ = state;
+    Ok(())
 }
