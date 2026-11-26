@@ -167,3 +167,23 @@ async fn health_fails_when_the_upstream_is_down() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+
+#[tokio::test]
+async fn rejects_session_cookie_mutations_without_csrf_tokens() {
+    let app = router(state("http://127.0.0.1:9".into()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/legacy/mutation/")
+                .header("cookie", "sessionid=browser-session")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
