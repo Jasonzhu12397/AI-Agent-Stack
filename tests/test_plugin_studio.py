@@ -662,9 +662,8 @@ def test_oauth_authorization_code_flow_persists_a_refreshable_credential(
     reference = completed.data["credential"]
     assert reference.startswith("plugin://")
     stored = resolve(reference, tenant_id=tenant.id)
-    assert stored == {"type": "bearer", "token": "access-2"}
-    assert calls[0]["grant"] == "authorization_code"
-    assert calls[1]["grant"] == "refresh_token"
+    assert stored == {"type": "bearer", "token": "access-1"}
+    assert [contract["grant"] for contract in calls] == ["authorization_code"]
 
     from core.models import AgentPluginCredential
 
@@ -768,4 +767,44 @@ def test_publish_binds_an_authorization_code_credential_reference(studio_workspa
         tenant=tenant, plugin_key="oauth-pet-tools"
     )
     assert definition.credential_ref == reference
-    assert resolve(reference, tenant_id=tenant.id) == {"type": "bearer", "token": "access-2"}
+    assert resolve(reference, tenant_id=tenant.id) == {"type": "bearer", "token": "access-1"}
+
+
+def test_oauth_access_token_is_cached_until_near_expiry(studio_workspace, monkeypatch):
+    _user, tenant, _project, client = studio_workspace
+    monkeypatch.setattr(
+        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
+    )
+    issued = []
+
+    def fake_token_request(contract, timeout=15.0):
+        issued.append(contract["grant"])
+        return {
+            "access_token": f"access-{len(issued)}",
+            "refresh_token": "refresh-1",
+            "expires_in": 3600,
+        }
+
+    monkeypatch.setattr(plugin_studio, "_oauth_token_request", fake_token_request)
+    started = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/authorize/",
+        {
+            "authorization_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+            "redirect_uri": "https://console.example.com/plugins/oauth/callback",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+        },
+        format="json",
+    )
+    completed = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/callback/",
+        {"code": "provider-code", "state": started.data["state"]},
+        format="json",
+    )
+    reference = completed.data["credential"]
+    first = resolve(reference, tenant_id=tenant.id)
+    second = resolve(reference, tenant_id=tenant.id)
+    assert first == {"type": "bearer", "token": "access-1"}
+    assert second == first
+    assert issued == ["authorization_code"]

@@ -386,9 +386,7 @@ def complete_authorization_code(tenant, user, code, state) -> dict[str, Any]:
     stored.pop("code", None)
     stored.pop("code_verifier", None)
     stored["grant"] = "refresh_token"
-    stored["refresh_token"] = refresh_token.strip()
-    if isinstance(token.get("scope"), str) and token["scope"]:
-        stored["scope"] = token["scope"]
+    _store_token(stored, token)
     credential = seal_credential(tenant, user, "OAuth plugin credential", stored)
     return {
         "credential": credential,
@@ -1206,13 +1204,59 @@ def seal_credential(tenant, user, name: str, contract: dict[str, Any]):
     return f"{CREDENTIAL_PREFIX}{credential.id}"
 
 
-def _resolve_oauth2(contract: dict[str, Any]) -> dict[str, str]:
-    authorization = credential_headers(contract).get("Authorization", "")
-    if not authorization.startswith("Bearer ") or len(authorization) <= len("Bearer "):
-        raise plugin_credentials.CredentialAccessDeniedError(
-            "OAuth token acquisition did not return a bearer token."
-        )
-    return {"type": "bearer", "token": authorization[len("Bearer ") :]}
+def _cached_access_token(contract: dict[str, Any]) -> str:
+    token = contract.get("access_token")
+    expires_at = contract.get("access_token_expires_at")
+    if not isinstance(token, str) or not token or not isinstance(expires_at, str):
+        return ""
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return ""
+    if expiry <= datetime.now(UTC) + timedelta(seconds=60):
+        return ""
+    return token
+
+
+def _store_token(contract: dict[str, Any], token: dict[str, Any]) -> None:
+    contract["access_token"] = token["access_token"]
+    expires_in = token.get("expires_in")
+    seconds = expires_in if isinstance(expires_in, (int, float)) and expires_in > 0 else 3600
+    contract["access_token_expires_at"] = (
+        datetime.now(UTC) + timedelta(seconds=min(float(seconds), 86400))
+    ).isoformat()
+    refresh_token = token.get("refresh_token")
+    if isinstance(refresh_token, str) and refresh_token.strip():
+        contract["refresh_token"] = refresh_token.strip()
+    if isinstance(token.get("scope"), str) and token["scope"]:
+        contract["scope"] = token["scope"]
+
+
+def _resolve_oauth2(contract: dict[str, Any], credential=None) -> dict[str, str]:
+    cached = _cached_access_token(contract)
+    if cached:
+        return {"type": "bearer", "token": cached}
+    if credential is None:
+        token = _oauth_token_request(contract)
+        _store_token(contract, token)
+        return {"type": "bearer", "token": token["access_token"]}
+    # A refresh token can rotate. Lock the row so two concurrent capability
+    # calls cannot both spend the old token and leave one with a revoked value.
+    from django.db import transaction
+
+    from core.models import AgentPluginCredential
+
+    with transaction.atomic():
+        row = AgentPluginCredential.objects.select_for_update().get(pk=credential.pk)
+        locked = _read_contract(row)
+        cached = _cached_access_token(locked)
+        if cached:
+            return {"type": "bearer", "token": cached}
+        token = _oauth_token_request(locked)
+        _store_token(locked, token)
+        row.sealed_value = seal(json.dumps(locked, separators=(",", ":")), CREDENTIAL_SCOPE)
+        row.save(update_fields=["sealed_value"])
+    return {"type": "bearer", "token": token["access_token"]}
 
 
 def _read_contract(credential) -> dict[str, Any]:
@@ -1268,7 +1312,7 @@ def _plugin_credential_provider(reference: str) -> dict[str, str]:
         contract = _read_contract(target_row)
     kind = contract.get("type")
     if kind == "oauth2":
-        return _resolve_oauth2(contract)
+        return _resolve_oauth2(contract, credential)
     if kind not in {"bearer", "header"}:
         raise plugin_credentials.CredentialInvalidShapeError(
             "Plugin credential type is unsupported."
