@@ -489,3 +489,23 @@ fn unavailable(message: &str) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unsafe_or_malformed_pbkdf2_parameters() {
+        let valid_length_hash = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
+        assert!(!verify_password(
+            &format!("pbkdf2_sha256$10000001$salt${valid_length_hash}"),
+            "password"
+        ));
+        assert!(!verify_password(
+            &format!("pbkdf2_sha256$0$salt${valid_length_hash}"),
+            "password"
+        ));
+        assert!(!verify_password("pbkdf2_sha256$1000$$AA==", "password"));
+        assert!(!verify_password("pbkdf2_sha256$1000$salt$AA==", "password"));
+    }
+}
