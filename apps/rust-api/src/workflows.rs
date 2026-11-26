@@ -398,8 +398,8 @@ async fn workflow_rows(
     let columns = format!(
         "SELECT CAST(id AS TEXT) AS id, CAST(tenant_id AS TEXT) AS tenant_id, \
          CAST(project_id AS TEXT) AS project_id, name, slug, description, \
-         draft_definition{json_cast} AS draft_text, current_version, is_archived, \
-         {created}, {updated} FROM core_workflowdefinition",
+         draft_definition{json_cast} AS draft_text, current_version, CAST(is_archived AS INTEGER) AS is_archived_int, \
+         {created} AS created, {updated} AS updated FROM core_workflowdefinition",
         created = crate::tenancy::timestamp_expr(postgres, "core_workflowdefinition"),
         updated =
             crate::tenancy::timestamp_field_expr(postgres, "core_workflowdefinition", "updated_at"),
@@ -457,7 +457,7 @@ impl WorkflowRecord {
                 .and_then(|text| serde_json::from_str(&text).ok())
                 .unwrap_or_else(|| json!({})),
             current_version: row.try_get("current_version").unwrap_or_default(),
-            is_archived: row.try_get::<i64, _>("is_archived").unwrap_or_default() != 0,
+            is_archived: row.try_get::<i64, _>("is_archived_int").unwrap_or_default() != 0,
             created_at: row.try_get("created").ok(),
             updated_at: row.try_get("updated").ok(),
         })

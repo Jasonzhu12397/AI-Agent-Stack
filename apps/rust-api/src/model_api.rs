@@ -783,7 +783,7 @@ async fn provider_rows(
     };
     let base = format!(
         "SELECT CAST(id AS TEXT) AS id, name, provider_type, auth_mode, preset_key, base_url, \
-         credential_ref, enabled, {created} FROM core_modelprovider \
+         credential_ref, CAST(enabled AS INTEGER) AS enabled_int, {created} FROM core_modelprovider \
          WHERE (CAST(tenant_id AS TEXT) = ? OR tenant_id IS NULL) \
            AND (auth_mode <> 'user_account' OR created_by_id = ?) \
            AND enabled = {true_literal}"
@@ -815,11 +815,7 @@ async fn provider_rows(
             preset_key: row.try_get("preset_key").unwrap_or_default(),
             base_url: row.try_get("base_url").unwrap_or_default(),
             credential_ref: row.try_get("credential_ref").unwrap_or_default(),
-            enabled: row
-                .try_get::<i64, _>("enabled")
-                .map(|value| value != 0)
-                .or_else(|_| row.try_get::<bool, _>("enabled"))
-                .unwrap_or(true),
+            enabled: row.try_get::<i64, _>("enabled_int").unwrap_or(1) != 0,
             created_at: row.try_get("created").ok(),
         })
         .collect())
@@ -994,7 +990,7 @@ async fn config_rows(
         "SELECT CAST(config.id AS TEXT) AS id, CAST(config.provider_id AS TEXT) AS provider_id, \
          config.model_name, config.display_name, {capabilities} AS capabilities, \
          config.context_window, config.max_output_tokens, config.input_cost_per_million, \
-         config.output_cost_per_million, config.version, config.enabled, \
+         config.output_cost_per_million, config.version, CAST(config.enabled AS INTEGER) AS enabled_int, \
          CAST(config.fallback_model_id AS TEXT) AS fallback_model, fallback.display_name AS fallback_model_name, \
          {created} AS created \
          FROM core_modelconfig config LEFT JOIN core_modelconfig fallback ON fallback.id = config.fallback_model_id \
@@ -1029,11 +1025,7 @@ async fn config_rows(
             input_cost: row.try_get("input_cost_per_million").unwrap_or_default(),
             output_cost: row.try_get("output_cost_per_million").unwrap_or_default(),
             version: row.try_get("version").unwrap_or(1),
-            enabled: row
-                .try_get::<i64, _>("enabled")
-                .map(|value| value != 0)
-                .or_else(|_| row.try_get::<bool, _>("enabled"))
-                .unwrap_or(true),
+            enabled: row.try_get::<i64, _>("enabled_int").unwrap_or(1) != 0,
             fallback_model: row.try_get("fallback_model").ok().flatten(),
             fallback_model_name: row.try_get("fallback_model_name").ok().flatten(),
             created_at: row.try_get("created").ok(),
@@ -1111,7 +1103,7 @@ async fn fallback_usable(
             return Ok(false);
         }
         let row = sqlx::query(
-            "SELECT enabled, capabilities, CAST(fallback_model_id AS TEXT) AS fallback \
+            "SELECT CAST(enabled AS INTEGER) AS enabled_int, capabilities, CAST(fallback_model_id AS TEXT) AS fallback \
              FROM core_modelconfig WHERE CAST(id AS TEXT) = ?",
         )
         .bind(&id)
@@ -1121,11 +1113,7 @@ async fn fallback_usable(
         let Some(row) = row else {
             return Ok(false);
         };
-        let enabled = row
-            .try_get::<i64, _>("enabled")
-            .map(|value| value != 0)
-            .or_else(|_| row.try_get::<bool, _>("enabled"))
-            .unwrap_or(false);
+        let enabled = row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0;
         let capabilities = parse_string_array(
             row.try_get::<Option<String>, _>("capabilities")
                 .ok()

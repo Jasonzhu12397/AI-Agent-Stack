@@ -174,9 +174,19 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/tenants/{tenant_id}/model-configs/{model_config_id}/",
                 axum::routing::patch(crate::model_api::update_config),
-            );
+            )
+            .route("/health/live", get(edge_liveness));
     }
     router.fallback(forward).with_state(state)
+}
+
+async fn edge_liveness(State(state): State<AppState>) -> Response {
+    Json(json!({
+        "status": "ok",
+        "service": "rust-api-edge",
+        "native_identity": state.config.native_identity,
+    }))
+    .into_response()
 }
 
 async fn health(State(state): State<AppState>) -> Response {

@@ -99,13 +99,39 @@ handlers share the same schema, so a rollback is a single routing change.
 | `RUST_API_UPSTREAM_TIMEOUT_SECONDS` | `3` | Capacity/health probe timeout |
 | `RUST_API_REQUEST_TIMEOUT_SECONDS` | `60` | Full proxied request budget |
 | `RUST_LOG` | unset | `tracing` filter, for example `info` |
-| `RUST_API_NATIVE_IDENTITY` | `false` | Serves `GET /api/v1/auth/me/` from Rust |
+| `RUST_API_NATIVE_IDENTITY` | `false` | Enables all native Rust routes instead of forwarding them to Django |
 | `DATABASE_URL` | unset | Shared Django database; required with native identity |
 | `DJANGO_SECRET_KEY` | unset | Session signing key; required with native identity |
 | `RUST_API_SECURE_COOKIES` | `APP_ENV=production` | Adds `Secure` to the session/CSRF cookies |
 
 The service refuses an upstream URL that carries a path, a non-HTTP scheme, a
 zero timeout, or a request timeout shorter than the upstream timeout.
+
+## Codespace console
+
+A Codespace serves the console through the Rust edge: `start.py` listens on the
+forwarded port `8000` and starts Django on `8001` as the upstream. Native routes
+(auth, tenants, projects, members, tasks, audit, token budgets, workflows, runs,
+approvals, model providers and model configs) are answered by Rust; every route
+not migrated yet is proxied to Django, which also renders the built SPA bundle.
+One public port keeps the browser on one origin, so the Django session and CSRF
+cookies continue to work.
+
+The launcher builds the release binary on first start when it is missing. If the
+Rust toolchain cannot be installed, it falls back to serving Django directly on
+`8000` so the console stays reachable rather than failing closed.
+
+Verify the cutover from a Codespace terminal:
+
+```bash
+curl -s http://127.0.0.1:8000/health/live
+curl -s http://127.0.0.1:8000/health/ready
+```
+
+`/health/live` reports `"service": "rust-api-edge"` and
+`"native_identity": true` once the edge owns the port. `watch_edge.py` restarts
+the binary if the process dies, and the existing watchdog keeps Django alive on
+its private port.
 
 ## Run locally
 

@@ -1,8 +1,9 @@
 """Serve the console inside a Codespace.
 
-Starts the ASGI API on 8000 bound to 0.0.0.0 so the forwarded port works. The
-API also serves the built web console, so a deployment needs exactly one public
-port and one origin: no CORS, no second runtime.
+Starts the Rust edge API on the forwarded port 8000 and the Django ASGI backend
+on 8001. Every request the Rust edge owns natively is answered in Rust; everything
+else is proxied to Django, which still renders the built console bundle. One
+public port means one origin, so the browser keeps its session and CSRF cookies.
 
 Every start kills what a previous start left behind, so restarting the
 container never ends up with two servers fighting over a port.
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -26,6 +28,9 @@ DATA_DIR = REPO_ROOT / ".devdata"
 PID_FILE = DATA_DIR / "servers.json"
 
 API_PORT = 8000
+BACKEND_PORT = 8001
+RUST_API = REPO_ROOT / "apps" / "rust-api"
+EDGE_BINARY = RUST_API / "target" / "release" / "ai-agent-stack-api-edge"
 UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 WEB_PORT = API_PORT
 
@@ -50,6 +55,54 @@ def runtime_env() -> dict:
         # Relative API calls go through the Vite proxy, so one origin serves all.
         "VITE_API_BASE_URL": "",
     }
+
+
+def log(message: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    print(message, flush=True)
+    with (DATA_DIR / "start.log").open("a") as handle:
+        handle.write(message + "\n")
+
+
+def _cargo() -> str | None:
+    """Return a usable cargo path, installing Rust once when it is absent."""
+
+    for candidate in (shutil.which("cargo"), str(Path.home() / ".cargo" / "bin" / "cargo")):
+        if candidate and Path(candidate).exists():
+            return candidate
+    log("installing the Rust toolchain for the native edge")
+    installer = subprocess.run(
+        ["sh", "-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"],
+        capture_output=True,
+        text=True,
+    )
+    if installer.returncode != 0:
+        log(f"rust install failed: {installer.stderr[-400:]}")
+        return None
+    candidate = Path.home() / ".cargo" / "bin" / "cargo"
+    return str(candidate) if candidate.exists() else None
+
+
+def ensure_edge_binary() -> Path | None:
+    """Build the native edge once; a missing toolchain keeps the old console alive."""
+
+    if EDGE_BINARY.exists():
+        return EDGE_BINARY
+    cargo = _cargo()
+    if cargo is None:
+        return None
+    log("building the native edge (this runs once per checkout)")
+    build = subprocess.run(
+        [cargo, "build", "--release", "--locked"],
+        cwd=str(RUST_API),
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CARGO_NET_RETRY": "3"},
+    )
+    if build.returncode != 0 or not EDGE_BINARY.exists():
+        log(f"native edge build failed: {build.stderr[-800:]}")
+        return None
+    return EDGE_BINARY
 
 
 def stop_previous() -> None:
@@ -89,10 +142,23 @@ def spawn(command: list[str], *, cwd: Path, log_name: str, env: dict) -> int:
     return process.pid
 
 
+def edge_environment(env: dict, binary: Path | None) -> dict:
+    return {
+        **env,
+        "RUST_API_LISTEN": f"0.0.0.0:{API_PORT}",
+        "RUST_API_UPSTREAM": f"http://127.0.0.1:{BACKEND_PORT}",
+        "RUST_API_NATIVE_IDENTITY": "true" if binary else "false",
+        "RUST_API_SECURE_COOKIES": "false",
+        "RUST_LOG": os.getenv("RUST_LOG", "info"),
+        "DJANGO_SECRET_KEY": env["SECRET_KEY"],
+    }
+
+
 def main() -> None:
     stop_previous()
     env = runtime_env()
-    api = spawn(
+    binary = ensure_edge_binary()
+    backend = spawn(
         [
             sys.executable,
             "-m",
@@ -100,13 +166,40 @@ def main() -> None:
             "-b",
             "0.0.0.0",
             "-p",
-            str(API_PORT),
+            str(BACKEND_PORT),
             "platform_api.asgi:application",
         ],
         cwd=PLATFORM_API,
         log_name="api.log",
         env=env,
     )
+    edge = None
+    if binary is not None:
+        edge = spawn(
+            [str(binary)],
+            cwd=RUST_API,
+            log_name="edge.log",
+            env=edge_environment(env, binary),
+        )
+    else:
+        # Without a Rust toolchain the deployment stays usable: Django answers
+        # the forwarded port exactly as before the edge existed.
+        log("native edge unavailable; serving Django directly on the public port")
+        edge = spawn(
+            [
+                sys.executable,
+                "-m",
+                "daphne",
+                "-b",
+                "0.0.0.0",
+                "-p",
+                str(API_PORT),
+                "platform_api.asgi:application",
+            ],
+            cwd=PLATFORM_API,
+            log_name="api-public.log",
+            env=env,
+        )
     # Queued workflow runs need an executor. Without the worker process a run
     # stays "queued" forever and the console can only report a queue id, which
     # looks like a broken console rather than an idle cluster.
@@ -179,21 +272,35 @@ def main() -> None:
             sys.executable,
             str(Path(__file__).with_name("watch_api.py")),
             "--api-pid",
-            str(api),
+            str(backend),
             "--pid-file",
             str(PID_FILE),
             "--log",
             str(DATA_DIR / "api.log"),
             "--port",
-            str(API_PORT),
+            str(BACKEND_PORT),
         ],
         cwd=REPO_ROOT,
         log_name="watchdog.log",
         env=env,
     )
-    # The API serves the built console bundle, so there is no second runtime.
+    edge_watchdog = None
+    if binary is not None:
+        edge_watchdog = spawn(
+            [sys.executable, str(Path(__file__).with_name("watch_edge.py")),
+             "--pid", str(edge),
+             "--pid-file", str(PID_FILE),
+             "--binary", str(binary),
+             "--port", str(API_PORT),
+             "--log", str(DATA_DIR / "edge.log")],
+            cwd=RUST_API,
+            log_name="edge-watchdog.log",
+            env=edge_environment(env, binary),
+        )
+    # The edge serves the console bundle through Django, so the public port
+    # stays single-origin while native routes run in Rust.
     PID_FILE.write_text(
-        json.dumps([api, worker] + ([local] if local else []) + [watchdog])
+        json.dumps([backend, edge, worker] + ([local] if local else []) + [watchdog] + ([edge_watchdog] if edge_watchdog else []))
     )
     print(f"console ready: http://0.0.0.0:{API_PORT}/", flush=True)
     # Publish the self-check so the deployment is verifiable without shell access.
