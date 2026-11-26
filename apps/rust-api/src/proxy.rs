@@ -236,6 +236,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::list_identities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/settings/{section}/",
+                get(crate::settings_api::tenant_get).patch(crate::settings_api::tenant_patch),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/settings/{section}/",
+                get(crate::settings_api::project_get).patch(crate::settings_api::project_patch),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/settings/notifications/endpoints/",
                 get(crate::notification_api::list_endpoints)
                     .post(crate::notification_api::create_endpoint),

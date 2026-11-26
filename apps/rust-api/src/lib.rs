@@ -15,6 +15,7 @@ pub mod notification_api;
 pub mod plugin_api;
 pub mod preferences_api;
 pub mod proxy;
+pub mod settings_api;
 pub mod tasks;
 pub mod tenancy;
 pub mod token_budget;

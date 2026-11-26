@@ -23,6 +23,9 @@ async fn state() -> AppState {
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_userpreference (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, namespace VARCHAR(32) NOT NULL, \"values\" TEXT NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL, UNIQUE(user_id, namespace))",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL)",
+        "CREATE TABLE core_tenantsetting (id TEXT PRIMARY KEY, section VARCHAR(32) NOT NULL, \"values\" TEXT NOT NULL, updated_at DATETIME NOT NULL, tenant_id TEXT NOT NULL, updated_by_id INTEGER, UNIQUE(tenant_id, section))",
+        "CREATE TABLE core_projectsetting (id TEXT PRIMARY KEY, section VARCHAR(32) NOT NULL, \"values\" TEXT NOT NULL, updated_at DATETIME NOT NULL, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, updated_by_id INTEGER, UNIQUE(project_id, section))",
+        "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL)",
         "CREATE TABLE core_notificationendpoint (id TEXT PRIMARY KEY, channel VARCHAR(16) NOT NULL, name VARCHAR(120) NOT NULL, sealed_url TEXT NOT NULL, sealed_secret TEXT NOT NULL, enabled INTEGER NOT NULL, last_sent_at DATETIME, last_error VARCHAR(200) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, tenant_id TEXT NOT NULL)",
         "CREATE TABLE core_feedbackentry (id TEXT PRIMARY KEY, category VARCHAR(32) NOT NULL, severity VARCHAR(16) NOT NULL, body TEXT NOT NULL, created_at DATETIME NOT NULL, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
@@ -32,6 +35,8 @@ async fn state() -> AppState {
     sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 'pbkdf2_sha256$demo', 0, 1)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role) VALUES ('m1', '4c900ce633d9463d88256c3371c48bc8', 1, 'admin')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_projectmembership (id, project_id, user_id, role) VALUES ('pm1', 'aad6c762ebb6461da08507f141d8b3eb', 1, 'admin')")
         .execute(&pool).await.unwrap();
     let data = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
@@ -279,4 +284,55 @@ async fn manages_notification_endpoints_without_exposing_secrets() {
     let (status, body) = call(&state, "GET", base, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["results"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn manages_tenant_and_project_settings_with_inheritance() {
+    let state = state().await;
+    let tenant = "/api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/settings/general/";
+    let (status, body) = call(&state, "GET", tenant, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["effective"]["items_per_page"], json!(20));
+    assert_eq!(body["sources"]["items_per_page"], json!("default"));
+
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        tenant,
+        Some(json!({"items_per_page": 30, "compact_mode": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["values"]["items_per_page"], json!(30));
+    assert_eq!(body["sources"]["items_per_page"], json!("tenant"));
+
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        tenant,
+        Some(json!({"items_per_page": 300})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("SETTINGS_INVALID_VALUE"));
+
+    let project = "/api/v1/tenants/4c900ce6-33d9-463d-8825-6c3371c48bc8/projects/aad6c762-ebb6-461d-a085-07f141d8b3eb/settings/general/";
+    let (status, body) = call(&state, "GET", project, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["effective"]["items_per_page"], json!(30));
+    assert_eq!(body["sources"]["items_per_page"], json!("tenant"));
+    assert_eq!(body["sources"]["compact_mode"], json!("tenant"));
+
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        project,
+        Some(json!({"compact_mode": false, "default_landing_page": "workflows"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["values"]["compact_mode"], json!(false));
+    assert_eq!(body["effective"]["items_per_page"], json!(30));
+    assert_eq!(body["sources"]["items_per_page"], json!("tenant"));
+    assert_eq!(body["sources"]["default_landing_page"], json!("project"));
 }
