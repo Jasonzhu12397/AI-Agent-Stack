@@ -278,6 +278,25 @@ def _workload_ready(document: dict[str, Any]) -> bool:
     )
 
 
+def _split_crds(
+    documents: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split CRDs from the objects that depend on them.
+
+    A custom resource in the same bundle cannot be server-side dry-run before
+    the CRD exists in the API server. Approved CRDs are therefore applied first,
+    then the remaining objects are dry-run against the real discovery data.
+    """
+
+    crds = [
+        document for document in documents if document.get("kind") == "CustomResourceDefinition"
+    ]
+    others = [
+        document for document in documents if document.get("kind") != "CustomResourceDefinition"
+    ]
+    return crds, others
+
+
 def _wait_workloads(runner, documents: list[dict[str, Any]], lease_lost_event) -> None:
     pending = {
         _identity(document) for document in documents if document.get("kind") in WORKLOAD_KINDS
@@ -579,7 +598,10 @@ def execute_network_upgrade(
     plan = upgrade_plan(request, from_version=previous_version, objects=objects)
     if request["execution_mode"] == "simulation":
         return plan
-    _apply(runner, docs, lease_lost_event, dry_run=True)
+    crds, others = _split_crds(docs)
+    crd_bundle = bool(crds and others)
+    if not crd_bundle:
+        _apply(runner, docs, lease_lost_event, dry_run=True)
     revision = _unique_revision(runner, request, lease_lost_event)
     snapshot = {
         "revision": revision,
@@ -611,8 +633,31 @@ def execute_network_upgrade(
         latest_revision=revision,
     )
     _apply(runner, [history_manifest], lease_lost_event, dry_run=False)
-    _apply(runner, [pointer_manifest], lease_lost_event, dry_run=False)
-    _apply(runner, docs, lease_lost_event, dry_run=False)
+    if crd_bundle:
+        # Apply the approved CRD first; only then can the API server validate a
+        # custom resource that arrives in the same bundle.
+        _apply(runner, crds, lease_lost_event, dry_run=False)
+        try:
+            _apply(runner, others, lease_lost_event, dry_run=True)
+        except NetworkUpgradeExecutionError as exc:
+            raise NetworkUpgradeExecutionError(
+                exc.code,
+                "The approved CRDs were applied before the remaining objects failed validation: "
+                + exc.detail,
+                side_effects=True,
+            ) from exc
+    try:
+        _apply(runner, [pointer_manifest], lease_lost_event, dry_run=False)
+        _apply(runner, others if crd_bundle else docs, lease_lost_event, dry_run=False)
+    except NetworkUpgradeExecutionError as exc:
+        if not crd_bundle:
+            raise
+        raise NetworkUpgradeExecutionError(
+            exc.code,
+            "The approved CRDs and revision were written before the bundle failed: "
+            + exc.detail,
+            side_effects=True,
+        ) from exc
     _wait_workloads(runner, docs, lease_lost_event)
     return {
         **plan,
@@ -622,6 +667,7 @@ def execute_network_upgrade(
         "side_effects": True,
         "revision": revision,
         "revision_config_map": _history_name(request["plugin"], revision),
+        "crds_applied_first": crd_bundle,
         "ready_workloads": [
             {"kind": document["kind"], "name": document["metadata"]["name"]}
             for document in docs
@@ -670,8 +716,23 @@ def execute_network_rollback(
             restore.append(document)
         else:
             remove.append((kind, name, namespace))
-    if restore:
+    restore_crds, restore_others = _split_crds(restore)
+    crd_restore = bool(restore_crds and restore_others)
+    if crd_restore:
+        _apply(runner, restore_crds, lease_lost_event, dry_run=False)
+        try:
+            _apply(runner, restore_others, lease_lost_event, dry_run=True)
+        except NetworkUpgradeExecutionError as exc:
+            raise NetworkUpgradeExecutionError(
+                exc.code,
+                "The captured CRDs were restored before the remaining objects failed validation: "
+                + exc.detail,
+                side_effects=True,
+            ) from exc
+    elif restore:
         _apply(runner, restore, lease_lost_event, dry_run=True)
+    # A CRD owns its custom resources, so remove resources before definitions.
+    remove.sort(key=lambda item: item[0] == "CustomResourceDefinition")
     for kind, name, namespace in remove:
         arguments = ["delete", kind, name]
         if namespace:
@@ -679,7 +740,12 @@ def execute_network_rollback(
         arguments += ["--ignore-not-found=true", "--dry-run=server"]
         _run(runner, arguments, lease_lost_event=lease_lost_event, timeout=120)
     if restore:
-        _apply(runner, restore, lease_lost_event, dry_run=False)
+        _apply(
+            runner,
+            restore_others if crd_restore else restore,
+            lease_lost_event,
+            dry_run=False,
+        )
     for kind, name, namespace in remove:
         _delete(runner, kind, name, namespace, lease_lost_event)
     if restore:

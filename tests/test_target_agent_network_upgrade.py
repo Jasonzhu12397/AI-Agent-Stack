@@ -49,6 +49,7 @@ class FakeKubectl:
         }
         self.configmaps = {}
         self.calls = []
+        self.apply_records = []
         self.mutations = 0
 
     def _lookup(self, kind, name, namespace):
@@ -96,6 +97,9 @@ class FakeKubectl:
             dry_run = "--dry-run=server" in arguments
             path = Path(arguments[arguments.index("-f") + 1])
             documents = list(yaml.safe_load_all(path.read_text()))
+            self.apply_records.append(
+                ([document.get("kind") for document in documents], dry_run)
+            )
             if not dry_run:
                 self.mutations += 1
                 for document in documents:
@@ -343,3 +347,72 @@ def test_rollback_revision_must_be_a_captured_id():
         )
     assert caught.value.code == "NETWORK_UPGRADE_REQUEST_INVALID"
     assert kubectl.mutations == 0
+
+
+def _crd():
+    return {
+        "apiVersion": "apiextensions.k8s.io/v1",
+        "kind": "CustomResourceDefinition",
+        "metadata": {"name": "caliconetworkpolicies.crd.projectcalico.org"},
+        "spec": {
+            "group": "crd.projectcalico.org",
+            "scope": "Namespaced",
+            "names": {"kind": "CalicoNetworkPolicy", "plural": "caliconetworkpolicies"},
+            "versions": [{"name": "v1", "served": True, "storage": True}],
+        },
+    }
+
+
+def _custom_resource():
+    return {
+        "apiVersion": "crd.projectcalico.org/v1",
+        "kind": "CalicoNetworkPolicy",
+        "metadata": {"name": "default-deny", "namespace": "default"},
+        "spec": {"selector": "all()"},
+    }
+
+
+def test_crd_bundle_applies_the_definition_before_validating_its_resources():
+    docs = yaml.safe_dump_all([_deployment("1.1.0"), _crd(), _custom_resource()])
+    kubectl = FakeKubectl()
+    outcome = execute_network_upgrade(
+        {**_upgrade_payload("execute"), "documents": docs},
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    assert outcome["crds_applied_first"] is True
+    crd_apply = next(
+        index
+        for index, (kinds, dry_run) in enumerate(kubectl.apply_records)
+        if "CustomResourceDefinition" in kinds and dry_run is False
+    )
+    custom_dry_run = next(
+        index
+        for index, (kinds, dry_run) in enumerate(kubectl.apply_records)
+        if "CalicoNetworkPolicy" in kinds and dry_run is True
+    )
+    custom_apply = next(
+        index
+        for index, (kinds, dry_run) in enumerate(kubectl.apply_records)
+        if "CalicoNetworkPolicy" in kinds and dry_run is False
+    )
+    assert crd_apply < custom_dry_run < custom_apply
+
+
+def test_rollback_removes_custom_resources_before_their_crd():
+    docs = yaml.safe_dump_all([_deployment("1.1.0"), _crd(), _custom_resource()])
+    kubectl = FakeKubectl()
+    execute_network_upgrade(
+        {**_upgrade_payload("execute"), "documents": docs},
+        kubectl,
+        cluster_name="cluster-1",
+    )
+    execute_network_rollback(_rollback_payload(), kubectl, cluster_name="cluster-1")
+    real_deletes = [
+        arguments[1]
+        for arguments, _kwargs in kubectl.calls
+        if arguments[0] == "delete" and "--dry-run=server" not in arguments
+    ]
+    assert real_deletes.index("CalicoNetworkPolicy") < real_deletes.index(
+        "CustomResourceDefinition"
+    )
