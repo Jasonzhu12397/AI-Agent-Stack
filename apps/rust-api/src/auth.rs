@@ -134,11 +134,10 @@ pub async fn login(
 
     if let Err(error) = record_auth_event(pool, database_url(&state), audit).await {
         tracing::error!(%error, "rust auth could not append the login audit event");
-        if let Err(cleanup_error) =
-            sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-                .bind(&session_key)
-                .execute(pool)
-                .await
+        if let Err(cleanup_error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
+            .bind(&session_key)
+            .execute(pool)
+            .await
         {
             tracing::error!(%cleanup_error, "rust auth could not clean up an unaudited login session");
         }
