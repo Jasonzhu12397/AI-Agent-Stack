@@ -173,17 +173,22 @@ pub async fn logout(
     let Some(session_key) = crate::identity::session_key_from_headers(&headers) else {
         return unauthenticated("Authentication credentials were not provided.");
     };
-    let stored = sqlx::query_scalar::<_, String>(
+    let stored = match sqlx::query_scalar::<_, String>(
         "SELECT session_data FROM django_session \
          WHERE session_key = ? AND expire_date > CURRENT_TIMESTAMP",
     )
     .bind(&session_key)
     .fetch_optional(pool)
     .await
-    .ok()
-    .flatten();
-    let Some(stored) = stored else {
-        return unauthenticated("This session has expired. Sign in again.");
+    {
+        Ok(Some(stored)) => stored,
+        Ok(None) => {
+            return unauthenticated("This session has expired. Sign in again.");
+        }
+        Err(error) => {
+            tracing::error!(%error, "rust auth could not read the logout session");
+            return unavailable("The session store could not be read.");
+        }
     };
     let actor_id = decode_session_data(&stored, secret_key)
         .ok()
@@ -197,6 +202,15 @@ pub async fn logout(
     let request_id = header_string(&headers, "x-request-id");
     let remote = peer.ip().to_string();
     let user_agent = header_string(&headers, "user-agent");
+    if let Err(error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
+        .bind(&session_key)
+        .execute(pool)
+        .await
+    {
+        tracing::error!(%error, "rust auth could not delete the logout session");
+        return unavailable("The session could not be invalidated.");
+    }
+
     let audit = AuthAudit {
         event_type: "auth.logout.succeeded",
         outcome: "success",
@@ -210,10 +224,6 @@ pub async fn logout(
         tracing::error!(%error, "rust auth could not append the logout audit event");
         return unavailable("The logout audit event could not be recorded.");
     }
-    let _ = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-        .bind(&session_key)
-        .execute(pool)
-        .await;
 
     let mut response = StatusCode::NO_CONTENT.into_response();
     append_cookie(
@@ -365,12 +375,20 @@ fn verify_password(encoded: &str, password: &str) -> bool {
     let (Some(iterations), Some(salt), Some(hash)) = (iterations, salt, hash) else {
         return false;
     };
-    if algorithm != "pbkdf2_sha256" {
+    if algorithm != "pbkdf2_sha256"
+        || iterations == 0
+        || iterations > 10_000_000
+        || salt.is_empty()
+        || salt.len() > 128
+    {
         return false;
     }
     let Ok(expected) = base64::engine::general_purpose::STANDARD.decode(hash) else {
         return false;
     };
+    if expected.len() != 32 {
+        return false;
+    }
     let mut derived = vec![0u8; expected.len()];
     pbkdf2_hmac::<Sha256>(
         password.as_bytes(),
