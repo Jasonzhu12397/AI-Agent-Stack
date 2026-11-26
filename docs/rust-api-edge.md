@@ -62,6 +62,10 @@ domain model, permissions, audit and realtime code in the Django service.
   installed-tool and agent-version reference checks. Publication revalidates,
   inserts a new immutable version, advances `current_version` and appends
   `workflow.published` in one transaction.
+- Owns workflow run detail and approval decisions: run serialization with
+  per-step records, deadline enforcement, tenant-admin/project-admin gates,
+  and approve/reject transitions that requeue or fail the task, close the run
+  on rejection and append `workflow.approval.approved` / `.rejected`.
 - Owns the workflow catalog and run surface: bound models, knowledge bases,
   installed tools and published agents for the studio, plus run listing with
   per-step records and idempotent run creation. Run creation requires a
@@ -135,8 +139,8 @@ The edge is the stable seam for moving routes into Rust:
    projects, both membership scopes and task list/create/detail/cancel now run
    in Rust against the shared session, RBAC and audit tables, together with
    audit listing, hash-chain verification, tenant token budgets and workflow
-   draft CRUD, validation, publication, catalog reads and workflow runs. Model
-   gateway moves next.
+   draft CRUD, validation, publication, catalog reads, workflow runs and
+   approval decisions. Model gateway moves next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

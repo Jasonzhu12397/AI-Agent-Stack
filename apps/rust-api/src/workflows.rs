@@ -427,7 +427,7 @@ async fn workflow_rows(
     rows.iter().map(WorkflowRecord::from_row).collect()
 }
 
-async fn fetch_workflow(
+pub(crate) async fn fetch_workflow(
     pool: &AnyPool,
     state: &AppState,
     workflow_id: &str,

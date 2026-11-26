@@ -146,6 +146,18 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/workflows/{workflow_id}/runs/",
                 get(crate::workflow_reads::list_runs).post(crate::workflow_reads::create_run),
+            )
+            .route(
+                "/api/v1/workflow-runs/{run_id}/",
+                get(crate::workflow_steps::get_run),
+            )
+            .route(
+                "/api/v1/workflow-runs/{run_id}/steps/{node_id}/approve/",
+                post(crate::workflow_steps::approve),
+            )
+            .route(
+                "/api/v1/workflow-runs/{run_id}/steps/{node_id}/reject/",
+                post(crate::workflow_steps::reject),
             );
     }
     router.fallback(forward).with_state(state)

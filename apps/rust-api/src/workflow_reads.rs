@@ -692,7 +692,7 @@ async fn version_id(
         .map_err(|error| error.to_string())
 }
 
-async fn fetch_run(
+pub(crate) async fn fetch_run(
     pool: &AnyPool,
     state: &AppState,
     run_id: &str,
@@ -719,6 +719,7 @@ async fn fetch_run(
     let Some(row) = row else {
         return Ok(None);
     };
+    let steps = run_steps(pool, state, run_id).await?;
     Ok(Some(json!({
         "id": row.try_get::<String, _>("id").unwrap_or_default(),
         "task_id": row.try_get::<String, _>("task_id").unwrap_or_default(),
@@ -729,7 +730,7 @@ async fn fetch_run(
         "state": json_text(row.try_get::<Option<String>, _>("state_text").ok().flatten()),
         "output_data": json_text(row.try_get::<Option<String>, _>("output_text").ok().flatten()),
         "deadline_at": row.try_get::<Option<String>, _>("deadline").ok().flatten().as_deref().map(normalize_timestamp),
-        "steps": Vec::<Value>::new(),
+        "steps": steps,
         "created_at": row.try_get::<Option<String>, _>("created").ok().flatten().as_deref().map(normalize_timestamp),
         "finished_at": row.try_get::<Option<String>, _>("finished").ok().flatten().as_deref().map(normalize_timestamp),
     })))

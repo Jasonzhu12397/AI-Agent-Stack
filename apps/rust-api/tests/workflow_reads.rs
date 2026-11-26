@@ -218,3 +218,123 @@ async fn creates_runs_idempotently_and_lists_steps() {
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["id"], run_id);
 }
+
+#[tokio::test]
+async fn run_detail_and_approval_decisions() {
+    let (state, path) = state().await;
+    let runs_uri = format!("/api/v1/workflows/{WORKFLOW}/runs/");
+    let (_, body) = call(
+        &state,
+        "POST",
+        &runs_uri,
+        Some("approve-key"),
+        json!({"input": {"topic": "approval"}}),
+    )
+    .await;
+    let run_id = body["id"].as_str().unwrap().to_string();
+    let task_id = body["task_id"].as_str().unwrap().to_string();
+    let pool = sqlx::AnyPool::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE core_task SET status = 'waiting_approval' WHERE CAST(id AS TEXT) = ?")
+        .bind(&task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_workflowsteprun (id, workflow_run_id, node_id, node_type, status, input_data, output_data, error, attempt, started_at, finished_at, created_at) VALUES ('step-1', ?, 'approve_node', 'approval', 'awaiting_approval', '{}', NULL, NULL, 1, datetime('now'), NULL, datetime('now'))")
+        .bind(&run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let detail = format!("/api/v1/workflow-runs/{run_id}/");
+    let (status, body) = call(&state, "GET", &detail, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["task_status"], "waiting_approval");
+    assert_eq!(body["steps"][0]["node_id"], "approve_node");
+
+    let approve = format!("/api/v1/workflow-runs/{run_id}/steps/approve_node/approve/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &approve,
+        None,
+        json!({"reason": "looks good"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["decision"], "approved");
+    assert_eq!(body["task_status"], "queued");
+
+    let (status, body) = call(&state, "GET", &detail, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["task_status"], "queued");
+    assert_eq!(body["steps"][0]["status"], "succeeded");
+    assert_eq!(body["steps"][0]["output_data"]["reason"], "looks good");
+
+    let (_, body) = call(
+        &state,
+        "POST",
+        &runs_uri,
+        Some("reject-key"),
+        json!({"input": {"topic": "reject"}}),
+    )
+    .await;
+    let run_id = body["id"].as_str().unwrap().to_string();
+    let task_id = body["task_id"].as_str().unwrap().to_string();
+    let pool = sqlx::AnyPool::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE core_task SET status = 'waiting_approval' WHERE CAST(id AS TEXT) = ?")
+        .bind(&task_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_workflowsteprun (id, workflow_run_id, node_id, node_type, status, input_data, output_data, error, attempt, started_at, finished_at, created_at) VALUES ('step-2', ?, 'approve_node', 'approval', 'awaiting_approval', '{}', NULL, NULL, 1, datetime('now'), NULL, datetime('now'))")
+        .bind(&run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let reject = format!("/api/v1/workflow-runs/{run_id}/steps/approve_node/reject/");
+    let (status, body) = call(&state, "POST", &reject, None, json!({"reason": "no"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["task_status"], "failed");
+    let detail = format!("/api/v1/workflow-runs/{run_id}/");
+    let (status, body) = call(&state, "GET", &detail, None, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["task_status"], "failed");
+    assert_eq!(body["steps"][0]["status"], "failed");
+    assert_eq!(
+        body["steps"][0]["error"]["code"],
+        "WORKFLOW_APPROVAL_REJECTED"
+    );
+}
+
+#[tokio::test]
+async fn approval_requires_a_pending_step_and_project_admin() {
+    let (state, path) = state().await;
+    let runs_uri = format!("/api/v1/workflows/{WORKFLOW}/runs/");
+    let (_, body) = call(&state, "POST", &runs_uri, Some("pending-key"), json!({})).await;
+    let run_id = body["id"].as_str().unwrap().to_string();
+    let task_id = body["task_id"].as_str().unwrap().to_string();
+    let pool = sqlx::AnyPool::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_workflowsteprun (id, workflow_run_id, node_id, node_type, status, input_data, output_data, error, attempt, started_at, finished_at, created_at) VALUES ('step-3', ?, 'approve_node', 'approval', 'running', '{}', NULL, NULL, 1, datetime('now'), NULL, datetime('now'))")
+        .bind(&run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let approve = format!("/api/v1/workflow-runs/{run_id}/steps/approve_node/approve/");
+    let (status, _) = call(&state, "POST", &approve, None, json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    sqlx::AnyPool::connect(&format!("sqlite://{path}"))
+        .await
+        .unwrap();
+    let _ = task_id;
+}
