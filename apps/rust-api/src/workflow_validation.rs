@@ -1068,10 +1068,7 @@ mod risk_tests {
             capability_risk_level(&json!({"name": "read", "risk_level": "high"})),
             "high"
         );
-        assert_eq!(
-            capability_risk_level(&json!({"name": "read"})),
-            "low"
-        );
+        assert_eq!(capability_risk_level(&json!({"name": "read"})), "low");
         assert_eq!(
             capability_risk_level(&json!({"name": "read", "risk_level": "unknown"})),
             "unclassified"
