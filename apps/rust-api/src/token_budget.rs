@@ -255,44 +255,39 @@ async fn ensure_budget_in_transaction(
     postgres: bool,
     tenant_id: &str,
 ) -> Result<BudgetRow, String> {
-    let row = sqlx::query_as::<_, (i64, i64, i64)>(
-        "SELECT id, daily_limit, monthly_limit FROM core_tenanttokenbudget \
-         WHERE CAST(tenant_id AS TEXT) = ?",
-    )
-    .bind(tenant_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|error| error.to_string())?;
-    if let Some((id, daily_limit, monthly_limit)) = row {
-        return Ok(BudgetRow {
-            id,
-            daily_limit,
-            monthly_limit,
-        });
-    }
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
-    let sql = if postgres {
+    let insert = if postgres {
         "INSERT INTO core_tenanttokenbudget \
          (tenant_id, daily_limit, monthly_limit, created_at, updated_at) \
-         VALUES (?::uuid, ?, ?, ?::timestamptz, ?::timestamptz) RETURNING id"
+         VALUES (?::uuid, ?, ?, ?::timestamptz, ?::timestamptz) \
+         ON CONFLICT (tenant_id) DO NOTHING"
     } else {
         "INSERT INTO core_tenanttokenbudget \
          (tenant_id, daily_limit, monthly_limit, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id"
+         VALUES (?, ?, ?, ?, ?) ON CONFLICT (tenant_id) DO NOTHING"
     };
-    let id = sqlx::query_scalar::<_, i64>(sql)
+    sqlx::query(insert)
         .bind(tenant_id)
         .bind(DEFAULT_DAILY_LIMIT)
         .bind(DEFAULT_MONTHLY_LIMIT)
         .bind(&now)
         .bind(&now)
-        .fetch_one(&mut **transaction)
+        .execute(&mut **transaction)
         .await
         .map_err(|error| error.to_string())?;
+
+    let (id, daily_limit, monthly_limit) = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT id, daily_limit, monthly_limit FROM core_tenanttokenbudget \
+         WHERE CAST(tenant_id AS TEXT) = ?",
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| error.to_string())?;
     Ok(BudgetRow {
         id,
-        daily_limit: DEFAULT_DAILY_LIMIT,
-        monthly_limit: DEFAULT_MONTHLY_LIMIT,
+        daily_limit,
+        monthly_limit,
     })
 }
 
