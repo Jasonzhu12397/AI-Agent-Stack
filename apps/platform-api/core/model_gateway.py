@@ -130,7 +130,7 @@ def _fallback_idempotency_key(idempotency_key, source_model_id, depth):
         if isinstance(idempotency_key, str) and idempotency_key
         else uuid.uuid4().hex
     )
-    material = f"{base_key}:{source_model_id}:{depth}".encode("utf-8")
+    material = f"{base_key}:{source_model_id}:{depth}".encode()
     return "fallback:" + hashlib.sha256(material).hexdigest()
 
 
