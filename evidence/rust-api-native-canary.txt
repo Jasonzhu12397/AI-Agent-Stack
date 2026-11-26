@@ -106,3 +106,10 @@ logout and the CSRF rejection without audit noise.
 - Verification recomputes the Django canonical SHA-256 chain and detects a
   tampered metadata row; tenant admins only, global chain staff only.
 - Tests: tests/audit_api.rs 2 passed; full suite 23 passed; clippy clean.
+
+2026-11-26 token budget batch
+- Native route: GET/PUT/PATCH /api/v1/tenants/{tenant}/token-budget/.
+- Reads settled plus live reserved usage, creates the default budget row,
+  validates positive integers, gates writes to tenant admins and writes
+  token_budget.updated into the tenant audit chain.
+- Tests: tests/token_budget.rs 2 passed; full suite 25 passed; clippy clean.

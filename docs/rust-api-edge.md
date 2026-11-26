@@ -48,6 +48,9 @@ domain model, permissions, audit and realtime code in the Django service.
   verifier recomputes Django's sorted compact SHA-256 hash, including the
   exact Python `isoformat()` timestamp and nested metadata ordering, and
   reports the first invalid event instead of trusting stored hashes.
+- Owns the tenant token budget: read limits and live usage, PUT/PATCH limits
+  with administrator gating, default-budget creation and the
+  `token_budget.updated` audit event.
 
 All other business routes still live in Django during this stage. The Rust
 handlers share the same schema, so a rollback is a single routing change.
@@ -113,7 +116,8 @@ The edge is the stable seam for moving routes into Rust:
 2. Native Rust auth, tenancy and tasks: CSRF, login, logout, me, tenants,
    projects, both membership scopes and task list/create/detail/cancel now run
    in Rust against the shared session, RBAC and audit tables, together with
-   audit listing and hash-chain verification. Model gateway moves next.
+   audit listing, hash-chain verification and tenant token budgets. Model
+   gateway moves next.
 3. Move model gateway, task read APIs and edge-native health/metrics.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

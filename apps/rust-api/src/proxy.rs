@@ -116,6 +116,12 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/audit-events/global/verify/",
                 get(crate::audit_api::verify_global_events),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/token-budget/",
+                get(crate::token_budget::get_budget)
+                    .put(crate::token_budget::update_budget)
+                    .patch(crate::token_budget::patch_budget),
             );
     }
     router.fallback(forward).with_state(state)
