@@ -1995,3 +1995,144 @@ pub async fn oauth_exchange(
     )
         .into_response()
 }
+
+/// Read the caller's link and free allowance for one provider.
+pub async fn get_provider_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, provider_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    }
+    let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error_message(error),
+    };
+    let Some(row) = rows.first() else {
+        return not_found();
+    };
+    let mut payload = match account_payload(pool, &state, &provider_id, user.id).await {
+        Ok(payload) => payload,
+        Err(error) => return database_error_message(error),
+    };
+    payload["auth_mode"] = json!(row.auth_mode);
+    Json(payload).into_response()
+}
+
+/// Revoke the caller's own-account link without deleting audit history.
+pub async fn delete_provider_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, provider_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    }
+    let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error_message(error),
+    };
+    let Some(row) = rows.first() else {
+        return not_found();
+    };
+    if row.auth_mode != "user_account" {
+        return legacy_error(
+            "This provider is billed to the tenant; account linking does not apply.",
+            StatusCode::CONFLICT,
+            "PROVIDER_AUTH_MODE_NOT_ACCOUNT",
+        );
+    }
+    let link = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, account_label FROM core_provideraccountlink \
+         WHERE user_id = ? AND CAST(provider_id AS TEXT) = ? AND status = 'linked' \
+         ORDER BY linked_at DESC LIMIT 1",
+    )
+    .bind(user.id)
+    .bind(&provider_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(link)) => link,
+        Ok(None) => {
+            return legacy_error(
+                "No account of yours is linked to this provider.",
+                StatusCode::NOT_FOUND,
+                "PROVIDER_ACCOUNT_NOT_LINKED",
+            )
+        }
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    let link_id = link.try_get::<String, _>("id").unwrap_or_default();
+    let account_label = link
+        .try_get::<String, _>("account_label")
+        .unwrap_or_default();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error_message(error.to_string()),
+    };
+    if let Err(error) = sqlx::query(
+        "UPDATE core_provideraccountlink SET status = 'revoked', revoked_at = ?, \
+         credential_ref = '', updated_at = ? WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(&link_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "model.provider.account.unlinked",
+            resource_type: "model_provider",
+            resource_id: &provider_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({"account_label": account_label}),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error_message(error.to_string());
+    }
+    let mut payload = match account_payload(pool, &state, &provider_id, user.id).await {
+        Ok(payload) => payload,
+        Err(error) => return database_error_message(error),
+    };
+    payload["auth_mode"] = json!(row.auth_mode);
+    Json(payload).into_response()
+}

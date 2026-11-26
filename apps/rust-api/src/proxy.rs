@@ -176,6 +176,11 @@ pub fn router(state: AppState) -> Router {
                 get(crate::model_api::provider_catalog),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/model-providers/{provider_id}/account/",
+                get(crate::model_api::get_provider_account)
+                    .delete(crate::model_api::delete_provider_account),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/model-providers/oauth/{preset_key}/start/",
                 post(crate::model_api::oauth_start),
             )

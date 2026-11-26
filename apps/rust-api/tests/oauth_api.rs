@@ -213,3 +213,82 @@ async fn refuses_unknown_expired_and_consumed_attempts_before_calling_the_platfo
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "OAUTH_STATE_UNKNOWN");
 }
+
+#[tokio::test]
+async fn reads_and_revokes_the_callers_account_link() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    let provider = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?, ?, 1, 'OpenRouter (my account)', 'openai_compatible', 'user_account', 'openrouter', \
+         'https://openrouter.ai/api/v1', '', '{}', 1, '', datetime('now'), datetime('now'))",
+    )
+    .bind(&provider)
+    .bind(TENANT)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO core_provideraccountlink (id, user_id, provider_id, status, account_label, \
+         credential_ref, linked_at, revoked_at, updated_at) \
+         VALUES (?, 1, ?, 'linked', 'alice@example.com', 'member://secret', datetime('now'), NULL, datetime('now'))",
+    )
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(&provider)
+    .execute(pool)
+    .await
+    .unwrap();
+    let uri = format!("/api/v1/tenants/{TENANT}/model-providers/{provider}/account/");
+
+    let (status, body) = call(&state, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["linked"], true);
+    assert_eq!(body["account_label"], "alice@example.com");
+    assert_eq!(body["auth_mode"], "user_account");
+    assert_eq!(body["free_daily_tokens"], 50000);
+    assert!(body["remaining_today"].as_i64().unwrap() >= 0);
+
+    let (status, body) = call(&state, "DELETE", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["linked"], false);
+    let revoked = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_provideraccountlink WHERE CAST(provider_id AS TEXT) = ? \
+         AND status = 'revoked' AND credential_ref = ''",
+    )
+    .bind(&provider)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(revoked, 1);
+
+    let (status, body) = call(&state, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["linked"], false);
+    let (status, body) = call(&state, "DELETE", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "PROVIDER_ACCOUNT_NOT_LINKED");
+
+    let tenant_provider = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query(
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?, ?, 1, 'Tenant billed', 'openai_compatible', 'tenant_secret', '', \
+         'https://api.example/v1', 'env://KEY', '{}', 1, '', datetime('now'), datetime('now'))",
+    )
+    .bind(&tenant_provider)
+    .bind(TENANT)
+    .execute(pool)
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &state,
+        "DELETE",
+        &format!("/api/v1/tenants/{TENANT}/model-providers/{tenant_provider}/account/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "PROVIDER_AUTH_MODE_NOT_ACCOUNT");
+}
