@@ -501,3 +501,198 @@ pub async fn about(State(state): State<AppState>, headers: HeaderMap) -> Respons
     }))
     .into_response()
 }
+
+pub async fn list_feedback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if let Err(response) = require_tenant_member(pool, &tenant_id, user.id).await {
+        return response;
+    }
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, category, severity, body, CAST(created_at AS TEXT) AS created \
+         FROM core_feedbackentry WHERE CAST(tenant_id AS TEXT) = ? ORDER BY created_at DESC",
+    )
+    .bind(canonical_id(&tenant_id))
+    .fetch_all(pool)
+    .await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let results: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.try_get::<String, _>("id").unwrap_or_default(),
+                "category": row.try_get::<String, _>("category").unwrap_or_default(),
+                "severity": row.try_get::<String, _>("severity").unwrap_or_default(),
+                "body": row.try_get::<String, _>("body").unwrap_or_default(),
+                "created_at": row.try_get::<String, _>("created").ok(),
+            })
+        })
+        .collect();
+    Json(json!({"results": results})).into_response()
+}
+
+pub async fn create_feedback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if let Err(response) = require_tenant_member(pool, &tenant_id, user.id).await {
+        return response;
+    }
+    let Json(payload) = match body {
+        Ok(body) => body,
+        Err(_) => return feedback_invalid(json!({"body": ["must be a non-empty string"]})),
+    };
+    let category = payload
+        .get("category")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let severity = payload
+        .get("severity")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let text = payload
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let mut details = Map::new();
+    if !["bug", "feature", "usability", "other"].contains(&category) {
+        details.insert(
+            "category".into(),
+            json!(["must be one of: bug, feature, usability, other"]),
+        );
+    }
+    if !["low", "medium", "high"].contains(&severity) {
+        details.insert(
+            "severity".into(),
+            json!(["must be one of: low, medium, high"]),
+        );
+    }
+    if text.is_empty() {
+        details.insert("body".into(), json!(["must be a non-empty string"]));
+    }
+    if !details.is_empty() {
+        return feedback_invalid(Value::Object(details));
+    }
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let tenant = canonical_id(&tenant_id);
+    let insert = if is_postgres(&state) {
+        sqlx::query(
+            "INSERT INTO core_feedbackentry (id, category, severity, body, created_at, tenant_id, user_id) \
+             VALUES (?, ?, ?, ?, NOW(), ?, ?)",
+        )
+    } else {
+        sqlx::query(
+            "INSERT INTO core_feedbackentry (id, category, severity, body, created_at, tenant_id, user_id) \
+             VALUES (?, ?, ?, ?, datetime('now'), ?, ?)",
+        )
+    };
+    if let Err(error) = insert
+        .bind(&id)
+        .bind(category)
+        .bind(severity)
+        .bind(text)
+        .bind(&tenant)
+        .bind(user.id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let created = sqlx::query(
+        "SELECT CAST(created_at AS TEXT) AS created FROM core_feedbackentry WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|row| row.try_get::<String, _>("created").ok());
+    if let Some(database_url) = state.config.database_url.as_deref() {
+        let event = crate::audit::AuditEvent {
+            tenant_id: Some(&tenant),
+            project_id: None,
+            event_type: "feedback.created",
+            resource_type: "feedback",
+            resource_id: &id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"category": category, "severity": severity}),
+        };
+        if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
+            tracing::error!(%error, "rust feedback could not append the audit event");
+            return unavailable();
+        }
+    }
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "category": category,
+            "severity": severity,
+            "body": text,
+            "created_at": created,
+        })),
+    )
+        .into_response()
+}
+
+fn canonical_id(value: &str) -> String {
+    value.replace('-', "")
+}
+
+async fn require_tenant_member(
+    pool: &AnyPool,
+    tenant_id: &str,
+    user_id: i64,
+) -> Result<(), Response> {
+    let role = sqlx::query_scalar::<_, String>(
+        "SELECT role FROM core_tenantmembership \
+         WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ? LIMIT 1",
+    )
+    .bind(canonical_id(tenant_id))
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await;
+    match role {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"code": "NOT_FOUND", "message": "Resource not found.", "details": {}}})),
+        )
+            .into_response()),
+        Err(error) => Err(database_error(error.to_string())),
+    }
+}
+
+fn feedback_invalid(details: Value) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": {"code": "FEEDBACK_INVALID", "message": "Feedback payload is invalid.", "details": details}})),
+    )
+        .into_response()
+}

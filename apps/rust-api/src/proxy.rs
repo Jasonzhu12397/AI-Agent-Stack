@@ -236,6 +236,11 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::list_identities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/feedback/",
+                get(crate::preferences_api::list_feedback)
+                    .post(crate::preferences_api::create_feedback),
+            )
+            .route(
                 "/api/v1/meta/shortcuts/",
                 get(crate::preferences_api::shortcuts),
             )
