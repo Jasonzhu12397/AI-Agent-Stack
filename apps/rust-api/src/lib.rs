@@ -1,3 +1,4 @@
+pub mod account_api;
 pub mod agent_api;
 pub mod audit;
 pub mod audit_api;

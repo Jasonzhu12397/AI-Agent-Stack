@@ -228,6 +228,10 @@ pub fn router(state: AppState) -> Router {
                 get(crate::billing_api::get_order),
             )
             .route(
+                "/api/v1/users/me/",
+                get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/billing/subscription/trial/",
                 axum::routing::post(crate::billing_api::start_subscription_trial),
             )
