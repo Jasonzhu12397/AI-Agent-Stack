@@ -341,7 +341,12 @@ async fn forward(
     let upstream_response = match builder.send().await {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!(%error, "rust api edge could not reach the upstream");
+            tracing::warn!(
+                timeout = error.is_timeout(),
+                connect = error.is_connect(),
+                body = error.is_body(),
+                "rust api edge could not reach the upstream"
+            );
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({
