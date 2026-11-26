@@ -1,6 +1,6 @@
 COMPOSE=docker compose --env-file .env -f deploy/docker-compose.yml
 
-.PHONY: dev down logs test lint verify version release-notes
+.PHONY: dev down logs test lint verify verify-rust rust-test version release-notes
 
 dev:
 	@test -f .env || cp .env.example .env
@@ -22,6 +22,11 @@ verify:
 	ruff check .
 	python -m pytest -q
 	cd apps/web-studio && npm test && npm run build
+
+rust-test:
+	cd apps/rust-api && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
+
+verify-rust: rust-test
 
 version:
 	@python -c "from packages.version import project_version; print(project_version())"

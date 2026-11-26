@@ -109,6 +109,22 @@ services:
     depends_on:
       api: {condition: service_healthy}
       postgres: {condition: service_healthy}
+  api-edge:
+    profiles: ["rust-edge"]
+    build:
+      context: ..
+      dockerfile: apps/rust-api/Dockerfile
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      RUST_API_LISTEN: 0.0.0.0:8080
+      RUST_API_UPSTREAM: http://api:8000
+      RUST_API_UPSTREAM_TIMEOUT_SECONDS: ${RUST_API_UPSTREAM_TIMEOUT_SECONDS:-3}
+      RUST_API_REQUEST_TIMEOUT_SECONDS: ${RUST_API_REQUEST_TIMEOUT_SECONDS:-60}
+    ports: ["8080:8080"]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      api: {condition: service_healthy}
   worker:
     build:
       context: ..

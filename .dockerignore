@@ -7,3 +7,4 @@ node_modules
 apps/web-studio/dist
 evidence
 tests
+apps/rust-api/target

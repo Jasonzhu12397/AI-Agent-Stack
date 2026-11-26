@@ -1,0 +1,17 @@
+# Rust edge API canary against a live Django platform API
+2026-11-26T07:22:22Z
+
+## /health/ready
+{"latency_ms":1,"service":"rust-api-edge","status":"ready","upstream_status":200}
+HTTP 200
+
+## /api/v1/edge/info
+{"service":"rust-api-edge","version":"0.1.0","upstream":"http://127.0.0.1:18000/"}
+HTTP 200
+
+## CSRF, login and session through the edge
+{"csrf_token": "lRhumu3N5IHbofeCuSDFQg35yvr9TmztPQYl964KrQCHPEXNIZb1BE2AZHJPmI5Y"}
+{"id":1,"username":"edge-check@example.com","email":"","session_token":"qc7fuuv5g9c54bif0oqfh531b3bpmsgg"}
+HTTP 200
+{"id":1,"username":"edge-check@example.com","email":"","is_staff":false}
+HTTP 200

@@ -29,3 +29,6 @@ media/
 # Codespace runtime data
 .devdata/
 .devcontainer/status/
+
+# Rust build output
+target/
