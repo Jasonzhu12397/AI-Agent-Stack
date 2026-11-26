@@ -1144,16 +1144,20 @@ async fn fallback_usable(
         let Some(row) = row else {
             return Ok(false);
         };
-        let enabled = row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0;
+        let enabled = row
+            .try_get::<i64, _>("enabled_int")
+            .map_err(|error| error.to_string())?
+            != 0;
         let capabilities = parse_string_array(
             row.try_get::<Option<String>, _>("capabilities")
-                .ok()
-                .flatten(),
+                .map_err(|error| error.to_string())?,
         );
         if !enabled || !capabilities.iter().any(|value| value == "chat") {
             return Ok(false);
         }
-        current = row.try_get("fallback").ok().flatten();
+        current = row
+            .try_get("fallback")
+            .map_err(|error| error.to_string())?;
     }
     Ok(current.is_none())
 }
