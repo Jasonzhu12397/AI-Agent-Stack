@@ -467,3 +467,15 @@ watch(selectedProviderId, () => void loadModels());
     </div>
   </section>
 </template>
+
+<style scoped>
+.model-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fallback-select {
+  width: 220px;
+}
+</style>
