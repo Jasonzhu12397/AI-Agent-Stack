@@ -340,10 +340,58 @@ jobs:
         if: always()
         run: docker compose --env-file .env -f deploy/docker-compose.yml down -v
 
+  qdrant-live:
+    name: Real Qdrant collection and RAG integration
+    needs: [static, python-schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.20.2
+        ports:
+          - 6333:6333
+    env:
+      QDRANT_LIVE_URL: http://127.0.0.1:6333
+      DATABASE_URL: sqlite:////tmp/qdrant-live.sqlite3
+      APP_ENV: test
+      SECRET_KEY: ci-test-secret-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Wait for Qdrant readiness
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$QDRANT_LIVE_URL/readyz" | grep -q "all shards are ready"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Qdrant did not become ready"
+          exit 1
+      - name: Live collection lifecycle and RAG chain
+        run: |
+          mkdir -p reports
+          pytest -o addopts="" -q tests/integration/test_qdrant_live.py \
+            --junitxml=reports/qdrant-live.xml
+      - name: Upload Qdrant live report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qdrant-live-report
+          path: reports/qdrant-live.xml
+          retention-days: 7
+
   # ---------------- Stage 3: required quality gate ----------------
   quality-gate:
     name: Required quality gate
-    needs: [static, python-schema, web, compose-config, unit-tests, control-postgres, metal3-crds, agent-images, compose-e2e]
+    needs: [static, python-schema, web, compose-config, unit-tests, control-postgres, qdrant-live, metal3-crds, agent-images, compose-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -365,6 +413,7 @@ jobs:
           check compose-config "${{ needs['compose-config'].result }}"
           check unit-tests "${{ needs['unit-tests'].result }}"
           check control-postgres "${{ needs['control-postgres'].result }}"
+          check qdrant-live "${{ needs['qdrant-live'].result }}"
           check metal3-crds "${{ needs['metal3-crds'].result }}"
           check agent-images "${{ needs['agent-images'].result }}"
           check compose-e2e "${{ needs['compose-e2e'].result }}"

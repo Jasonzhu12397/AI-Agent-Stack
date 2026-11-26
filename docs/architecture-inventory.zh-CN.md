@@ -207,7 +207,7 @@
 - Agent、Workflow、插件、知识库相关 API 与前端页面基础。
 - 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify（租户链 + 全局认证链）。
 - MCP 客户端运行时（streamable HTTP 与 stdio JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）、项目级 MCP Server（`/api/v1/tenants/<tenant>/projects/<project>/mcp/`）与工具发现导入接口。
-- Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录。
+- Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录；CI 内以真实 Qdrant 服务运行集合创建/列举/删除与 ingest/retrieve 全链路。
 - `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 - 全局审计链（认证事件）的只读对外接口：`GET /api/v1/audit-events/global/`（分页列表）与 `GET /api/v1/audit-events/global/verify/`（链校验），仅平台管理员（`is_staff` / `is_superuser`）可读。
 - 项目级实时事件：Task / AuditEvent 提交后 `pg_notify`，Channels WebSocket 与 SSE 端点均消费同一事件源；前端优先 WebSocket、SSE 回退；SQLite 下为有界轮询，PostgreSQL 下为 LISTEN 唤醒。
