@@ -1,6 +1,7 @@
 from django.http import StreamingHttpResponse
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -13,6 +14,13 @@ class ProjectEventStreamView(APIView):
     """Server-sent events for task and audit changes in one project."""
 
     permission_classes = [IsAuthenticated]
+    renderer_classes = [JSONRenderer]
+
+    def perform_content_negotiation(self, request, force=False):
+        # The response is an event stream, not a DRF-rendered body. Skipping
+        # negotiation keeps a client that sends Accept: text/event-stream from
+        # receiving a 406 before the view can open the stream.
+        return (JSONRenderer(), "application/json")
 
     def get(self, request, tenant_id, project_id):
         tenant = accessible_tenant(request, tenant_id)

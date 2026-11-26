@@ -50,6 +50,7 @@ def test_stream_replays_new_task_events(workspace, settings):
     response = _client(workspace["user"]).get(
         _url(workspace),
         {"since": since, "max_events": 1},
+        HTTP_ACCEPT="text/event-stream",
     )
     assert response.status_code == 200
     assert response["Content-Type"].startswith("text/event-stream")
