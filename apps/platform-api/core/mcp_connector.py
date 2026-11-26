@@ -1,8 +1,14 @@
 # ruff: noqa: I001
 import ipaddress
 import json
+import os
 import re
+import select
+import shutil
 import socket
+import subprocess
+import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -27,6 +33,9 @@ MAX_TOOL_PAGES = 10
 MAX_TOOL_COUNT = 256
 MAX_CONTENT_ITEMS = 100
 MAX_TEXT_ITEM_CHARS = 65536
+MAX_STDIO_ARGUMENTS = 64
+MAX_STDIO_ARGUMENT_CHARS = 1000
+MAX_STDERR_CAPTURE = 8192
 JSONRPC_VERSION = "2.0"
 
 
@@ -371,6 +380,195 @@ class McpClient:
         return _normalize_tool_result(result)
 
 
+
+class McpStdioClient(McpClient):
+    """MCP client for a locally executed stdio server.
+
+    The server is launched without a shell, with a minimal environment, and
+    receives one JSON-RPC message per line on stdin. Stdout is parsed as line
+    delimited JSON. Stderr is drained continuously so a noisy server cannot
+    block on a full pipe. The process is terminated when the client exits.
+    """
+
+    def __init__(self, command, arguments, env, timeout_seconds, workdir=None):
+        # Deliberately do not call McpClient.__init__: there is no HTTP endpoint
+        # or httpx client for this transport.
+        self.command = command
+        self.arguments = list(arguments)
+        self.env = dict(env)
+        self.timeout_seconds = timeout_seconds
+        self.workdir = workdir
+        self.protocol_version = ""
+        self._next_id = 0
+        self._process = None
+        self._stderr_lines = []
+        self._stderr_thread = None
+
+    def __enter__(self):
+        try:
+            self._process = subprocess.Popen(
+                [self.command, *self.arguments],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self.env,
+                cwd=self.workdir,
+                bufsize=0,
+                start_new_session=True,
+            )
+        except (OSError, ValueError) as exc:
+            raise ToolExecutionError(
+                "MCP stdio server could not be started.",
+                code=FAULT_UNREACHABLE,
+            ) from exc
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr,
+            name="mcp-stdio-stderr",
+            daemon=True,
+        )
+        self._stderr_thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        process = self._process
+        self._process = None
+        if process is None:
+            return False
+        try:
+            if process.stdin:
+                process.stdin.close()
+        except OSError:
+            pass
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=1)
+        return False
+
+    def _drain_stderr(self):
+        stream = self._process.stderr if self._process else None
+        if stream is None:
+            return
+        try:
+            while True:
+                line = stream.readline()
+                if not line:
+                    return
+                text = line.decode("utf-8", "replace").rstrip()
+                self._stderr_lines.append(text)
+                if sum(len(item) for item in self._stderr_lines) > MAX_STDERR_CAPTURE:
+                    self._stderr_lines = self._stderr_lines[-10:]
+        except (OSError, ValueError):
+            return
+
+    def _stderr_tail(self):
+        text = " ".join(self._stderr_lines)[-500:]
+        return " ".join(text.split())
+
+    def _write(self, payload):
+        process = self._process
+        if process is None or process.stdin is None:
+            raise ToolExecutionError("MCP stdio server is not running.")
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded) > MAX_RESPONSE_BYTES:
+            raise ToolExecutionError("MCP request exceeds 1 MiB.")
+        try:
+            process.stdin.write(encoded + b"\n")
+            process.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise ToolExecutionError(
+                "MCP stdio server closed its input.",
+                code=FAULT_UNREACHABLE,
+            ) from exc
+
+    def _read_message(self, request_id, deadline):
+        process = self._process
+        if process is None or process.stdout is None:
+            raise ToolExecutionError("MCP stdio server is not running.")
+        total = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ToolExecutionError("MCP stdio request timed out.", code=FAULT_TIMEOUT)
+            try:
+                ready, _, _ = select.select([process.stdout], [], [], remaining)
+            except (OSError, ValueError) as exc:
+                raise ToolExecutionError(
+                    "MCP stdio stdout is unavailable.",
+                    code=FAULT_UNREACHABLE,
+                ) from exc
+            if not ready:
+                raise ToolExecutionError("MCP stdio request timed out.", code=FAULT_TIMEOUT)
+            line = process.stdout.readline()
+            if not line:
+                detail = self._stderr_tail()
+                raise ToolExecutionError(
+                    "MCP stdio server exited before answering."
+                    + (f" stderr: {detail}" if detail else ""),
+                    code=FAULT_UNREACHABLE,
+                )
+            total += len(line)
+            if total > MAX_RESPONSE_BYTES:
+                raise ToolExecutionError("MCP stdio response exceeds 1 MiB.")
+            if not line.strip():
+                continue
+            message = _load_json(line.strip())
+            if not isinstance(message, dict):
+                raise ToolExecutionError(
+                    "MCP stdio response frame is not a JSON object.",
+                    code=FAULT_INVALID_RESPONSE,
+                )
+            if message.get("id") != request_id:
+                # Progress notifications and unrelated responses are ignored.
+                continue
+            if "error" in message:
+                error = message.get("error")
+                if not isinstance(error, dict):
+                    raise ToolExecutionError(
+                        "MCP server returned an invalid error object.",
+                        code=FAULT_UPSTREAM_ERROR,
+                    )
+                text = str(error.get("message", ""))[:200]
+                raise ToolExecutionError(
+                    f"MCP server error ({error.get('code')}): {text}",
+                    code=FAULT_UPSTREAM_ERROR,
+                )
+            if "result" not in message:
+                raise ToolExecutionError(
+                    "MCP server response is missing a result.",
+                    code=FAULT_INVALID_RESPONSE,
+                )
+            return message["result"]
+
+    def _send(self, method, params=None, *, expect_response=True):
+        self._next_id += 1
+        request_id = self._next_id
+        payload = {"jsonrpc": JSONRPC_VERSION, "method": method}
+        if params is not None:
+            payload["params"] = params
+        if expect_response:
+            payload["id"] = request_id
+        deadline = time.monotonic() + self.timeout_seconds
+        self._write(payload)
+        if not expect_response:
+            return None
+        return self._read_message(request_id, deadline)
+
+
+
 def _normalize_tool_result(result):
     if not isinstance(result, dict):
         raise ToolExecutionError("MCP tools/call result is invalid.")
@@ -409,33 +607,120 @@ def _normalize_tool_result(result):
     return payload
 
 
-def _mcp_config(context):
+def _mcp_transport_config(context):
     transport = context.plugin_manifest.get("mcp")
     if not isinstance(transport, dict):
         raise ToolExecutionError("MCP transport manifest is missing.")
-    endpoint = _validate_endpoint(transport.get("endpoint_url"))
-    protocol_version = transport.get("protocol_version", DEFAULT_PROTOCOL_VERSION)
-    if not isinstance(protocol_version, str) or len(protocol_version) > 32:
-        raise ToolExecutionError("MCP protocol version is invalid.")
     tool_map = transport.get("tool_map", {})
     if not isinstance(tool_map, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) and value for key, value in tool_map.items()
+        isinstance(key, str) and isinstance(value, str) and value
+        for key, value in tool_map.items()
     ):
         raise ToolExecutionError("MCP tool mapping is invalid.")
-    timeout_seconds = min(max(int(context.plugin_manifest.get("timeout_seconds", 60)), 1), 300)
-    return endpoint, tool_map, timeout_seconds
+    timeout_seconds = min(
+        max(int(context.plugin_manifest.get("timeout_seconds", 60)), 1),
+        300,
+    )
+    kind = transport.get("transport", "http")
+    if kind in {"http", "streamable_http", "streamable-http"}:
+        endpoint = _validate_endpoint(transport.get("endpoint_url"))
+        protocol_version = transport.get("protocol_version", DEFAULT_PROTOCOL_VERSION)
+        if not isinstance(protocol_version, str) or len(protocol_version) > 32:
+            raise ToolExecutionError("MCP protocol version is invalid.")
+        return {
+            "kind": "http",
+            "endpoint": endpoint,
+            "protocol_version": protocol_version,
+            "tool_map": tool_map,
+            "timeout_seconds": timeout_seconds,
+        }
+    if kind == "stdio":
+        return {
+            "kind": "stdio",
+            **_stdio_config(transport),
+            "tool_map": tool_map,
+            "timeout_seconds": timeout_seconds,
+        }
+    raise ToolExecutionError("MCP transport type is not supported.")
+
+
+def _stdio_config(transport):
+    command = transport.get("command")
+    if not isinstance(command, str) or not command or len(command) > 200:
+        raise ToolExecutionError("MCP stdio command is invalid.")
+    if "\x00" in command or "\n" in command or "\r" in command:
+        raise ToolExecutionError("MCP stdio command contains control characters.")
+    arguments = transport.get("args", [])
+    if not isinstance(arguments, list) or len(arguments) > MAX_STDIO_ARGUMENTS:
+        raise ToolExecutionError("MCP stdio arguments must be a bounded list.")
+    for argument in arguments:
+        if (
+            not isinstance(argument, str)
+            or len(argument) > MAX_STDIO_ARGUMENT_CHARS
+            or "\x00" in argument
+        ):
+            raise ToolExecutionError("MCP stdio argument is invalid.")
+    allowlist = getattr(settings, "MCP_STDIO_ALLOWED_COMMANDS", [])
+    if not isinstance(allowlist, (list, tuple)) or not allowlist:
+        raise ToolExecutionError(
+            "MCP stdio is disabled: no executable is in MCP_STDIO_ALLOWED_COMMANDS."
+        )
+    normalized_allowlist = {str(item).strip() for item in allowlist if str(item).strip()}
+    resolved = shutil.which(command)
+    if not resolved:
+        raise ToolExecutionError("MCP stdio command is not installed.")
+    # Compare both the exact command and its basename so an operator can pin a
+    # full path or a package-managed launcher without opening a shell.
+    basename = os.path.basename(command)
+    if command not in normalized_allowlist and basename not in normalized_allowlist:
+        raise ToolExecutionError("MCP stdio command is not in MCP_STDIO_ALLOWED_COMMANDS.")
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
+        "PYTHONUNBUFFERED": "1",
+    }
+    declared = transport.get("env", {})
+    if not isinstance(declared, dict) or len(declared) > 32:
+        raise ToolExecutionError("MCP stdio env must be an object with at most 32 entries.")
+    for key, reference in declared.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ToolExecutionError("MCP stdio env name is invalid.")
+        if not isinstance(reference, str) or not reference.startswith("env:"):
+            raise ToolExecutionError(
+                "MCP stdio env values must be env: references, never literal secrets."
+            )
+        value = os.getenv(reference[4:])
+        if not value:
+            raise ToolExecutionError(f"MCP stdio env {key} is not configured in the runtime.")
+        env[key] = value
+    return {"command": resolved, "args": arguments, "env": env}
+
+
+def _open_mcp_client(config, headers, timeout_seconds):
+    if config["kind"] == "stdio":
+        return McpStdioClient(
+            config["command"],
+            config["args"],
+            config["env"],
+            timeout_seconds,
+        )
+    return McpClient(config["endpoint"], headers, timeout_seconds)
 
 
 def execute_mcp_operation(arguments, context, tool):
     if not isinstance(arguments, dict):
         raise ToolExecutionError("MCP tool arguments must be a JSON object.")
-    endpoint, tool_map, timeout_seconds = _mcp_config(context)
-    remote_name = tool_map.get(tool.name, tool.name)
+    config = _mcp_transport_config(context)
+    remote_name = config["tool_map"].get(tool.name, tool.name)
     if not isinstance(remote_name, str) or len(remote_name) > 100:
         raise ToolExecutionError("MCP tool mapping produced an invalid tool name.")
-    headers = _resolve_auth_headers(context)
-    timeout_seconds = min(max(int(getattr(tool, "timeout_seconds", timeout_seconds) or 1), 1), 300)
-    with McpClient(endpoint, headers, timeout_seconds) as client:
+    headers = _resolve_auth_headers(context) if config["kind"] == "http" else {}
+    timeout_seconds = min(
+        max(int(getattr(tool, "timeout_seconds", config["timeout_seconds"]) or 1), 1),
+        300,
+    )
+    with _open_mcp_client(config, headers, timeout_seconds) as client:
         client.initialize()
         return client.call_tool(remote_name, arguments)
 
@@ -443,9 +728,9 @@ def execute_mcp_operation(arguments, context, tool):
 def discover_mcp_tools(context):
     """Return the tool descriptors that the configured MCP server exposes."""
 
-    endpoint, _, timeout_seconds = _mcp_config(context)
-    headers = _resolve_auth_headers(context)
-    with McpClient(endpoint, headers, timeout_seconds) as client:
+    config = _mcp_transport_config(context)
+    headers = _resolve_auth_headers(context) if config["kind"] == "http" else {}
+    with _open_mcp_client(config, headers, config["timeout_seconds"]) as client:
         client.initialize()
         return client.list_tools()
 

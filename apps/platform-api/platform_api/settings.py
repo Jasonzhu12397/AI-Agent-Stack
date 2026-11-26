@@ -193,6 +193,14 @@ PLUGIN_HTTP_ALLOWED_HOSTS = [
     for value in os.getenv("PLUGIN_HTTP_ALLOWED_HOSTS", "").split(",")
     if value.strip()
 ]
+
+# Local MCP servers are disabled until an operator explicitly allowlists the
+# executable names or absolute paths that plugins may launch without a shell.
+MCP_STDIO_ALLOWED_COMMANDS = [
+    value.strip()
+    for value in os.getenv("MCP_STDIO_ALLOWED_COMMANDS", "").split(",")
+    if value.strip()
+]
 PLATFORM_ALLOW_SELF_REGISTRATION = os.getenv(
     "PLATFORM_ALLOW_SELF_REGISTRATION", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
