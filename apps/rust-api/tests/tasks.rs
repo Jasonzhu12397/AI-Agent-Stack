@@ -103,7 +103,7 @@ async fn call(
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header("cookie", format!("sessionid={session}"))
+        .header("x-session-token", session)
         .header("content-type", "application/json");
     if let Some(key) = key {
         builder = builder.header("idempotency-key", key);
