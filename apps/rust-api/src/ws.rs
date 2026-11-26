@@ -10,8 +10,8 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::connect_async_with_config;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode as UpstreamCloseCode;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame as UpstreamCloseFrame;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 
 use crate::proxy::AppState;
@@ -120,7 +120,8 @@ async fn relay(client: WebSocket, target: reqwest::Url, headers: HeaderMap, peer
     let upstream_result = tokio::time::timeout(
         Duration::from_secs(10),
         connect_async_with_config(upstream_request, Some(websocket_config), false),
-    ).await;
+    )
+    .await;
     let upstream = match upstream_result {
         Ok(Ok((socket, response))) => {
             tracing::info!(%target, status = response.status().as_u16(), "rust api edge upgraded the websocket upstream");
