@@ -13,14 +13,26 @@ from rest_framework.test import APIClient
 class _StubGuard:
     authorized = True
 
+    def __init__(self):
+        self.reservations = []
+        self.settlements = []
+        self.releases = []
+
     def reserve(self, *, idempotency_key, requested_tokens, **kwargs):
-        return SimpleNamespace(reserved_tokens=requested_tokens)
+        reservation = SimpleNamespace(
+            reserved_tokens=requested_tokens,
+            idempotency_key=idempotency_key,
+        )
+        self.reservations.append(reservation)
+        return reservation
 
     def settle(self, *, reservation, consumed_tokens):
         reservation.consumed_tokens = consumed_tokens
+        self.settlements.append((reservation.idempotency_key, consumed_tokens))
 
     def release(self, *, reservation):
         reservation.released = True
+        self.releases.append(reservation.idempotency_key)
 
 
 @pytest.fixture
@@ -517,7 +529,12 @@ def test_retryable_primary_failure_uses_the_configured_fallback(model_tenant, mo
     def fake_post(self, provider, endpoint, body, timeout_seconds, credential_ref=None):
         calls.append(provider.name)
         if provider.name == "primary provider":
-            raise ModelGatewayError("MODEL_PROVIDER_UNAVAILABLE", "down", retryable=True)
+            raise ModelGatewayError(
+                "MODEL_PROVIDER_UNAVAILABLE",
+                "down",
+                retryable=True,
+                billable_uncertain=True,
+            )
         return {
             "choices": [{"message": {"content": "standby answered"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 3},
@@ -525,11 +542,20 @@ def test_retryable_primary_failure_uses_the_configured_fallback(model_tenant, mo
 
     monkeypatch.setattr(ModelGateway, "_post_json", fake_post)
 
-    result = ModelGateway(guard=_StubGuard()).complete(
-        primary, [{"role": "user", "content": "hello"}]
+    guard = _StubGuard()
+    result = ModelGateway(guard=guard).complete(
+        primary,
+        [{"role": "user", "content": "hello"}],
+        idempotency_key="fallback-budget-test",
     )
 
     assert calls == ["primary provider", "standby provider"]
+    assert len(guard.reservations) == 2
+    assert guard.reservations[0].idempotency_key != guard.reservations[1].idempotency_key
+    assert guard.settlements[0] == (
+        "fallback-budget-test",
+        guard.reservations[0].reserved_tokens,
+    )
     assert result.content == "standby answered"
     assert result.provider == "standby provider"
     assert result.model == "standby-chat"
