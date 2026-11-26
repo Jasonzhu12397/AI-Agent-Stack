@@ -327,28 +327,7 @@ async fn forward(
                 .unwrap_or_else(|_| HeaderValue::from_static("missing-request-id")),
         );
     }
-    for name in [
-        "forwarded",
-        "x-forwarded-host",
-        "x-forwarded-port",
-        "x-real-ip",
-        "x-forwarded-for",
-        "x-forwarded-proto",
-    ] {
-        outbound.remove(name);
-    }
-    if let Ok(value) = HeaderValue::from_str(&peer.ip().to_string()) {
-        outbound.insert(HeaderName::from_static("x-forwarded-for"), value);
-    }
-    let forwarded_proto = if state.config.external_scheme == "https" {
-        HeaderValue::from_static("https")
-    } else {
-        HeaderValue::from_static("http")
-    };
-    outbound.insert(
-        HeaderName::from_static("x-forwarded-proto"),
-        forwarded_proto,
-    );
+    set_trusted_forwarded_headers(&mut outbound, peer, &state.config.external_scheme);
     builder = builder.headers(outbound);
 
     let content_length = incoming_headers
@@ -387,6 +366,33 @@ async fn forward(
         response.headers_mut().append(name, value.clone());
     }
     response
+}
+
+
+pub(crate) fn set_trusted_forwarded_headers(
+    headers: &mut HeaderMap,
+    peer: SocketAddr,
+    external_scheme: &str,
+) {
+    for name in [
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "x-real-ip",
+        "x-forwarded-for",
+        "x-forwarded-proto",
+    ] {
+        headers.remove(name);
+    }
+    if let Ok(value) = HeaderValue::from_str(&peer.ip().to_string()) {
+        headers.insert(HeaderName::from_static("x-forwarded-for"), value);
+    }
+    let scheme = if external_scheme == "https" {
+        HeaderValue::from_static("https")
+    } else {
+        HeaderValue::from_static("http")
+    };
+    headers.insert(HeaderName::from_static("x-forwarded-proto"), scheme);
 }
 
 fn strip_hop_by_hop_headers(headers: &mut HeaderMap) {
