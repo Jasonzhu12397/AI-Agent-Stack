@@ -801,7 +801,7 @@ class AgentChatAttachmentListCreateView(APIView):
 
     def _thread(self, request, thread_id):
         return get_object_or_404(
-            AgentChatThread.objects.filter(tenant__memberships__user=request.user),
+            AgentChatThread.objects.filter(project__in=visible_projects(request)),
             pk=thread_id,
         )
 
