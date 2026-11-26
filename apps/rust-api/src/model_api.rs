@@ -798,14 +798,31 @@ async fn provider_rows(
     rows.iter()
         .map(|row| {
             Ok(ProviderRow {
-                id: row.try_get("id").map_err(|error: sqlx::Error| error.to_string())?,
-                name: row.try_get("name").map_err(|error: sqlx::Error| error.to_string())?,
-                provider_type: row.try_get("provider_type").map_err(|error: sqlx::Error| error.to_string())?,
-                auth_mode: row.try_get("auth_mode").map_err(|error: sqlx::Error| error.to_string())?,
-                preset_key: row.try_get("preset_key").map_err(|error: sqlx::Error| error.to_string())?,
-                base_url: row.try_get("base_url").map_err(|error: sqlx::Error| error.to_string())?,
-                credential_ref: row.try_get("credential_ref").map_err(|error: sqlx::Error| error.to_string())?,
-                enabled: row.try_get::<i64, _>("enabled_int").map_err(|error| error.to_string())? != 0,
+                id: row
+                    .try_get("id")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                name: row
+                    .try_get("name")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                provider_type: row
+                    .try_get("provider_type")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                auth_mode: row
+                    .try_get("auth_mode")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                preset_key: row
+                    .try_get("preset_key")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                base_url: row
+                    .try_get("base_url")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                credential_ref: row
+                    .try_get("credential_ref")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                enabled: row
+                    .try_get::<i64, _>("enabled_int")
+                    .map_err(|error| error.to_string())?
+                    != 0,
                 created_at: row.try_get("created").map_err(|error| error.to_string())?,
             })
         })
@@ -1005,19 +1022,42 @@ async fn config_rows(
                 .try_get::<Option<String>, _>("capabilities")
                 .map_err(|error| error.to_string())?;
             Ok(ConfigRow {
-                id: row.try_get("id").map_err(|error: sqlx::Error| error.to_string())?,
-                provider_id: row.try_get("provider_id").map_err(|error: sqlx::Error| error.to_string())?,
-                model_name: row.try_get("model_name").map_err(|error: sqlx::Error| error.to_string())?,
-                display_name: row.try_get("display_name").map_err(|error: sqlx::Error| error.to_string())?,
+                id: row
+                    .try_get("id")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                provider_id: row
+                    .try_get("provider_id")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                model_name: row
+                    .try_get("model_name")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
+                display_name: row
+                    .try_get("display_name")
+                    .map_err(|error: sqlx::Error| error.to_string())?,
                 capabilities: parse_string_array(capabilities),
-                context_window: row.try_get("context_window").map_err(|error| error.to_string())?,
-                max_output_tokens: row.try_get("max_output_tokens").map_err(|error| error.to_string())?,
-                input_cost: row.try_get("input_cost_per_million").map_err(|error| error.to_string())?,
-                output_cost: row.try_get("output_cost_per_million").map_err(|error| error.to_string())?,
+                context_window: row
+                    .try_get("context_window")
+                    .map_err(|error| error.to_string())?,
+                max_output_tokens: row
+                    .try_get("max_output_tokens")
+                    .map_err(|error| error.to_string())?,
+                input_cost: row
+                    .try_get("input_cost_per_million")
+                    .map_err(|error| error.to_string())?,
+                output_cost: row
+                    .try_get("output_cost_per_million")
+                    .map_err(|error| error.to_string())?,
                 version: row.try_get("version").map_err(|error| error.to_string())?,
-                enabled: row.try_get::<i64, _>("enabled_int").map_err(|error| error.to_string())? != 0,
-                fallback_model: row.try_get("fallback_model").map_err(|error| error.to_string())?,
-                fallback_model_name: row.try_get("fallback_model_name").map_err(|error| error.to_string())?,
+                enabled: row
+                    .try_get::<i64, _>("enabled_int")
+                    .map_err(|error| error.to_string())?
+                    != 0,
+                fallback_model: row
+                    .try_get("fallback_model")
+                    .map_err(|error| error.to_string())?,
+                fallback_model_name: row
+                    .try_get("fallback_model_name")
+                    .map_err(|error| error.to_string())?,
                 created_at: row.try_get("created").map_err(|error| error.to_string())?,
             })
         })
