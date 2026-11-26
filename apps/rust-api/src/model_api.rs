@@ -42,13 +42,10 @@ pub async fn list_providers(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if tenant_role(pool, &tenant_id, user.id)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        return not_found();
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
     }
     match provider_rows(pool, &state, &tenant_id, user.id, None).await {
         Ok(rows) => {
@@ -395,13 +392,10 @@ pub async fn provider_catalog(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if tenant_role(pool, &tenant_id, user.id)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        return not_found();
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
     }
     let mut platforms = Vec::new();
     if let Some(object) = presets().as_object() {
@@ -433,19 +427,15 @@ pub async fn list_configs(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if tenant_role(pool, &tenant_id, user.id)
-        .await
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        return not_found();
+    match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
     }
-    if !visible_provider(pool, &tenant_id, &provider_id, user.id)
-        .await
-        .unwrap_or(false)
-    {
-        return not_found();
+    match visible_provider(pool, &tenant_id, &provider_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(),
+        Err(error) => return database_error_message(error),
     }
     match config_rows(pool, &state, &provider_id, None).await {
         Ok(rows) => {
@@ -805,20 +795,21 @@ async fn provider_rows(
             .await
     }
     .map_err(|error| error.to_string())?;
-    Ok(rows
-        .iter()
-        .map(|row| ProviderRow {
-            id: row.try_get("id").unwrap_or_default(),
-            name: row.try_get("name").unwrap_or_default(),
-            provider_type: row.try_get("provider_type").unwrap_or_default(),
-            auth_mode: row.try_get("auth_mode").unwrap_or_default(),
-            preset_key: row.try_get("preset_key").unwrap_or_default(),
-            base_url: row.try_get("base_url").unwrap_or_default(),
-            credential_ref: row.try_get("credential_ref").unwrap_or_default(),
-            enabled: row.try_get::<i64, _>("enabled_int").unwrap_or(1) != 0,
-            created_at: row.try_get("created").ok(),
+    rows.iter()
+        .map(|row| {
+            Ok(ProviderRow {
+                id: row.try_get("id").map_err(|error: sqlx::Error| error.to_string())?,
+                name: row.try_get("name").map_err(|error: sqlx::Error| error.to_string())?,
+                provider_type: row.try_get("provider_type").map_err(|error: sqlx::Error| error.to_string())?,
+                auth_mode: row.try_get("auth_mode").map_err(|error: sqlx::Error| error.to_string())?,
+                preset_key: row.try_get("preset_key").map_err(|error: sqlx::Error| error.to_string())?,
+                base_url: row.try_get("base_url").map_err(|error: sqlx::Error| error.to_string())?,
+                credential_ref: row.try_get("credential_ref").map_err(|error: sqlx::Error| error.to_string())?,
+                enabled: row.try_get::<i64, _>("enabled_int").map_err(|error| error.to_string())? != 0,
+                created_at: row.try_get("created").map_err(|error| error.to_string())?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 async fn provider_json(
@@ -1008,29 +999,29 @@ async fn config_rows(
         sqlx::query(&sql).bind(provider_id).fetch_all(pool).await
     }
     .map_err(|error| error.to_string())?;
-    Ok(rows
-        .iter()
-        .map(|row| ConfigRow {
-            id: row.try_get("id").unwrap_or_default(),
-            provider_id: row.try_get("provider_id").unwrap_or_default(),
-            model_name: row.try_get("model_name").unwrap_or_default(),
-            display_name: row.try_get("display_name").unwrap_or_default(),
-            capabilities: parse_string_array(
-                row.try_get::<Option<String>, _>("capabilities")
-                    .ok()
-                    .flatten(),
-            ),
-            context_window: row.try_get("context_window").unwrap_or_default(),
-            max_output_tokens: row.try_get("max_output_tokens").unwrap_or_default(),
-            input_cost: row.try_get("input_cost_per_million").unwrap_or_default(),
-            output_cost: row.try_get("output_cost_per_million").unwrap_or_default(),
-            version: row.try_get("version").unwrap_or(1),
-            enabled: row.try_get::<i64, _>("enabled_int").unwrap_or(1) != 0,
-            fallback_model: row.try_get("fallback_model").ok().flatten(),
-            fallback_model_name: row.try_get("fallback_model_name").ok().flatten(),
-            created_at: row.try_get("created").ok(),
+    rows.iter()
+        .map(|row| {
+            let capabilities = row
+                .try_get::<Option<String>, _>("capabilities")
+                .map_err(|error| error.to_string())?;
+            Ok(ConfigRow {
+                id: row.try_get("id").map_err(|error: sqlx::Error| error.to_string())?,
+                provider_id: row.try_get("provider_id").map_err(|error: sqlx::Error| error.to_string())?,
+                model_name: row.try_get("model_name").map_err(|error: sqlx::Error| error.to_string())?,
+                display_name: row.try_get("display_name").map_err(|error: sqlx::Error| error.to_string())?,
+                capabilities: parse_string_array(capabilities),
+                context_window: row.try_get("context_window").map_err(|error| error.to_string())?,
+                max_output_tokens: row.try_get("max_output_tokens").map_err(|error| error.to_string())?,
+                input_cost: row.try_get("input_cost_per_million").map_err(|error| error.to_string())?,
+                output_cost: row.try_get("output_cost_per_million").map_err(|error| error.to_string())?,
+                version: row.try_get("version").map_err(|error| error.to_string())?,
+                enabled: row.try_get::<i64, _>("enabled_int").map_err(|error| error.to_string())? != 0,
+                fallback_model: row.try_get("fallback_model").map_err(|error| error.to_string())?,
+                fallback_model_name: row.try_get("fallback_model_name").map_err(|error| error.to_string())?,
+                created_at: row.try_get("created").map_err(|error| error.to_string())?,
+            })
         })
-        .collect())
+        .collect()
 }
 
 async fn visible_provider(
