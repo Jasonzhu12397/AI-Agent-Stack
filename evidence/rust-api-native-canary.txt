@@ -80,3 +80,8 @@ so Rust writes byte-compatible audit events.
 
 Automated: apps/rust-api/tests/auth.rs (2 passed) covers CSRF, login, me,
 logout and the CSRF rejection without audit noise.
+
+2026-11-26 follow-up (commit 0e56994c)
+- Native logout now rejects requests without a valid CSRF cookie/header pair.
+- Rust tests: 15 passed; clippy -D warnings clean.
+- CI run 45786600907: quality gate passed.
