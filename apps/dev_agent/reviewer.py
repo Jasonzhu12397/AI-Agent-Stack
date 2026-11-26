@@ -75,8 +75,10 @@ def _is_mutable(node: ast.AST | None) -> bool:
 
 def _is_test_path(path: str) -> bool:
     candidate = Path(path)
-    return "tests" in candidate.parts or candidate.name.startswith("test_") or candidate.name.endswith(
-        "_test.py"
+    return (
+        "tests" in candidate.parts
+        or candidate.name.startswith("test_")
+        or candidate.name.endswith("_test.py")
     )
 
 
