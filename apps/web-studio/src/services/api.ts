@@ -2180,6 +2180,49 @@ export function publishAgentPlugin(
   });
 }
 
+export type AgentPluginOAuthStart = {
+  authorize_url: string;
+  state: string;
+  expires_in: number;
+};
+
+/** Start a plugin authorization-code grant and return the provider URL. */
+export function startAgentPluginOAuth(
+  tenantId: string,
+  payload: {
+    authorization_url: string;
+    token_url: string;
+    redirect_uri: string;
+    client_id: string;
+    client_secret?: string;
+    scope?: string;
+  },
+): Promise<AgentPluginOAuthStart> {
+  return request(`/api/v1/tenants/${tenantId}/agent-plugins/studio/oauth/authorize/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type AgentPluginOAuthResult = {
+  credential: string;
+  expires_in: number | null;
+  scope: string;
+  token_type: string;
+};
+
+/** Redeem the provider code into a sealed, refreshable credential reference. */
+export function completeAgentPluginOAuth(
+  tenantId: string,
+  code: string,
+  state: string,
+): Promise<AgentPluginOAuthResult> {
+  return request(`/api/v1/tenants/${tenantId}/agent-plugins/studio/oauth/callback/`, {
+    method: "POST",
+    body: JSON.stringify({ code, state }),
+  });
+}
+
 /** Register a new connector definition owned by the tenant. */
 export function createAgentPlugin(
   tenantId: string,

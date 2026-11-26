@@ -181,10 +181,20 @@ def _auth_from_request(payload: dict[str, Any]) -> dict[str, Any]:
     # token) is stored. Client credentials is the default machine-to-machine
     # grant; refresh_token supports providers that only issue long-lived
     # consent tokens. Both keep the secret out of the manifest.
+    grant = auth.get("grant") or "client_credentials"
+    if grant == "authorization_code":
+        # The callback already sealed a complete, refreshable contract. Publishing
+        # binds that existing credential instead of asking the browser to
+        # re-present the client secret or refresh token.
+        if not credential.startswith(CREDENTIAL_PREFIX):
+            raise PluginStudioError(
+                "PLUGIN_AUTH_INVALID",
+                "The authorization_code grant requires a plugin:// credential reference.",
+            )
+        return {"type": "reference", "reference": credential}
     token_url = validate_public_url(auth.get("token_url"), "auth_config.token_url")
     client_id = auth.get("client_id")
     scope = auth.get("scope") or ""
-    grant = auth.get("grant") or "client_credentials"
     if not isinstance(client_id, str) or not isinstance(scope, str) or not isinstance(grant, str):
         raise PluginStudioError("PLUGIN_AUTH_INVALID", "OAuth 2.0 client_id and scope are invalid.")
     if grant not in {"client_credentials", "refresh_token"}:
@@ -1175,6 +1185,17 @@ def seal_credential(tenant, user, name: str, contract: dict[str, Any]):
 
     if contract.get("type") in {None, "none"}:
         return ""
+    if contract.get("type") == "reference":
+        reference = contract.get("reference")
+        if not isinstance(reference, str) or not reference.startswith(CREDENTIAL_PREFIX):
+            raise PluginStudioError("PLUGIN_AUTH_INVALID", "The credential reference is invalid.")
+        if not AgentPluginCredential.objects.filter(
+            pk=reference[len(CREDENTIAL_PREFIX) :], tenant=tenant
+        ).exists():
+            raise PluginStudioError(
+                "PLUGIN_AUTH_INVALID", "The credential reference was not found."
+            )
+        return reference
     sealed = seal(json.dumps(contract, separators=(",", ":")), CREDENTIAL_SCOPE)
     credential = AgentPluginCredential.objects.create(
         tenant=tenant,
@@ -1194,6 +1215,23 @@ def _resolve_oauth2(contract: dict[str, Any]) -> dict[str, str]:
     return {"type": "bearer", "token": authorization[len("Bearer ") :]}
 
 
+def _read_contract(credential) -> dict[str, Any]:
+    plaintext = open_sealed(credential.sealed_value, CREDENTIAL_SCOPE)
+    if not plaintext:
+        raise plugin_credentials.CredentialNotFoundError("Plugin credential could not be read.")
+    try:
+        contract = json.loads(plaintext)
+    except ValueError as exc:
+        raise plugin_credentials.CredentialInvalidShapeError(
+            "Plugin credential is not a valid JSON contract."
+        ) from exc
+    if not isinstance(contract, dict):
+        raise plugin_credentials.CredentialInvalidShapeError(
+            "Plugin credential is not a valid credential contract."
+        )
+    return contract
+
+
 def _plugin_credential_provider(reference: str) -> dict[str, str]:
     from core.models import AgentPluginCredential
 
@@ -1211,19 +1249,23 @@ def _plugin_credential_provider(reference: str) -> dict[str, str]:
         raise plugin_credentials.CredentialAccessDeniedError(
             "Plugin credential belongs to another workspace."
         )
-    plaintext = open_sealed(credential.sealed_value, CREDENTIAL_SCOPE)
-    if not plaintext:
-        raise plugin_credentials.CredentialNotFoundError("Plugin credential could not be read.")
-    try:
-        contract = json.loads(plaintext)
-    except ValueError as exc:
-        raise plugin_credentials.CredentialInvalidShapeError(
-            "Plugin credential is not a valid JSON contract."
-        ) from exc
-    if not isinstance(contract, dict):
-        raise plugin_credentials.CredentialInvalidShapeError(
-            "Plugin credential is not a valid credential contract."
-        )
+    contract = _read_contract(credential)
+    if contract.get("type") == "reference":
+        target = contract.get("reference")
+        if not isinstance(target, str) or not target.startswith(CREDENTIAL_PREFIX):
+            raise plugin_credentials.CredentialReferenceInvalidError(
+                "Plugin credential reference is invalid."
+            )
+        target_row = AgentPluginCredential.objects.filter(
+            pk=target[len(CREDENTIAL_PREFIX) :]
+        ).first()
+        if target_row is None:
+            raise plugin_credentials.CredentialNotFoundError("Plugin credential was not found.")
+        if str(target_row.tenant_id) != str(credential.tenant_id):
+            raise plugin_credentials.CredentialAccessDeniedError(
+                "Plugin credential belongs to another workspace."
+            )
+        contract = _read_contract(target_row)
     kind = contract.get("type")
     if kind == "oauth2":
         return _resolve_oauth2(contract)

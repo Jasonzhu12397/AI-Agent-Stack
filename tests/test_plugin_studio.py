@@ -706,3 +706,66 @@ def test_oauth_callback_rejects_an_expired_state(studio_workspace, monkeypatch):
     )
     assert completed.status_code == 400
     assert "expired" in completed.data["error"]["message"].lower()
+
+
+def test_publish_binds_an_authorization_code_credential_reference(studio_workspace, monkeypatch):
+    _user, tenant, project, client = studio_workspace
+    monkeypatch.setattr(
+        plugin_studio, "validate_public_url", lambda value, field="url": str(value)
+    )
+
+    def fake_token_request(contract, timeout=15.0):
+        if contract["grant"] == "authorization_code":
+            return {
+                "access_token": "access-1",
+                "refresh_token": "refresh-1",
+                "expires_in": 3600,
+            }
+        return {"access_token": "access-2", "expires_in": 3600}
+
+    monkeypatch.setattr(plugin_studio, "_oauth_token_request", fake_token_request)
+    started = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/authorize/",
+        {
+            "authorization_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+            "redirect_uri": "https://console.example.com/plugins/oauth/callback",
+            "client_id": "client-id",
+            "client_secret": "client-secret",
+            "scope": "read:tools",
+        },
+        format="json",
+    )
+    completed = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/oauth/callback/",
+        {"code": "provider-code", "state": started.data["state"]},
+        format="json",
+    )
+    reference = completed.data["credential"]
+
+    discovered = _discovered_contract(name="get_pets")
+    discovered["contract"] = {"type": "reference", "reference": reference}
+    monkeypatch.setattr(plugin_studio, "discover_plugin", lambda payload: discovered)
+    response = client.post(
+        f"/api/v1/tenants/{tenant.id}/agent-plugins/studio/publish/",
+        {
+            "plugin_type": "openapi",
+            "base_url": "https://pets.example.com",
+            "auth_type": "oauth2",
+            "auth_config": {"grant": "authorization_code"},
+            "credential": reference,
+            "plugin_key": "oauth-pet-tools",
+            "name": "OAuth pet tools",
+            "project_id": str(project.id),
+            "selected_capabilities": ["get_pets"],
+        },
+        format="json",
+    )
+    assert response.status_code == 201, response.data
+    from core.models import AgentPluginDefinition
+
+    definition = AgentPluginDefinition.objects.get(
+        tenant=tenant, plugin_key="oauth-pet-tools"
+    )
+    assert definition.credential_ref == reference
+    assert resolve(reference, tenant_id=tenant.id) == {"type": "bearer", "token": "access-2"}

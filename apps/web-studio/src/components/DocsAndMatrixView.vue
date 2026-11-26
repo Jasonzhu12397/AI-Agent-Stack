@@ -4,7 +4,7 @@ const phases = [
   { id: "P1", name: "Identity and tenancy", status: "partial", detail: "Session authentication, tenant/project membership and server-side RBAC." },
   { id: "P2", name: "Model and Agent runtime", status: "partial", detail: "OpenAI-compatible providers, published Agent versions, asynchronous runs and tool routing." },
   { id: "P3", name: "Workflow orchestration", status: "partial", detail: "Versioned DAG definitions, validation, persisted workflow runs and step records." },
-  { id: "P4", name: "Plugin governance", status: "partial", detail: "Plugin registry, review, installation, permission grants and credential references. Real connector execution and OAuth broker remain incomplete." },
+  { id: "P4", name: "Plugin governance", status: "partial", detail: "Plugin registry, review, installation, permission grants and credential references. Real connector execution is implemented for HTTP/OpenAPI/MCP; the OAuth broker now supports authorization-code grants, with real-provider acceptance still pending." },
   { id: "P5", name: "Knowledge and MCP", status: "partial", detail: "Qdrant-backed knowledge ingestion and retrieval baseline. MCP client/server, durable memory and advanced retrieval remain incomplete." },
   { id: "P6", name: "Enterprise connectors", status: "planned", detail: "GitHub, Jira, Office 365, Teams, maps, weather and external service connectors." },
   { id: "P7", name: "Bare-metal delivery", status: "in_progress", detail: "EPH and Target Agent control, CAPI/Metal3/Ironic preflight evidence and deployment state machine. Actual provisioning and CAPI pivot are not yet enabled." },

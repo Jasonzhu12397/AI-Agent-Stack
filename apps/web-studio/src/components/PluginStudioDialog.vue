@@ -11,12 +11,17 @@ import { t } from "../i18n";
 import {
   discoverAgentPlugin,
   publishAgentPlugin,
+  startAgentPluginOAuth,
   testAgentPluginStudio,
   type AgentPluginStudioDraft,
   type AgentPluginStudioRequest,
 } from "../services/api";
 
-const props = defineProps<{ tenantId: string; projectId: string }>();
+const props = defineProps<{
+  tenantId: string;
+  projectId: string;
+  initialCredential?: string;
+}>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ published: [pluginId: string] }>();
 
@@ -36,13 +41,19 @@ const apiKeyPrefix = ref("");
 const tokenUrl = ref("");
 const clientId = ref("");
 const scope = ref("");
-const oauthGrant = ref<"client_credentials" | "refresh_token">("client_credentials");
+const oauthGrant = ref<"client_credentials" | "refresh_token" | "authorization_code">(
+  "client_credentials",
+);
 const refreshToken = ref("");
+const authorizationUrl = ref("");
+const redirectUri = ref("");
 const busy = ref(false);
 const error = ref("");
 const info = ref("");
 const draft = ref<AgentPluginStudioDraft | null>(null);
 const selected = ref<string[]>([]);
+
+const oauthRedirectUri = computed(() => `${window.location.origin}/integrations`);
 
 const typeOptions = computed(() => [
   {
@@ -87,6 +98,32 @@ watch(visible, (open) => {
   selected.value = [];
   error.value = "";
   info.value = "";
+  if (props.initialCredential) {
+    const draftJson = window.sessionStorage.getItem("plugin-oauth-draft");
+    if (draftJson) {
+      try {
+        const saved = JSON.parse(draftJson) as Record<string, string>;
+        pluginType.value = (saved.pluginType as AgentPluginStudioRequest["plugin_type"]) || pluginType.value;
+        name.value = saved.name || "";
+        pluginKey.value = saved.pluginKey || "";
+        baseUrl.value = saved.baseUrl || "";
+        description.value = saved.description || "";
+        documentUrl.value = saved.documentUrl || "";
+        documentText.value = saved.documentText || "";
+        tokenUrl.value = saved.tokenUrl || "";
+        authorizationUrl.value = saved.authorizationUrl || "";
+        clientId.value = saved.clientId || "";
+        scope.value = saved.scope || "";
+      } catch {
+        // A malformed draft must not block the completed authorization.
+      }
+      window.sessionStorage.removeItem("plugin-oauth-draft");
+    }
+    authType.value = "oauth2";
+    oauthGrant.value = "authorization_code";
+    credential.value = props.initialCredential;
+    info.value = t("OAuth authorization completed. The sealed credential reference is ready.");
+  }
 });
 
 const authConfig = computed<Record<string, string> | undefined>(() => {
@@ -101,6 +138,9 @@ const authConfig = computed<Record<string, string> | undefined>(() => {
     config.client_id = clientId.value.trim();
     config.scope = scope.value.trim();
     config.grant = oauthGrant.value;
+    if (oauthGrant.value === "authorization_code") {
+      return config;
+    }
     if (oauthGrant.value === "refresh_token") {
       config.refresh_token = refreshToken.value.trim();
     }
@@ -155,7 +195,62 @@ function validateForm(requireName: boolean): string | null {
   if (authType.value === "oauth2" && oauthGrant.value === "refresh_token" && !refreshToken.value.trim()) {
     return t("The refresh token is required for the refresh_token grant.");
   }
+  if (authType.value === "oauth2" && oauthGrant.value === "authorization_code") {
+    if (!credential.value.trim().startsWith("plugin://")) {
+      return t("Authorize with the provider before publishing this plugin.");
+    }
+  }
   return null;
+}
+
+async function authorizeOAuth(): Promise<void> {
+  error.value = "";
+  info.value = "";
+  if (!authorizationUrl.value.trim() || !tokenUrl.value.trim() || !clientId.value.trim()) {
+    error.value = t("OAuth authorization needs authorization, token and client ID fields.");
+    return;
+  }
+  if (!credential.value.trim()) {
+    error.value = t("Enter the OAuth client secret before authorizing.");
+    return;
+  }
+  const redirect = oauthRedirectUri.value;
+  busy.value = true;
+  try {
+    const started = await startAgentPluginOAuth(props.tenantId, {
+      authorization_url: authorizationUrl.value.trim(),
+      token_url: tokenUrl.value.trim(),
+      redirect_uri: redirect,
+      client_id: clientId.value.trim(),
+      client_secret: credential.value.trim(),
+      scope: scope.value.trim(),
+    });
+    window.sessionStorage.setItem(
+      "plugin-oauth-pending",
+      JSON.stringify({ tenantId: props.tenantId }),
+    );
+    window.sessionStorage.setItem(
+      "plugin-oauth-draft",
+      JSON.stringify({
+        pluginType: pluginType.value,
+        name: name.value,
+        pluginKey: pluginKey.value,
+        baseUrl: baseUrl.value,
+        description: description.value,
+        documentUrl: documentUrl.value,
+        documentText: documentText.value,
+        tokenUrl: tokenUrl.value,
+        authorizationUrl: authorizationUrl.value,
+        clientId: clientId.value,
+        scope: scope.value,
+      }),
+    );
+    window.location.assign(started.authorize_url);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("Unable to start the authorization.");
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function discover(): Promise<void> {
@@ -326,9 +421,28 @@ async function publish(): Promise<void> {
             <el-select v-model="oauthGrant">
               <el-option :label="t('Client credentials')" value="client_credentials" />
               <el-option :label="t('Refresh token')" value="refresh_token" />
+              <el-option :label="t('Authorization code')" value="authorization_code" />
             </el-select>
+            <el-form-item
+              v-if="oauthGrant === 'authorization_code'"
+              :label="t('Authorization URL')"
+            >
+              <el-input
+                v-model="authorizationUrl"
+                placeholder="https://auth.example.com/oauth/authorize"
+              />
+            </el-form-item>
             <el-form-item :label="t('Token URL')">
               <el-input v-model="tokenUrl" placeholder="https://auth.example.com/oauth/token" />
+            </el-form-item>
+            <el-form-item
+              v-if="oauthGrant === 'authorization_code'"
+              :label="t('Redirect URI')"
+            >
+              <el-input :model-value="oauthRedirectUri" disabled />
+              <p class="studio-hint">
+                {{ t("Register this exact callback URL in the provider's OAuth application.") }}
+              </p>
             </el-form-item>
             <el-form-item :label="t('Client ID')">
               <el-input v-model="clientId" placeholder="client-id" />
@@ -347,6 +461,14 @@ async function publish(): Promise<void> {
                 :placeholder="t('Refresh token issued by the provider')"
               />
             </el-form-item>
+          </div>
+          <div v-if="authType === 'oauth2' && oauthGrant === 'authorization_code'" class="studio-actions">
+            <el-button :loading="busy" @click="authorizeOAuth">
+              {{ t("Authorize with the provider") }}
+            </el-button>
+            <span v-if="credential.startsWith('plugin://')" class="studio-hint">
+              {{ credential }}
+            </span>
           </div>
           <el-form-item
             v-if="authType !== 'none'"

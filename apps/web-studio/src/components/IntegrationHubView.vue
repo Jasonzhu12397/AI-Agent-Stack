@@ -11,6 +11,7 @@ import PluginStudioDialog from "./PluginStudioDialog.vue";
 import PlatformAccountsPanel from "./PlatformAccountsPanel.vue";
 import {
   activateAgentPluginVersion,
+  completeAgentPluginOAuth,
   getAgentPluginDefinitions,
   getAgentPluginInstallations,
   getAgentPluginVersions,
@@ -40,6 +41,7 @@ const submitting = ref(false);
 const error = ref("");
 const info = ref("");
 const studioOpen = ref(false);
+const pluginOauthCredential = ref("");
 const runCapability = ref("");
 const runArgs = ref("{}");
 const advancedRunArgs = ref(false);
@@ -176,7 +178,37 @@ watch(
   () => [props.tenantId, props.projectId],
   () => void refresh(),
 );
-onMounted(() => void refresh());
+async function finishPluginOAuth(): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const state = params.get("state");
+  if (!code || !state) return;
+  const pending = window.sessionStorage.getItem("plugin-oauth-pending");
+  if (!pending) {
+    error.value = t("The authorization returned without its plugin draft. Start again.");
+    return;
+  }
+  try {
+    const parsed = JSON.parse(pending) as { tenantId?: string };
+    if (parsed.tenantId && parsed.tenantId !== props.tenantId) {
+      throw new Error(t("The authorization belongs to another workspace."));
+    }
+    const result = await completeAgentPluginOAuth(props.tenantId, code, state);
+    pluginOauthCredential.value = result.credential;
+    studioOpen.value = true;
+    info.value = t("OAuth authorization completed. Finish the plugin draft and publish.");
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : t("Unable to complete authorization.");
+  } finally {
+    window.sessionStorage.removeItem("plugin-oauth-pending");
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+}
+
+onMounted(() => {
+  void refresh();
+  void finishPluginOAuth();
+});
 
 async function toggleDefinition(): Promise<void> {
   if (!selected.value) return;
@@ -772,6 +804,7 @@ function lastInvocation(name: string): string {
     <PluginStudioDialog
       :tenant-id="tenantId"
       :project-id="projectId"
+      :initial-credential="pluginOauthCredential"
       v-model="studioOpen"
       @published="(pluginId: string) => { selectedId = pluginId; void refresh(); }"
     />
