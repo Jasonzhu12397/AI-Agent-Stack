@@ -297,7 +297,7 @@ fn database_url(state: &AppState) -> &str {
     state.config.database_url.as_deref().unwrap_or_default()
 }
 
-fn enforce_csrf(headers: &HeaderMap) -> Result<(), Box<Response>> {
+pub(crate) fn enforce_csrf(headers: &HeaderMap) -> Result<(), Box<Response>> {
     let Some(cookie_secret) = cookie_value(headers, CSRF_COOKIE) else {
         return Err(Box::new(csrf_failure("CSRF cookie not set.")));
     };
