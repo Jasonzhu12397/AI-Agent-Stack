@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use tokio::sync::Semaphore;
+use tower_http::limit::RequestBodyLimitLayer;
 use futures_util::TryStreamExt;
 use serde_json::json;
 
@@ -183,7 +184,10 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/health/live", get(edge_liveness));
     }
-    router.fallback(forward).with_state(state)
+    router
+        .fallback(forward)
+        .layer(RequestBodyLimitLayer::new(25 * 1024 * 1024))
+        .with_state(state)
 }
 
 async fn edge_liveness(State(state): State<AppState>) -> Response {
