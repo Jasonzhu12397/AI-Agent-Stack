@@ -139,3 +139,15 @@ Workflow run detail and approvals (Rust native)
 - POST /api/v1/workflow-runs/{run_id}/steps/{node_id}/reject/
 - Verified by cargo test --test workflow_reads (run detail, approve requeues,
   reject fails the task and closes the run, non-pending step returns 409).
+
+Model gateway configuration (Rust native)
+- GET/POST /api/v1/tenants/{tenant_id}/model-providers/
+- GET /api/v1/tenants/{tenant_id}/model-providers/catalog/
+- GET/POST /api/v1/tenants/{tenant_id}/model-providers/{provider_id}/models/
+- PATCH /api/v1/tenants/{tenant_id}/model-configs/{model_config_id}/
+- Verified by cargo test --test model_api (5 tests): visibility and metadata,
+  preset catalog, account provider creation with seeded models and 50000 token
+  free allowance, duplicate name 409, unlisted remote host 400, versioned
+  config creation, output bound rejection and fallback cycle rejection.
+- Not yet native: model test invocation, provider account link/unlink and
+  OAuth start/exchange; those call upstream platforms or need token storage.

@@ -158,6 +158,22 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/workflow-runs/{run_id}/steps/{node_id}/reject/",
                 post(crate::workflow_steps::reject),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/model-providers/",
+                get(crate::model_api::list_providers).post(crate::model_api::create_provider),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/model-providers/catalog/",
+                get(crate::model_api::provider_catalog),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/model-providers/{provider_id}/models/",
+                get(crate::model_api::list_configs).post(crate::model_api::create_config),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/model-configs/{model_config_id}/",
+                axum::routing::patch(crate::model_api::update_config),
             );
     }
     router.fallback(forward).with_state(state)

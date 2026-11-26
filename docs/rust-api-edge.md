@@ -73,6 +73,19 @@ domain model, permissions, audit and realtime code in the Django service.
   `deadline_seconds` in 60..604800 and an `Idempotency-Key`; replays with the
   same payload return 200 and the original run, conflicting payloads 409, and
   every new run appends `workflow.run.created`.
+- Owns the model gateway configuration surface: provider listing and creation,
+  the platform preset catalog, model-config listing and versioned creation and
+  fallback routing updates. Provider visibility follows the Django rule
+  (tenant-owned plus shared rows, account-billed rows only for their owner,
+  enabled only). Creation enforces the preset contract for account-billed
+  providers, the host/credential allowlists for OpenAI-compatible remote and
+  local endpoints, secret rejection in `config`, and the duplicate-name rule
+  (409 for tenant providers, ` (username)` and numeric suffixes for account
+  providers). Account providers seed the preset models and expose the free
+  daily allowance. Model configs validate capabilities, context/output bounds,
+  non-negative costs and a fallback chain of at most three hops without cycles,
+  and append `model.provider.created`, `model.config.created` and
+  `model.config.routing.updated` in the same transaction.
 
 All other business routes still live in Django during this stage. The Rust
 handlers share the same schema, so a rollback is a single routing change.
@@ -139,8 +152,8 @@ The edge is the stable seam for moving routes into Rust:
    projects, both membership scopes and task list/create/detail/cancel now run
    in Rust against the shared session, RBAC and audit tables, together with
    audit listing, hash-chain verification, tenant token budgets and workflow
-   draft CRUD, validation, publication, catalog reads, workflow runs and
-   approval decisions. Model gateway moves next.
-3. Move model gateway, task read APIs and edge-native health/metrics.
+   draft CRUD, validation, publication, catalog reads, workflow runs,
+   approval decisions and model gateway configuration. Task read APIs and
+   edge-native health/metrics move next.
 4. Retire each proxied Django route only after a side-by-side comparison and
    rollback window.

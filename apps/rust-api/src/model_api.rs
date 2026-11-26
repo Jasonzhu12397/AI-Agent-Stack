@@ -1,0 +1,1423 @@
+#![allow(clippy::result_large_err)]
+
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use chrono::{SecondsFormat, Utc};
+use serde_json::{json, Map, Value};
+use sqlx::{AnyPool, Row};
+use url::Url;
+
+use crate::audit::{record_event_in_transaction, AuditEvent};
+use crate::context::{authenticate, AuthError};
+use crate::proxy::AppState;
+use crate::tenancy::{is_postgres, normalize_timestamp, tenant_role};
+
+static PRESETS: OnceLock<Value> = OnceLock::new();
+
+fn presets() -> &'static Value {
+    PRESETS.get_or_init(|| {
+        serde_json::from_str(include_str!("provider_presets.json")).unwrap_or_else(|_| json!({}))
+    })
+}
+
+fn preset(key: &str) -> Option<&'static Value> {
+    presets().get(key)
+}
+
+pub async fn list_providers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if tenant_role(pool, &tenant_id, user.id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return not_found();
+    }
+    match provider_rows(pool, &state, &tenant_id, user.id, None).await {
+        Ok(rows) => {
+            let mut providers = Vec::with_capacity(rows.len());
+            for row in rows {
+                providers.push(match provider_json(pool, &state, &row, user.id).await {
+                    Ok(value) => value,
+                    Err(error) => return database_error_message(error),
+                });
+            }
+            Json(providers).into_response()
+        }
+        Err(error) => database_error_message(error),
+    }
+}
+
+pub async fn create_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let role = match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let mut name = match required_text(&payload, "name", 120) {
+        Ok(name) => name,
+        Err(response) => return response,
+    };
+    let auth_mode = payload
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("tenant_secret");
+    if !["tenant_secret", "user_account", "platform_pool"].contains(&auth_mode) {
+        return validation_error("auth_mode", "Not a valid choice.");
+    }
+    let account_mode = auth_mode == "user_account";
+    if !account_mode && role != "owner" && role != "admin" {
+        return legacy_error(
+            "Tenant administrator permission required.",
+            StatusCode::FORBIDDEN,
+            "TENANT_ADMIN_REQUIRED",
+        );
+    }
+    let provider_type = match payload.get("provider_type").and_then(Value::as_str) {
+        Some("fake") => "fake",
+        Some("openai_compatible") => "openai_compatible",
+        Some(_) => return validation_error("provider_type", "Not a valid choice."),
+        None => return validation_error("provider_type", "This field is required."),
+    };
+    let preset_key = payload
+        .get("preset_key")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let base_url = payload
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let credential_ref = payload
+        .get("credential_ref")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if base_url.chars().count() > 500 {
+        return validation_error(
+            "base_url",
+            "Ensure this field has no more than 500 characters.",
+        );
+    }
+    if credential_ref.chars().count() > 200 {
+        return validation_error(
+            "credential_ref",
+            "Ensure this field has no more than 200 characters.",
+        );
+    }
+    let config = match payload.get("config") {
+        Some(Value::Object(config)) => config.clone(),
+        Some(_) => return validation_error("config", "Config must be a JSON object."),
+        None => Map::new(),
+    };
+    let mut final_type = provider_type;
+    let mut final_base = base_url.to_string();
+    let mut final_credential = credential_ref.to_string();
+    if account_mode {
+        let Some(platform) = preset(preset_key) else {
+            return validation_error("preset_key", "Unknown model platform preset.");
+        };
+        if final_base.is_empty() {
+            final_base = platform
+                .get("base_url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+        if !final_credential.is_empty() {
+            return validation_error(
+                "credential_ref",
+                "Account providers never store a tenant credential.",
+            );
+        }
+        if provider_type != "openai_compatible" {
+            return validation_error(
+                "provider_type",
+                "Account providers use the OpenAI-compatible transport.",
+            );
+        }
+        final_type = "openai_compatible";
+        let Some(url) = Url::parse(&final_base).ok() else {
+            return validation_error(
+                "base_url",
+                "Account providers call a public HTTPS platform endpoint.",
+            );
+        };
+        if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() {
+            return validation_error(
+                "base_url",
+                "Account providers call a public HTTPS platform endpoint.",
+            );
+        }
+        let expected = platform
+            .get("base_url")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if final_base.trim_end_matches('/') != expected.trim_end_matches('/') {
+            return validation_error(
+                "base_url",
+                &format!(
+                    "The {} preset is fixed at {}.",
+                    platform
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or(preset_key),
+                    expected
+                ),
+            );
+        }
+    } else {
+        if !preset_key.is_empty() {
+            return validation_error(
+                "preset_key",
+                "Only account-billed providers carry a platform preset.",
+            );
+        }
+        if contains_secret(&Value::Object(config.clone())) {
+            return validation_error(
+                "config",
+                "Secret material must be stored through credential_ref, not config.",
+            );
+        }
+        if final_type == "fake" {
+            if !final_base.is_empty() || !final_credential.is_empty() {
+                return detail_error(
+                    "Fake providers cannot contain a base URL or credential reference.",
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        } else {
+            let Some(url) = Url::parse(&final_base).ok() else {
+                return validation_error("base_url", "Enter a valid URL.");
+            };
+            let host = url.host_str().unwrap_or("").to_lowercase();
+            let remote = allowed_hosts("MODEL_PROVIDER_ALLOWED_HOSTS");
+            let local = allowed_hosts("LOCAL_MODEL_ALLOWED_HOSTS");
+            let local_http = url.scheme() == "http" && local.contains(&host);
+            let remote_https = url.scheme() == "https" && remote.contains(&host);
+            if host.is_empty() || !(local_http || remote_https) {
+                return validation_error(
+                    "base_url",
+                    "Use HTTPS with MODEL_PROVIDER_ALLOWED_HOSTS for remote providers, or HTTP with LOCAL_MODEL_ALLOWED_HOSTS for local model servers.",
+                );
+            }
+            let bad_port = remote_https && url.port().is_some() && url.port() != Some(443);
+            if !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || bad_port
+            {
+                return validation_error(
+                    "base_url",
+                    "Provider URL contains unsupported components.",
+                );
+            }
+            let credential_ok = env_reference(&final_credential);
+            if local_http && !final_credential.is_empty() && !credential_ok {
+                return validation_error(
+                    "credential_ref",
+                    "Use an environment reference such as env:LOCAL_MODEL_KEY.",
+                );
+            }
+            if remote_https && !credential_ok {
+                return validation_error(
+                    "credential_ref",
+                    "Remote providers require an env: credential reference.",
+                );
+            }
+        }
+    }
+    let existing = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_modelprovider WHERE CAST(tenant_id AS TEXT) = ? AND name = ?",
+    )
+    .bind(&tenant_id)
+    .bind(&name)
+    .fetch_one(pool)
+    .await;
+    if matches!(existing, Ok(value) if value > 0) {
+        if !account_mode {
+            return legacy_error(
+                "A model provider with this name already exists.",
+                StatusCode::CONFLICT,
+                "MODEL_PROVIDER_NAME_TAKEN",
+            );
+        }
+        let username =
+            sqlx::query_scalar::<_, String>("SELECT username FROM auth_user WHERE id = ?")
+                .bind(user.id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        let base = format!("{name} ({username})");
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        loop {
+            let taken = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM core_modelprovider WHERE CAST(tenant_id AS TEXT) = ? AND name = ?",
+            )
+            .bind(&tenant_id)
+            .bind(&candidate)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+            if taken == 0 {
+                break;
+            }
+            candidate = format!("{base} {suffix}");
+            suffix += 1;
+        }
+        name = candidate;
+    }
+    let provider_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return sqlx_error(error),
+    };
+    let insert = if postgres {
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, TRUE, '', ?::timestamptz, ?::timestamptz)"
+    } else {
+        "INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, \
+         preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', ?, ?)"
+    };
+    if let Err(error) = sqlx::query(insert)
+        .bind(&provider_id)
+        .bind(&tenant_id)
+        .bind(user.id)
+        .bind(&name)
+        .bind(final_type)
+        .bind(auth_mode)
+        .bind(preset_key)
+        .bind(&final_base)
+        .bind(&final_credential)
+        .bind(Value::Object(config).to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    if account_mode {
+        if let Err(error) =
+            seed_preset_models(&mut transaction, postgres, &provider_id, preset_key).await
+        {
+            let _ = transaction.rollback().await;
+            return database_error_message(error);
+        }
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "model.provider.created",
+            resource_type: "model_provider",
+            resource_id: &provider_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({"name": name, "auth_mode": auth_mode}),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    let rows = match provider_rows(pool, &state, &tenant_id, user.id, Some(&provider_id)).await {
+        Ok(rows) => rows,
+        Ok(rows) if rows.is_empty() => return not_found(),
+        Err(error) => return database_error_message(error),
+        _ => Vec::new(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return not_found();
+    };
+    match provider_json(pool, &state, &row, user.id).await {
+        Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
+        Err(error) => database_error_message(error),
+    }
+}
+
+pub async fn provider_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if tenant_role(pool, &tenant_id, user.id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return not_found();
+    }
+    let mut platforms = Vec::new();
+    if let Some(object) = presets().as_object() {
+        for (key, platform) in object {
+            platforms.push(json!({
+                "key": key,
+                "label": platform.get("label").and_then(Value::as_str).unwrap_or(key),
+                "base_url": platform.get("base_url").and_then(Value::as_str).unwrap_or(""),
+                "console_url": platform.get("console_url").and_then(Value::as_str).unwrap_or(""),
+                "models": platform.get("models").cloned().unwrap_or_else(|| json!([])),
+                "oauth": platform.get("oauth").map(Value::is_object).unwrap_or(false),
+                "platform_env": platform.get("platform_env").and_then(Value::as_str).unwrap_or(""),
+                "platform_configured": platform.get("platform_env").and_then(Value::as_str).map(|name| std::env::var(name).map(|value| !value.is_empty()).unwrap_or(false)).unwrap_or(false),
+            }));
+        }
+    }
+    Json(platforms).into_response()
+}
+
+pub async fn list_configs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, provider_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if tenant_role(pool, &tenant_id, user.id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return not_found();
+    }
+    if !visible_provider(pool, &tenant_id, &provider_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    match config_rows(pool, &state, &provider_id, None).await {
+        Ok(rows) => {
+            let mut configs = Vec::with_capacity(rows.len());
+            for row in &rows {
+                configs.push(config_json(row));
+            }
+            Json(configs).into_response()
+        }
+        Err(error) => database_error_message(error),
+    }
+}
+
+pub async fn create_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, provider_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let role = match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    if role != "owner" && role != "admin" {
+        return detail_error(
+            "Tenant administrator permission required.",
+            StatusCode::FORBIDDEN,
+        );
+    }
+    if !visible_provider(pool, &tenant_id, &provider_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let provider_tenant = sqlx::query_scalar::<_, String>(
+        "SELECT CAST(tenant_id AS TEXT) FROM core_modelprovider WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&provider_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if provider_tenant.as_deref() != Some(tenant_id.as_str()) {
+        return detail_error(
+            "Only tenant-owned providers can be modified by tenant admins.",
+            StatusCode::FORBIDDEN,
+        );
+    }
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let model_name = match required_text(&payload, "model_name", 160) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let display_name = match required_text(&payload, "display_name", 160) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let capabilities = match capabilities(&payload) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let context_window = match integer_field(&payload, "context_window", 32768, 1, i64::MAX) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let max_output_tokens =
+        match integer_field(&payload, "max_output_tokens", 4096, 1, context_window) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let input_cost = match cost_field(&payload, "input_cost_per_million") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let output_cost = match cost_field(&payload, "output_cost_per_million") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let fallback = match payload.get("fallback_model") {
+        Some(Value::Null) | None => None,
+        Some(Value::String(id)) => match uuid::Uuid::parse_str(id) {
+            Ok(_) => Some(id.clone()),
+            Err(_) => return validation_error("fallback_model", "Must be a valid UUID."),
+        },
+        Some(_) => return validation_error("fallback_model", "Must be a valid UUID."),
+    };
+    if let Some(fallback_id) = fallback.as_deref() {
+        if !fallback_usable(pool, &tenant_id, user.id, None, fallback_id)
+            .await
+            .unwrap_or(false)
+        {
+            return detail_error(
+                "The fallback must be an enabled visible chat model.",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    }
+    let latest = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(version), 0) FROM core_modelconfig \
+         WHERE CAST(provider_id AS TEXT) = ? AND model_name = ?",
+    )
+    .bind(&provider_id)
+    .bind(&model_name)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    let config_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return sqlx_error(error),
+    };
+    let insert = if postgres {
+        "INSERT INTO core_modelconfig (id, provider_id, model_name, display_name, capabilities, \
+         context_window, max_output_tokens, input_cost_per_million, output_cost_per_million, version, \
+         enabled, fallback_model_id, created_at) VALUES (?::uuid, ?::uuid, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?::uuid, ?::timestamptz)"
+    } else {
+        "INSERT INTO core_modelconfig (id, provider_id, model_name, display_name, capabilities, \
+         context_window, max_output_tokens, input_cost_per_million, output_cost_per_million, version, \
+         enabled, fallback_model_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    };
+    if let Err(error) = sqlx::query(insert)
+        .bind(&config_id)
+        .bind(&provider_id)
+        .bind(&model_name)
+        .bind(&display_name)
+        .bind(Value::Array(capabilities.clone()).to_string())
+        .bind(context_window)
+        .bind(max_output_tokens)
+        .bind(input_cost)
+        .bind(output_cost)
+        .bind(latest + 1)
+        .bind(if enabled { 1_i64 } else { 0_i64 })
+        .bind(fallback.as_deref())
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error.to_string());
+    }
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "model.config.created",
+            resource_type: "model_config",
+            resource_id: &config_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "version": latest + 1,
+            }),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error_message(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    match config_rows(pool, &state, &provider_id, Some(&config_id)).await {
+        Ok(rows) => match rows.first() {
+            Some(row) => (StatusCode::CREATED, Json(config_json(row))).into_response(),
+            None => not_found(),
+        },
+        Err(error) => database_error_message(error),
+    }
+}
+
+pub async fn update_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, config_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let role = match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(Some(role)) => role,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error_message(error),
+    };
+    if role != "owner" && role != "admin" {
+        return legacy_error(
+            "Tenant administrator permission required.",
+            StatusCode::FORBIDDEN,
+            "TENANT_ADMIN_REQUIRED",
+        );
+    }
+    let provider_id = visible_config_provider(pool, &tenant_id, &config_id, user.id)
+        .await
+        .ok()
+        .flatten();
+    let Some(provider_id) = provider_id else {
+        return not_found();
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let fallback = match payload.get("fallback_model") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(id)) => match uuid::Uuid::parse_str(id) {
+            Ok(_) => Some(Some(id.clone())),
+            Err(_) => return validation_error("fallback_model", "Must be a valid UUID."),
+        },
+        Some(_) => return validation_error("fallback_model", "Must be a valid UUID."),
+    };
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return sqlx_error(error),
+    };
+    if let Some(fallback) = fallback {
+        if let Some(fallback_id) = fallback.as_deref() {
+            if !fallback_usable(pool, &tenant_id, user.id, Some(&config_id), fallback_id)
+                .await
+                .unwrap_or(false)
+            {
+                let _ = transaction.rollback().await;
+                return detail_error(
+                    "The fallback must be an enabled chat model in this tenant's visible providers, and must not form a cycle.",
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        }
+        let postgres = is_postgres(&state);
+        let update = if postgres {
+            "UPDATE core_modelconfig SET fallback_model_id = ?::uuid WHERE CAST(id AS TEXT) = ?"
+        } else {
+            "UPDATE core_modelconfig SET fallback_model_id = ? WHERE CAST(id AS TEXT) = ?"
+        };
+        if let Err(error) = sqlx::query(update)
+            .bind(fallback.as_deref())
+            .bind(&config_id)
+            .execute(&mut *transaction)
+            .await
+        {
+            let _ = transaction.rollback().await;
+            return database_error_message(error.to_string());
+        }
+        if let Err(error) = record_event_in_transaction(
+            &mut transaction,
+            postgres,
+            &AuditEvent {
+                tenant_id: Some(&tenant_id),
+                project_id: None,
+                event_type: "model.config.routing.updated",
+                resource_type: "model_config",
+                resource_id: &config_id,
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: header(&headers, "x-request-id"),
+                remote_addr: None,
+                user_agent: header(&headers, "user-agent"),
+                metadata: json!({"fallback_model_id": fallback}),
+            },
+        )
+        .await
+        {
+            let _ = transaction.rollback().await;
+            return database_error_message(error);
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    match config_rows(pool, &state, &provider_id, Some(&config_id)).await {
+        Ok(rows) => match rows.first() {
+            Some(row) => Json(config_json(row)).into_response(),
+            None => not_found(),
+        },
+        Err(error) => database_error_message(error),
+    }
+}
+
+struct ProviderRow {
+    id: String,
+    name: String,
+    provider_type: String,
+    auth_mode: String,
+    preset_key: String,
+    base_url: String,
+    credential_ref: String,
+    enabled: bool,
+    created_at: Option<String>,
+}
+
+async fn provider_rows(
+    pool: &AnyPool,
+    state: &AppState,
+    tenant_id: &str,
+    user_id: i64,
+    provider_id: Option<&str>,
+) -> Result<Vec<ProviderRow>, String> {
+    let postgres = is_postgres(state);
+    let true_literal = if postgres { "TRUE" } else { "1" };
+    let created = if postgres {
+        "to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created"
+            .to_string()
+    } else {
+        "strftime('%Y-%m-%dT%H:%M:%fZ', created_at) AS created".to_string()
+    };
+    let base = format!(
+        "SELECT CAST(id AS TEXT) AS id, name, provider_type, auth_mode, preset_key, base_url, \
+         credential_ref, enabled, {created} FROM core_modelprovider \
+         WHERE (CAST(tenant_id AS TEXT) = ? OR tenant_id IS NULL) \
+           AND (auth_mode <> 'user_account' OR created_by_id = ?) \
+           AND enabled = {true_literal}"
+    );
+    let rows = if let Some(provider_id) = provider_id {
+        let sql = format!("{base} AND CAST(id AS TEXT) = ? ORDER BY name");
+        sqlx::query(&sql)
+            .bind(tenant_id)
+            .bind(user_id)
+            .bind(provider_id)
+            .fetch_all(pool)
+            .await
+    } else {
+        let sql = format!("{base} ORDER BY name");
+        sqlx::query(&sql)
+            .bind(tenant_id)
+            .bind(user_id)
+            .fetch_all(pool)
+            .await
+    }
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .iter()
+        .map(|row| ProviderRow {
+            id: row.try_get("id").unwrap_or_default(),
+            name: row.try_get("name").unwrap_or_default(),
+            provider_type: row.try_get("provider_type").unwrap_or_default(),
+            auth_mode: row.try_get("auth_mode").unwrap_or_default(),
+            preset_key: row.try_get("preset_key").unwrap_or_default(),
+            base_url: row.try_get("base_url").unwrap_or_default(),
+            credential_ref: row.try_get("credential_ref").unwrap_or_default(),
+            enabled: row
+                .try_get::<i64, _>("enabled")
+                .map(|value| value != 0)
+                .or_else(|_| row.try_get::<bool, _>("enabled"))
+                .unwrap_or(true),
+            created_at: row.try_get("created").ok(),
+        })
+        .collect())
+}
+
+async fn provider_json(
+    pool: &AnyPool,
+    state: &AppState,
+    row: &ProviderRow,
+    user_id: i64,
+) -> Result<Value, String> {
+    let account = if row.auth_mode == "user_account" {
+        account_payload(pool, state, &row.id, user_id).await?
+    } else {
+        Value::Null
+    };
+    Ok(json!({
+        "id": row.id,
+        "name": row.name,
+        "provider_type": row.provider_type,
+        "auth_mode": row.auth_mode,
+        "preset_key": row.preset_key,
+        "base_url": row.base_url,
+        "credential_configured": !row.credential_ref.is_empty(),
+        "account": account,
+        "enabled": row.enabled,
+        "created_at": row.created_at.as_deref().map(normalize_timestamp),
+    }))
+}
+
+async fn account_payload(
+    pool: &AnyPool,
+    state: &AppState,
+    provider_id: &str,
+    user_id: i64,
+) -> Result<Value, String> {
+    let postgres = is_postgres(state);
+    let linked_at = if postgres {
+        "to_char(linked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')".to_string()
+    } else {
+        "strftime('%Y-%m-%dT%H:%M:%fZ', linked_at)".to_string()
+    };
+    let sql = format!(
+        "SELECT account_label, credential_ref, {linked_at} AS linked_at \
+         FROM core_provideraccountlink WHERE user_id = ? AND CAST(provider_id AS TEXT) = ? \
+           AND status = 'linked' ORDER BY linked_at DESC LIMIT 1"
+    );
+    let link = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(provider_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut payload = match link {
+        None => json!({"linked": false}),
+        Some(row) => json!({
+            "linked": true,
+            "account_label": row.try_get::<String, _>("account_label").unwrap_or_default(),
+            "linked_at": row.try_get::<Option<String>, _>("linked_at").ok().flatten().as_deref().map(normalize_timestamp),
+            "credential_configured": !row.try_get::<String, _>("credential_ref").unwrap_or_default().is_empty(),
+        }),
+    };
+    let limit = free_daily_tokens();
+    let used = consumed_today(pool, postgres, provider_id, user_id).await?;
+    let remaining = std::cmp::max(0, limit - used);
+    payload["free_daily_tokens"] = json!(limit);
+    payload["used_today"] = json!(used);
+    payload["remaining_today"] = json!(remaining);
+    payload["exhausted"] = json!(used >= limit);
+    Ok(payload)
+}
+
+fn free_daily_tokens() -> i64 {
+    std::env::var("BYO_FREE_DAILY_TOKENS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .map(|value| value.max(0))
+        .unwrap_or(50_000)
+}
+
+async fn consumed_today(
+    pool: &AnyPool,
+    postgres: bool,
+    provider_id: &str,
+    user_id: i64,
+) -> Result<i64, String> {
+    let now = Utc::now();
+    let day_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let day_start = if postgres {
+        format!("{}", day_start.format("%Y-%m-%d %H:%M:%S"))
+    } else {
+        day_start.format("%Y-%m-%d %H:%M:%S").to_string()
+    };
+    let now_text = now.to_rfc3339_opts(SecondsFormat::Micros, false);
+    let sql = if postgres {
+        "SELECT COALESCE(SUM(CASE WHEN status = 'settled' THEN consumed_tokens \
+         WHEN status = 'reserved' AND expires_at > $1::timestamptz THEN reserved_tokens ELSE 0 END), 0) \
+         FROM core_provideraccountusage WHERE user_id = $2 AND CAST(provider_id AS TEXT) = $3 \
+           AND created_at >= $4::timestamptz"
+    } else {
+        "SELECT COALESCE(SUM(CASE WHEN status = 'settled' THEN consumed_tokens \
+         WHEN status = 'reserved' AND expires_at > ? THEN reserved_tokens ELSE 0 END), 0) \
+         FROM core_provideraccountusage WHERE user_id = ? AND CAST(provider_id AS TEXT) = ? \
+           AND created_at >= ?"
+    };
+    sqlx::query_scalar::<_, i64>(sql)
+        .bind(&now_text)
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(&day_start)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+struct ConfigRow {
+    id: String,
+    provider_id: String,
+    model_name: String,
+    display_name: String,
+    capabilities: Vec<String>,
+    context_window: i64,
+    max_output_tokens: i64,
+    input_cost: f64,
+    output_cost: f64,
+    version: i64,
+    enabled: bool,
+    fallback_model: Option<String>,
+    fallback_model_name: Option<String>,
+    created_at: Option<String>,
+}
+
+fn config_json(row: &ConfigRow) -> Value {
+    json!({
+        "id": row.id,
+        "provider_id": row.provider_id,
+        "model_name": row.model_name,
+        "display_name": row.display_name,
+        "capabilities": row.capabilities,
+        "context_window": row.context_window,
+        "max_output_tokens": row.max_output_tokens,
+        "input_cost_per_million": row.input_cost,
+        "output_cost_per_million": row.output_cost,
+        "version": row.version,
+        "enabled": row.enabled,
+        "fallback_model": row.fallback_model,
+        "fallback_model_name": row.fallback_model_name,
+        "created_at": row.created_at.as_deref().map(normalize_timestamp),
+    })
+}
+
+async fn config_rows(
+    pool: &AnyPool,
+    state: &AppState,
+    provider_id: &str,
+    config_id: Option<&str>,
+) -> Result<Vec<ConfigRow>, String> {
+    let postgres = is_postgres(state);
+    let true_literal = if postgres { "TRUE" } else { "1" };
+    let capabilities = if postgres {
+        "config.capabilities::text"
+    } else {
+        "config.capabilities"
+    };
+    let created = if postgres {
+        "to_char(config.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+            .to_string()
+    } else {
+        "strftime('%Y-%m-%dT%H:%M:%fZ', config.created_at)".to_string()
+    };
+    let base = format!(
+        "SELECT CAST(config.id AS TEXT) AS id, CAST(config.provider_id AS TEXT) AS provider_id, \
+         config.model_name, config.display_name, {capabilities} AS capabilities, \
+         config.context_window, config.max_output_tokens, config.input_cost_per_million, \
+         config.output_cost_per_million, config.version, config.enabled, \
+         CAST(config.fallback_model_id AS TEXT) AS fallback_model, fallback.display_name AS fallback_model_name, \
+         {created} AS created \
+         FROM core_modelconfig config LEFT JOIN core_modelconfig fallback ON fallback.id = config.fallback_model_id \
+         WHERE CAST(config.provider_id AS TEXT) = ? AND config.enabled = {true_literal}"
+    );
+    let rows = if let Some(config_id) = config_id {
+        let sql = format!("{base} AND CAST(config.id AS TEXT) = ?");
+        sqlx::query(&sql)
+            .bind(provider_id)
+            .bind(config_id)
+            .fetch_all(pool)
+            .await
+    } else {
+        let sql = format!("{base} ORDER BY config.display_name, config.version DESC");
+        sqlx::query(&sql).bind(provider_id).fetch_all(pool).await
+    }
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .iter()
+        .map(|row| ConfigRow {
+            id: row.try_get("id").unwrap_or_default(),
+            provider_id: row.try_get("provider_id").unwrap_or_default(),
+            model_name: row.try_get("model_name").unwrap_or_default(),
+            display_name: row.try_get("display_name").unwrap_or_default(),
+            capabilities: parse_string_array(
+                row.try_get::<Option<String>, _>("capabilities")
+                    .ok()
+                    .flatten(),
+            ),
+            context_window: row.try_get("context_window").unwrap_or_default(),
+            max_output_tokens: row.try_get("max_output_tokens").unwrap_or_default(),
+            input_cost: row.try_get("input_cost_per_million").unwrap_or_default(),
+            output_cost: row.try_get("output_cost_per_million").unwrap_or_default(),
+            version: row.try_get("version").unwrap_or(1),
+            enabled: row
+                .try_get::<i64, _>("enabled")
+                .map(|value| value != 0)
+                .or_else(|_| row.try_get::<bool, _>("enabled"))
+                .unwrap_or(true),
+            fallback_model: row.try_get("fallback_model").ok().flatten(),
+            fallback_model_name: row.try_get("fallback_model_name").ok().flatten(),
+            created_at: row.try_get("created").ok(),
+        })
+        .collect())
+}
+
+async fn visible_provider(
+    pool: &AnyPool,
+    tenant_id: &str,
+    provider_id: &str,
+    user_id: i64,
+) -> Result<bool, String> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_modelprovider \
+         WHERE CAST(id AS TEXT) = ? AND (CAST(tenant_id AS TEXT) = ? OR tenant_id IS NULL) \
+           AND (auth_mode <> 'user_account' OR created_by_id = ?) AND enabled = 1",
+    )
+    .bind(provider_id)
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(count > 0)
+}
+
+async fn visible_config_provider(
+    pool: &AnyPool,
+    tenant_id: &str,
+    config_id: &str,
+    user_id: i64,
+) -> Result<Option<String>, String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT CAST(provider.id AS TEXT) FROM core_modelconfig config \
+         JOIN core_modelprovider provider ON provider.id = config.provider_id \
+         WHERE CAST(config.id AS TEXT) = ? \
+           AND (CAST(provider.tenant_id AS TEXT) = ? OR provider.tenant_id IS NULL) \
+           AND (provider.auth_mode <> 'user_account' OR provider.created_by_id = ?)",
+    )
+    .bind(config_id)
+    .bind(tenant_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())
+}
+
+async fn fallback_usable(
+    pool: &AnyPool,
+    tenant_id: &str,
+    user_id: i64,
+    model_id: Option<&str>,
+    fallback_id: &str,
+) -> Result<bool, String> {
+    if model_id == Some(fallback_id) {
+        return Ok(false);
+    }
+    let visible = visible_config_provider(pool, tenant_id, fallback_id, user_id)
+        .await?
+        .is_some();
+    if !visible {
+        return Ok(false);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    if let Some(model_id) = model_id {
+        seen.insert(model_id.to_string());
+    }
+    let mut current = Some(fallback_id.to_string());
+    for _ in 0..3 {
+        let Some(id) = current else {
+            return Ok(true);
+        };
+        if !seen.insert(id.clone()) {
+            return Ok(false);
+        }
+        let row = sqlx::query(
+            "SELECT enabled, capabilities, CAST(fallback_model_id AS TEXT) AS fallback \
+             FROM core_modelconfig WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let enabled = row
+            .try_get::<i64, _>("enabled")
+            .map(|value| value != 0)
+            .or_else(|_| row.try_get::<bool, _>("enabled"))
+            .unwrap_or(false);
+        let capabilities = parse_string_array(
+            row.try_get::<Option<String>, _>("capabilities")
+                .ok()
+                .flatten(),
+        );
+        if !enabled || !capabilities.iter().any(|value| value == "chat") {
+            return Ok(false);
+        }
+        current = row.try_get("fallback").ok().flatten();
+    }
+    Ok(current.is_none())
+}
+
+async fn seed_preset_models(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Any>,
+    postgres: bool,
+    provider_id: &str,
+    preset_key: &str,
+) -> Result<(), String> {
+    let Some(platform) = preset(preset_key) else {
+        return Ok(());
+    };
+    let Some(models) = platform.get("models").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    for model in models {
+        let Some(model_name) = model.get("model_name").and_then(Value::as_str) else {
+            continue;
+        };
+        let display_name = model
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or(model_name);
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM core_modelconfig WHERE CAST(provider_id AS TEXT) = ? \
+             AND model_name = ? AND version = 1",
+        )
+        .bind(provider_id)
+        .bind(model_name)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+        if exists > 0 {
+            continue;
+        }
+        let sql = if postgres {
+            "INSERT INTO core_modelconfig (id, provider_id, model_name, display_name, capabilities, \
+             context_window, max_output_tokens, input_cost_per_million, output_cost_per_million, version, \
+             enabled, created_at) VALUES (?::uuid, ?::uuid, ?, ?, '[\"chat\", \"tools\"]'::jsonb, \
+             32768, 4096, 0, 0, 1, TRUE, ?::timestamptz)"
+        } else {
+            "INSERT INTO core_modelconfig (id, provider_id, model_name, display_name, capabilities, \
+             context_window, max_output_tokens, input_cost_per_million, output_cost_per_million, version, \
+             enabled, created_at) VALUES (?, ?, ?, ?, '[\"chat\", \"tools\"]', 32768, 4096, 0, 0, 1, 1, ?)"
+        };
+        sqlx::query(sql)
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(provider_id)
+            .bind(model_name)
+            .bind(display_name)
+            .bind(&now)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn parse_string_array(value: Option<String>) -> Vec<String> {
+    value
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn capabilities(payload: &Value) -> Result<Vec<Value>, Response> {
+    let allowed = ["chat", "json", "tools", "vision", "embeddings"];
+    let Some(value) = payload.get("capabilities") else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = value.as_array() else {
+        return Err(validation_error(
+            "capabilities",
+            "Expected a list of items.",
+        ));
+    };
+    if items
+        .iter()
+        .any(|item| !item.as_str().is_some_and(|name| allowed.contains(&name)))
+    {
+        return Err(validation_error(
+            "capabilities",
+            "Capabilities contain unsupported values.",
+        ));
+    }
+    Ok(items.clone())
+}
+
+fn integer_field(
+    payload: &Value,
+    field: &str,
+    default: i64,
+    min: i64,
+    max: i64,
+) -> Result<i64, Response> {
+    match payload.get(field) {
+        None => Ok(default),
+        Some(value) => {
+            let Some(number) = value.as_i64() else {
+                return Err(validation_error(field, "A valid integer is required."));
+            };
+            if number < min {
+                return Err(validation_error(field, "Must be greater than zero."));
+            }
+            if number > max {
+                return Err(validation_error(
+                    field,
+                    "Cannot exceed the model context window.",
+                ));
+            }
+            Ok(number)
+        }
+    }
+}
+
+fn cost_field(payload: &Value, field: &str) -> Result<f64, Response> {
+    match payload.get(field) {
+        None => Ok(0.0),
+        Some(value) => {
+            let Some(number) = value.as_f64() else {
+                return Err(validation_error(field, "A valid number is required."));
+            };
+            if number < 0.0 {
+                return Err(validation_error(field, "Cost cannot be negative."));
+            }
+            Ok(number)
+        }
+    }
+}
+
+fn contains_secret(value: &Value) -> bool {
+    const SECRET_NAMES: [&str; 9] = [
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "authorization",
+        "bearer_token",
+    ];
+    match value {
+        Value::Object(map) => map.iter().any(|(key, child)| {
+            SECRET_NAMES.contains(&key.to_lowercase().as_str()) || contains_secret(child)
+        }),
+        Value::Array(items) => items.iter().any(contains_secret),
+        _ => false,
+    }
+}
+
+fn allowed_hosts(variable: &str) -> HashSet<String> {
+    std::env::var(variable)
+        .unwrap_or_default()
+        .split(',')
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn env_reference(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("env:") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest.len() <= 128
+        && rest.chars().enumerate().all(|(index, character)| {
+            if index == 0 {
+                character.is_ascii_uppercase()
+            } else {
+                character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+            }
+        })
+}
+
+async fn require_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::context::SessionUser, Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return Err(unavailable());
+    };
+    match authenticate(pool, secret_key, headers).await {
+        Ok(user) => Ok(user),
+        Err(AuthError::Unauthenticated(message)) => {
+            Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": message}))).into_response())
+        }
+        Err(AuthError::Unavailable(message)) => {
+            tracing::error!(%message, "rust model api could not resolve the session");
+            Err(unavailable())
+        }
+    }
+}
+
+fn parse_object(body: &Bytes) -> Result<Value, Response> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(value) if value.is_object() => Ok(value),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "A valid JSON body is required."})),
+        )
+            .into_response()),
+    }
+}
+
+fn required_text(payload: &Value, field: &str, max: usize) -> Result<String, Response> {
+    match payload.get(field) {
+        Some(Value::String(value)) if !value.trim().is_empty() && value.chars().count() <= max => {
+            Ok(value.clone())
+        }
+        Some(Value::String(value)) if value.trim().is_empty() => {
+            Err(validation_error(field, "This field may not be blank."))
+        }
+        Some(Value::String(_)) => Err(validation_error(
+            field,
+            &format!("Ensure this field has no more than {max} characters."),
+        )),
+        Some(_) => Err(validation_error(field, "Not a valid string.")),
+        None => Err(validation_error(field, "This field is required.")),
+    }
+}
+
+fn validation_error(field: &str, message: &str) -> Response {
+    let details = json!({field: [message]});
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": {"code": "INVALID_REQUEST", "message": "Request could not be processed.", "details": details}})),
+    )
+        .into_response()
+}
+
+fn legacy_error(message: &str, status: StatusCode, code: &str) -> Response {
+    (
+        status,
+        Json(json!({"error": {"code": code, "message": message, "details": {}}})),
+    )
+        .into_response()
+}
+
+fn detail_error(message: &str, status: StatusCode) -> Response {
+    (status, Json(json!({"detail": message}))).into_response()
+}
+
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+}
+
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found."}))).into_response()
+}
+
+fn unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"detail": "The service is temporarily unavailable."})),
+    )
+        .into_response()
+}
+
+fn sqlx_error(error: sqlx::Error) -> Response {
+    tracing::error!(%error, "rust model api transaction failed");
+    unavailable()
+}
+
+fn database_error_message(message: String) -> Response {
+    tracing::error!(%message, "rust model api database operation failed");
+    unavailable()
+}

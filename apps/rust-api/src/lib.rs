@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod context;
 pub mod identity;
+pub mod model_api;
 pub mod native;
 pub mod proxy;
 pub mod tasks;
