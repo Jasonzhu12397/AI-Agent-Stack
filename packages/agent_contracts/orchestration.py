@@ -106,6 +106,7 @@ TARGET_ACTIONS: frozenset[str] = frozenset(
         "target.eph.cleanup",
         "target.worker.provision",
         "target.network.apply",
+        "cluster.scale",
     }
 )
 
