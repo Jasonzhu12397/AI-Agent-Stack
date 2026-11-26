@@ -95,7 +95,7 @@ async fn call(
 ) -> (StatusCode, Value) {
     let mut request = Request::builder().method(method).uri(uri);
     if let Some(key) = key {
-        request = request.header("cookie", format!("sessionid={key}"));
+        request = request.header("x-session-token", key);
     }
     let request = match body {
         Some(body) => request
