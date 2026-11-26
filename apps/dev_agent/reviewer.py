@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import difflib
+import io
 import re
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +71,13 @@ def _line_diff(path: str, source: str, line: int, replacement: str) -> str:
 
 def _is_mutable(node: ast.AST | None) -> bool:
     return isinstance(node, MUTABLE_DEFAULTS)
+
+
+def _is_test_path(path: str) -> bool:
+    candidate = Path(path)
+    return "tests" in candidate.parts or candidate.name.startswith("test_") or candidate.name.endswith(
+        "_test.py"
+    )
 
 
 def _network_import_aliases(tree: ast.AST) -> dict[str, str]:
@@ -233,7 +242,7 @@ def _review_tree(path: str, source: str) -> list[ReviewFinding]:
                 )
             if name == "assert" and False:  # pragma: no cover - assert is a statement
                 pass
-        elif isinstance(node, ast.Assert):
+        elif isinstance(node, ast.Assert) and not _is_test_path(path):
             findings.append(
                 ReviewFinding(
                     rule="assert-for-validation",
@@ -288,15 +297,15 @@ def _review_tree(path: str, source: str) -> list[ReviewFinding]:
                                 ),
                             )
                         )
-    for number, line in enumerate(lines, start=1):
-        if re.search(r"\b(TODO|FIXME|XXX)\b", line):
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT and re.search(r"\b(TODO|FIXME|XXX)\b", token.string):
             findings.append(
                 ReviewFinding(
                     rule="unfinished-marker",
                     severity="info",
                     path=path,
-                    line=number,
-                    message="Unfinished marker left in source.",
+                    line=token.start[0],
+                    message="Unfinished marker left in source comment.",
                     suggestion="Resolve it or link a tracked issue.",
                 )
             )
