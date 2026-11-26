@@ -127,14 +127,22 @@ pub async fn login(
         remote_addr: Some(&remote),
         user_agent: &user_agent,
     };
-    if let Err(error) = record_auth_event(pool, database_url(&state), audit).await {
-        tracing::error!(%error, "rust auth could not append the login audit event");
-        return unavailable("The login audit event could not be recorded.");
-    }
-
     if let Err(error) = persist_session(&state, pool, &session_key, &session_data).await {
         tracing::error!(%error, "rust auth could not persist the session");
         return unavailable("The session could not be created.");
+    }
+
+    if let Err(error) = record_auth_event(pool, database_url(&state), audit).await {
+        tracing::error!(%error, "rust auth could not append the login audit event");
+        if let Err(cleanup_error) =
+            sqlx::query("DELETE FROM django_session WHERE session_key = ?")
+                .bind(&session_key)
+                .execute(pool)
+                .await
+        {
+            tracing::error!(%cleanup_error, "rust auth could not clean up an unaudited login session");
+        }
+        return unavailable("The login audit event could not be recorded.");
     }
     let _ = sqlx::query("UPDATE auth_user SET last_login = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(user_id)
