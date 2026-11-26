@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS build
+FROM rust:1.92-bookworm AS build
 WORKDIR /src
 COPY apps/rust-api/Cargo.toml apps/rust-api/Cargo.lock* ./
 RUN mkdir src && printf 'fn main() {}\n' > src/main.rs && cargo build --release --locked || cargo build --release
