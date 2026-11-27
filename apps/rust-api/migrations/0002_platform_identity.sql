@@ -32,7 +32,7 @@ BEGIN
         PERFORM setval(pg_get_serial_sequence('platform_users', 'id'),
                        GREATEST(COALESCE((SELECT MAX(id) FROM platform_users), 1), 1), true);
     END IF;
-END $;
+END $$;
 
 CREATE TABLE IF NOT EXISTS platform_session_activity (
     session_key VARCHAR(128) PRIMARY KEY,
