@@ -254,6 +254,14 @@ pub fn router(state: AppState) -> Router {
                 get(crate::account_api::list_identities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/privacy/sessions/",
+                get(crate::account_api::list_privacy_sessions),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/privacy/sessions/{session_key}/revoke/",
+                axum::routing::post(crate::account_api::revoke_privacy_session),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/settings/{section}/",
                 get(crate::settings_api::tenant_get).patch(crate::settings_api::tenant_patch),
             )

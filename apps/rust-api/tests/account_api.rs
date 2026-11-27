@@ -22,6 +22,7 @@ async fn state() -> AppState {
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_useraccountprofile (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, display_name VARCHAR(160) NOT NULL, timezone VARCHAR(64) NOT NULL, locale VARCHAR(16) NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_sessionactivity (session_key VARCHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -35,6 +36,8 @@ async fn state() -> AppState {
         .bind(SESSION).bind(data.clone()).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity) VALUES (?, 1, datetime('now'), datetime('now'))")
         .bind(SESSION).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES ('membership-1', 'privacy-tenant', 1, 'owner', datetime('now'))")
+        .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('second-session', ?, datetime('now', '+2 days'))")
         .bind(&data).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity) VALUES ('second-session', 1, datetime('now'), datetime('now'))")
@@ -224,4 +227,58 @@ async fn reports_password_identity_state() {
     assert_eq!(body["methods"], json!(["password"]));
     assert_eq!(body["bound_identities"], json!(0));
     assert_eq!(body["providers"], json!([]));
+}
+
+async fn privacy_request(state: &AppState, method: &str, uri: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(
+            "cookie",
+            format!("sessionid={SESSION}; csrftoken=0123456789abcdef0123456789abcdef"),
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn lists_and_revokes_privacy_sessions() {
+    let state = state().await;
+    let base = "/api/v1/tenants/privacy-tenant/privacy/sessions/";
+    let (status, body) = privacy_request(&state, "GET", base).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["session_key_masked"].as_str().unwrap().len(), 16);
+    assert!(!body.to_string().contains("second-session"));
+
+    let revoke = format!("{base}second-session/revoke/");
+    let (status, body) = privacy_request(&state, "POST", &revoke).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["already_revoked"], false);
+    let (status, body) = privacy_request(&state, "GET", base).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
+
+    let (status, body) = privacy_request(&state, "POST", &revoke).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["already_revoked"], true);
+
+    let foreign = format!("{base}bob-session/revoke/");
+    let (status, body) = privacy_request(&state, "POST", &foreign).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "NOT_FOUND");
 }
