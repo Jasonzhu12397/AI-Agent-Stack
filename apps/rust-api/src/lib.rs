@@ -1,6 +1,7 @@
 pub mod account_api;
 pub mod agent_api;
 pub mod agent_runtime_api;
+pub mod agent_team_api;
 pub mod audit;
 pub mod audit_api;
 pub mod auth;
