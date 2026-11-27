@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use ai_agent_stack_api_edge::config::Config;
+use ai_agent_stack_api_edge::identity::encode_session_data;
 use ai_agent_stack_api_edge::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -23,7 +24,9 @@ async fn state() -> AppState {
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
         "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, node_type VARCHAR(24) NOT NULL, cluster_name VARCHAR(120) NOT NULL, agent_version VARCHAR(40) NOT NULL, capabilities TEXT NOT NULL, credential_hash VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, last_seen_at DATETIME, last_seen_ip VARCHAR(39), revoked_at DATETIME, client_certificate_revoked_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
-        "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(64) NOT NULL, payload TEXT NOT NULL, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, lease_token VARCHAR(32), lease_expires_at DATETIME, result TEXT, error TEXT, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, approved_plan_hash VARCHAR(64), approved_at DATETIME, started_at DATETIME, finished_at DATETIME, deployment_id TEXT, node_id TEXT, tenant_id TEXT, project_id TEXT, requested_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(64) NOT NULL, payload TEXT NOT NULL, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, lease_token VARCHAR(32), lease_expires_at DATETIME, result TEXT, error TEXT, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, plan_hash VARCHAR(64), approved_plan_hash VARCHAR(64), approved_at DATETIME, approved_by_id INTEGER, started_at DATETIME, finished_at DATETIME, deployment_id TEXT, node_id TEXT, tenant_id TEXT, project_id TEXT, requested_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -36,6 +39,12 @@ async fn state() -> AppState {
          .bind(COMMAND).bind(LEASE).bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('44444444444444444444444444444444', 'cluster.observe', '{}', 'queued', 'key-2', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
         .bind(NODE).execute(&pool).await.unwrap();
+    sqlx::query(r#"INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, plan_hash, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('55555555555555555555555555555555', 'cluster.scale', '{"replicas":3}', 'waiting_approval', 'key-3', '70a2d11a46c7f689657269bbad9587111b8f38c00cddca74b550a2d0b803a0c9', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 2)"#)
+        .bind(NODE).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES ('m1', 'tenant', 1, 'owner', datetime('now'))").execute(&pool).await.unwrap();
+    let session = encode_session_data(1, "password-hash", "secret").unwrap();
+    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('approver-session', ?, datetime('now', '+1 day'))")
+        .bind(session).execute(&pool).await.unwrap();
     pool.close().await;
     let config = Config::new(
         "127.0.0.1:0".into(),
@@ -157,4 +166,35 @@ async fn polls_queued_command_and_issues_lease() {
     assert_eq!(body["command"]["command_type"], "cluster.observe");
     assert_eq!(body["command"]["attempt"], 1);
     assert_eq!(body["command"]["lease_token"].as_str().unwrap().len(), 32);
+}
+
+#[tokio::test]
+async fn approves_waiting_command_with_matching_plan_hash() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/agent-commands/55555555555555555555555555555555/approve/")
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"plan_hash": "70a2d11a46c7f689657269bbad9587111b8f38c00cddca74b550a2d0b803a0c9"})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "queued");
+    assert_eq!(body["approved_at"].as_str().unwrap().len(), 19);
 }

@@ -83,6 +83,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::agent_runtime_api::renew_lease),
             )
             .route(
+                "/api/v1/agent-commands/{command_id}/approve/",
+                axum::routing::post(crate::agent_runtime_api::approve_command),
+            )
+            .route(
                 "/api/v1/agent-runtime/commands/poll/",
                 axum::routing::post(crate::agent_runtime_api::poll_commands),
             )

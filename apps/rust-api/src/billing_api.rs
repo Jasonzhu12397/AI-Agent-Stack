@@ -587,7 +587,11 @@ fn channel_slots(channel: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)
     }
 }
 
-async fn tenant_admin(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
+pub(crate) async fn tenant_admin(
+    pool: &AnyPool,
+    tenant_id: &str,
+    user_id: i64,
+) -> Result<bool, String> {
     let role = sqlx::query_scalar::<_, String>(
         "SELECT role FROM core_tenantmembership \
          WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ? LIMIT 1",
@@ -1599,7 +1603,11 @@ async fn env_slots(_channel: &str, names: &[&str]) -> bool {
     })
 }
 
-async fn tenant_member(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
+pub(crate) async fn tenant_member(
+    pool: &AnyPool,
+    tenant_id: &str,
+    user_id: i64,
+) -> Result<bool, String> {
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM core_tenantmembership \
          WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ?",
@@ -1632,7 +1640,7 @@ fn timestamp(state: &AppState, alias: &str, field: &str) -> String {
     }
 }
 
-async fn require_user(
+pub(crate) async fn require_user(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<crate::context::SessionUser, Response> {

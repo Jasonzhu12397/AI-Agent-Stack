@@ -707,3 +707,148 @@ fn payload_hash(command_type: &str, payload: &Value) -> String {
     let canonical = serde_json::to_string(&document).unwrap_or_else(|_| "{}".to_string());
     hex::encode(Sha256::digest(canonical.as_bytes()))
 }
+
+pub async fn approve_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(command_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let row = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, command_type, \
+         CAST(payload AS TEXT) AS payload_text, status, plan_hash, CAST(attempts AS INTEGER) AS attempts, \
+         CAST(result AS TEXT) AS result_text, CAST(error AS TEXT) AS error_text, \
+         CAST(requested_by_id AS BIGINT) AS requested_by, CAST(tenant_id AS TEXT) AS tenant_id, \
+         CAST(project_id AS TEXT) AS project_id, CAST(deployment_id AS TEXT) AS deployment_id \
+         FROM core_agentcommand WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&command_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return approval_error("Agent command not found.", 404),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return approval_error("Agent command not found.", 404);
+    }
+    match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return approval_error(
+                "Tenant owner or admin role is required to approve provisioning.",
+                403,
+            )
+        }
+        Err(error) => return database_error(error),
+    }
+    let requested_by: Option<i64> = row.try_get("requested_by").ok();
+    if requested_by == Some(user.id) {
+        return approval_error("A different administrator must approve this command.", 403);
+    }
+    let status: String = row.try_get("status").unwrap_or_default();
+    if status != "waiting_approval" {
+        return approval_error("Command is not waiting for approval.", 409);
+    }
+    let command_type: String = row.try_get("command_type").unwrap_or_default();
+    let payload_text: String = row
+        .try_get("payload_text")
+        .unwrap_or_else(|_| "{}".to_string());
+    let payload_value: Value = serde_json::from_str(&payload_text).unwrap_or_else(|_| json!({}));
+    let current_hash = payload_hash(&command_type, &payload_value);
+    let stored_hash: Option<String> = row.try_get("plan_hash").ok().flatten();
+    let supplied = payload
+        .get("plan_hash")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if supplied != current_hash || stored_hash.as_deref() != Some(current_hash.as_str()) {
+        return approval_error(
+            "Approval plan hash does not match the immutable command payload.",
+            409,
+        );
+    }
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let sql = format!(
+        "UPDATE core_agentcommand SET status = 'queued', approved_plan_hash = ?, approved_by_id = ?, \
+         approved_at = {now_expr}, updated_at = {now_expr} WHERE CAST(id AS TEXT) = ? AND status = 'waiting_approval'"
+    );
+    if let Err(error) = sqlx::query(&sql)
+        .bind(&current_hash)
+        .bind(user.id)
+        .bind(&command_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let metadata = json!({"command_type": command_type, "plan_hash": current_hash});
+    let project_id: Option<String> = row
+        .try_get("project_id")
+        .ok()
+        .flatten()
+        .filter(|value: &String| !value.is_empty());
+    if let Err(error) = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: project_id.as_deref(),
+            event_type: "agent.command.approved",
+            resource_type: "agent_command",
+            resource_id: command_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata,
+        },
+    )
+    .await
+    {
+        return database_error(error.to_string());
+    }
+    let attempts: i64 = row.try_get("attempts").unwrap_or(0);
+    Json(json!({
+        "id": command_id,
+        "node_id": row.try_get::<String, _>("node_id").unwrap_or_default(),
+        "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
+        "command_type": command_type,
+        "payload": payload_value,
+        "status": "queued",
+        "plan_hash": current_hash,
+        "approved_at": now,
+        "attempts": attempts,
+        "result": serde_json::from_str::<Value>(&row.try_get::<Option<String>, _>("result_text").ok().flatten().unwrap_or_default()).ok(),
+        "error": serde_json::from_str::<Value>(&row.try_get::<Option<String>, _>("error_text").ok().flatten().unwrap_or_default()).ok(),
+        "created_at": null,
+        "started_at": null,
+        "finished_at": null,
+    }))
+    .into_response()
+}
+
+fn approval_error(message: &str, status: u16) -> Response {
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST),
+        Json(json!({"detail": message})),
+    )
+        .into_response()
+}
