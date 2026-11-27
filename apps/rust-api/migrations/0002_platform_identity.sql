@@ -1,5 +1,5 @@
 -- Preserve existing account IDs and password hashes while transferring identity ownership to Rust.
-DO $
+DO $$
 DECLARE
     fk RECORD;
 BEGIN
