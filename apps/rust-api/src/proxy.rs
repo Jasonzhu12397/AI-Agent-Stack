@@ -326,7 +326,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/agent-chat/threads/{thread_id}/messages/",
-                get(crate::chat_api::list_messages),
+                get(crate::chat_api::list_messages).post(crate::chat_api::create_message),
             )
             .route(
                 "/api/v1/agent-chat/threads/{thread_id}/",

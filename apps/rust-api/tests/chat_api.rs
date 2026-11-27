@@ -26,12 +26,13 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
-        "CREATE TABLE core_modelprovider (id TEXT PRIMARY KEY, tenant_id TEXT, created_by_id INTEGER, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, provider_type VARCHAR(32) NOT NULL, auth_mode VARCHAR(32) NOT NULL, enabled BOOLEAN NOT NULL)",
+        "CREATE TABLE core_modelprovider (id TEXT PRIMARY KEY, tenant_id TEXT, created_by_id INTEGER, name VARCHAR(120) NOT NULL, provider_type VARCHAR(32) NOT NULL, auth_mode VARCHAR(32) NOT NULL, preset_key VARCHAR(40) NOT NULL, base_url VARCHAR(500) NOT NULL, credential_ref VARCHAR(200) NOT NULL, config TEXT NOT NULL, enabled BOOLEAN NOT NULL, deployment_region VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_modelconfig (id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, display_name VARCHAR(160) NOT NULL, model_name VARCHAR(160) NOT NULL, capabilities TEXT NOT NULL, context_window INTEGER NOT NULL, max_output_tokens INTEGER NOT NULL, enabled BOOLEAN NOT NULL, version INTEGER NOT NULL)",
         "CREATE TABLE core_agentchatthread (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, title VARCHAR(200) NOT NULL, model_config_id TEXT, archived BOOLEAN NOT NULL, execution_target VARCHAR(16) NOT NULL, effort VARCHAR(16) NOT NULL, goal VARCHAR(500) NOT NULL, plan_first BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentchatmessage (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role VARCHAR(16) NOT NULL, content TEXT NOT NULL, author_id INTEGER, context TEXT NOT NULL, usage TEXT NOT NULL, tool_calls TEXT NOT NULL, error_code VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentchatattachment (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, uploaded_by_id INTEGER NOT NULL, filename VARCHAR(255) NOT NULL, content_type VARCHAR(128) NOT NULL, size_bytes INTEGER NOT NULL, file VARCHAR(100) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugindefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, plugin_key VARCHAR(100) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, version VARCHAR(40) NOT NULL, protocol VARCHAR(32) NOT NULL, endpoint_url VARCHAR(500) NOT NULL, auth_required BOOLEAN NOT NULL, credential_ref VARCHAR(2048) NOT NULL, capabilities TEXT NOT NULL, manifest TEXT NOT NULL, input_schema TEXT NOT NULL, output_schema TEXT NOT NULL, timeout_seconds INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, enabled BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(120) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(64) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr TEXT, user_agent VARCHAR(256) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, granted_capabilities TEXT NOT NULL, credential_ref VARCHAR(200) NOT NULL, installed_by_id INTEGER NOT NULL, revision INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -46,7 +47,7 @@ async fn state() -> AppState {
         .bind(PROJECT).bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_projectmembership (id, project_id, user_id, role, created_at) VALUES (?, ?, 1, 'admin', datetime('now'))")
         .bind(uuid::Uuid::new_v4().to_string()).bind(PROJECT).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, slug, provider_type, auth_mode, enabled) VALUES ('provider-1', ?, 1, 'Local echo', 'local-echo', 'fake', 'platform_pool', 1)")
+    sqlx::query("INSERT INTO core_modelprovider (id, tenant_id, created_by_id, name, provider_type, auth_mode, preset_key, base_url, credential_ref, config, enabled, deployment_region, created_at, updated_at) VALUES ('provider-1', ?, 1, 'Local echo', 'fake', 'platform_pool', '', '', '', '{\"response\": \"Echo reply\"}', 1, '', datetime('now'), datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_modelconfig (id, provider_id, display_name, model_name, capabilities, context_window, max_output_tokens, enabled, version) VALUES ('bbbbbbbb-1111-1111-1111-111111111111', 'provider-1', 'Echo', 'demo-echo', '[\"chat\"]', 8192, 2048, 1, 1)")
         .execute(&pool).await.unwrap();
@@ -202,4 +203,70 @@ async fn lists_thread_messages_with_usage_and_context() {
     assert_eq!(items[1]["role"], "assistant");
     assert_eq!(items[1]["usage"]["output_tokens"], 3);
     assert_eq!(items[1]["author"], "alice");
+}
+
+#[tokio::test]
+async fn creates_user_and_assistant_messages_in_real_storage() {
+    let state = state().await;
+    let (status, thread) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/agent-chat/threads/"),
+        Some(json!({"title": "New conversation"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let thread_id = thread["id"].as_str().unwrap().to_string();
+    let uri = format!("/api/v1/agent-chat/threads/{thread_id}/messages/");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        Some(json!({"content": "  first line\nsecond line  ", "context": {"skills": ["s1"]}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["user"]["role"], "user");
+    assert_eq!(body["user"]["content"], "first line\nsecond line");
+    assert_eq!(body["user"]["author"], "alice");
+    assert_eq!(body["assistant"]["content"], "Echo reply");
+    assert_eq!(body["assistant"]["usage"]["provider"], "Local echo");
+    assert_eq!(body["assistant"]["usage"]["model"], "demo-echo");
+
+    let (status, body) = call(&state, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 2);
+    assert_eq!(body["items"][0]["context"]["skills"][0], "s1");
+
+    let pool = state.identity_pool.as_ref().unwrap();
+    let title = sqlx::query_scalar::<_, String>(
+        "SELECT title FROM core_agentchatthread WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&thread_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(title, "first line");
+
+    let (status, body) = call(&state, "POST", &uri, Some(json!({"content": "   "}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_MESSAGE");
+
+    let (status, _) = call(
+        &state,
+        "DELETE",
+        &format!("/api/v1/agent-chat/threads/{thread_id}/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let remaining = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_agentchatmessage WHERE CAST(thread_id AS TEXT) = ?",
+    )
+    .bind(&thread_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, 0);
 }

@@ -377,11 +377,25 @@ pub async fn delete_thread(
         Ok(_) => return not_found(),
         Err(error) => return database_error(error),
     };
-    if let Err(error) = sqlx::query("DELETE FROM core_agentchatthread WHERE CAST(id AS TEXT) = ?")
-        .bind(&record.id)
-        .execute(pool)
-        .await
-    {
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    for statement in [
+        "DELETE FROM core_agentchatmessage WHERE CAST(thread_id AS TEXT) = ?",
+        "DELETE FROM core_agentchatattachment WHERE CAST(thread_id AS TEXT) = ?",
+        "DELETE FROM core_agentchatthread WHERE CAST(id AS TEXT) = ?",
+    ] {
+        if let Err(error) = sqlx::query(statement)
+            .bind(&record.id)
+            .execute(&mut *transaction)
+            .await
+        {
+            let _ = transaction.rollback().await;
+            return database_error(error.to_string());
+        }
+    }
+    if let Err(error) = transaction.commit().await {
         return database_error(error.to_string());
     }
     StatusCode::NO_CONTENT.into_response()
@@ -415,6 +429,607 @@ pub async fn list_messages(
         Ok(items) => Json(json!({"items": items})).into_response(),
         Err(error) => database_error(error),
     }
+}
+
+struct ChatModel {
+    id: String,
+    provider_id: String,
+    provider_name: String,
+    model_name: String,
+    provider_type: String,
+    auth_mode: String,
+    base_url: String,
+    credential_ref: String,
+    config: Value,
+    max_output_tokens: i64,
+}
+
+async fn chat_model(
+    pool: &AnyPool,
+    state: &AppState,
+    tenant_id: &str,
+    user_id: i64,
+    model_id: &str,
+) -> Result<Option<ChatModel>, String> {
+    let true_literal = if is_postgres(state) { "TRUE" } else { "1" };
+    let config_text = if is_postgres(state) {
+        "CAST(provider.config AS TEXT)"
+    } else {
+        "provider.config"
+    };
+    let sql = format!(
+        "SELECT CAST(config.id AS TEXT) AS id, CAST(provider.id AS TEXT) AS provider_id, \
+         provider.name AS provider_name, config.model_name, provider.provider_type, \
+         provider.auth_mode, provider.base_url, provider.credential_ref, \
+         {config_text} AS config_text, config.max_output_tokens \
+         FROM core_modelconfig config JOIN core_modelprovider provider \
+           ON CAST(provider.id AS TEXT) = CAST(config.provider_id AS TEXT) \
+         WHERE CAST(config.id AS TEXT) = ? AND config.enabled = {true_literal} \
+           AND provider.enabled = {true_literal} \
+           AND (CAST(provider.tenant_id AS TEXT) = ? OR provider.tenant_id IS NULL) \
+           AND (provider.auth_mode <> 'user_account' OR provider.created_by_id = ?)"
+    );
+    let row = sqlx::query(&sql)
+        .bind(model_id)
+        .bind(tenant_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| ChatModel {
+        id: row.try_get("id").unwrap_or_default(),
+        provider_id: row.try_get("provider_id").unwrap_or_default(),
+        provider_name: row.try_get("provider_name").unwrap_or_default(),
+        model_name: row.try_get("model_name").unwrap_or_default(),
+        provider_type: row.try_get("provider_type").unwrap_or_default(),
+        auth_mode: row.try_get("auth_mode").unwrap_or_default(),
+        base_url: row.try_get("base_url").unwrap_or_default(),
+        credential_ref: row.try_get("credential_ref").unwrap_or_default(),
+        config: parse_json(
+            row.try_get::<Option<String>, _>("config_text")
+                .ok()
+                .flatten(),
+        )
+        .unwrap_or_else(|| json!({})),
+        max_output_tokens: row.try_get::<i64, _>("max_output_tokens").unwrap_or(4096),
+    }))
+}
+
+async fn chat_prompt(
+    pool: &AnyPool,
+    state: &AppState,
+    thread: &ThreadRecord,
+    context: &Value,
+) -> Result<String, String> {
+    let tenant_name = sqlx::query_scalar::<_, String>("SELECT name FROM core_tenant WHERE id = ?")
+        .bind(&thread.tenant_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let project_name =
+        sqlx::query_scalar::<_, String>("SELECT name FROM core_project WHERE id = ?")
+            .bind(&thread.project_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+    let _ = state;
+    let mut lines = vec![
+        "You are the Control Agent of AI-Agent-Stack, a multi-agent platform.".to_string(),
+        "You own the delivery chain (Cloud Control, Target and EPH agents), the agent marketplace,"
+            .to_string(),
+        "the skill catalog and the plugin installs. Answer as that operator.".to_string(),
+        format!("Tenant: {tenant_name}"),
+        format!("Project: {project_name}"),
+    ];
+    if !thread.goal.trim().is_empty() {
+        lines.push(format!("Goal of this task: {}", thread.goal.trim()));
+    }
+    if thread.plan_first {
+        lines.push("Answer with an execution plan first: numbered steps, the owner of each step, then the risks.".to_string());
+    }
+    if thread.execution_target == "local" {
+        lines.push("Execution environment: the local machine workspace. Do not assume a cloud cluster is reachable.".to_string());
+    } else {
+        lines.push("Execution environment: the cloud control plane. Work is dispatched to Cloud Control, EPH and Target agents.".to_string());
+    }
+    if thread.effort == "low" {
+        lines.push(
+            "Reasoning level: low. Be brief, prefer the shortest answer that is still correct."
+                .to_string(),
+        );
+    }
+    if let Some(skills) = context.get("skills").and_then(Value::as_array) {
+        if !skills.is_empty() {
+            lines.push(format!(
+                "Skills in scope for this conversation: {}",
+                skills
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    if let Some(files) = context.get("attachments").and_then(Value::as_array) {
+        if !files.is_empty() {
+            lines.push(format!(
+                "Files attached by the member: {}",
+                files
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    lines.push("Be concrete: name the resources, the commands and the next step.".to_string());
+    Ok(lines.join("\n"))
+}
+
+async fn resolve_credential(
+    pool: &AnyPool,
+    state: &AppState,
+    model: &ChatModel,
+    user_id: i64,
+) -> Result<String, Response> {
+    let mut reference = model.credential_ref.clone();
+    if model.auth_mode == "user_account" {
+        reference = match sqlx::query_scalar::<_, String>(
+            "SELECT credential_ref FROM core_provideraccountlink WHERE user_id = ? \
+             AND CAST(provider_id AS TEXT) = ? AND status = 'linked' ORDER BY linked_at DESC LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(&model.provider_id)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                return Err(legacy_error(
+                    "Link your own account on this provider before using it.",
+                    StatusCode::CONFLICT,
+                    "MODEL_CREDENTIAL_MISSING",
+                ))
+            }
+            Err(error) => return Err(database_error(error.to_string())),
+        };
+    }
+    if reference.is_empty() {
+        return Ok(String::new());
+    }
+    if let Some(name) = reference
+        .strip_prefix("env://")
+        .or_else(|| reference.strip_prefix("env:"))
+    {
+        return Ok(std::env::var(name).unwrap_or_default());
+    }
+    if let Some(secret_id) = reference.strip_prefix("member://") {
+        let sealed = sqlx::query_scalar::<_, String>(
+            "SELECT sealed_value FROM core_membercredentialsecret WHERE id = ? AND user_id = ?",
+        )
+        .bind(secret_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await;
+        let sealed = match sealed {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                return Err(legacy_error(
+                    "Your saved platform credential could not be read. Link the account again.",
+                    StatusCode::CONFLICT,
+                    "MODEL_CREDENTIAL_MISSING",
+                ))
+            }
+            Err(error) => return Err(database_error(error.to_string())),
+        };
+        let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+            return Err(unavailable());
+        };
+        return match crate::model_api::unseal_value(secret_key, &sealed, "member-credential-secret")
+        {
+            Ok(value) => Ok(value),
+            Err(_) => Err(legacy_error(
+                "Your saved platform credential could not be read. Link the account again.",
+                StatusCode::CONFLICT,
+                "MODEL_CREDENTIAL_MISSING",
+            )),
+        };
+    }
+    Ok(reference)
+}
+
+async fn complete_model(
+    state: &AppState,
+    model: &ChatModel,
+    credential: &str,
+    prompt: &str,
+    history: &[Value],
+) -> Result<(String, Value), Response> {
+    if model.provider_type == "fake" {
+        let content = model
+            .config
+            .get("response")
+            .and_then(Value::as_str)
+            .unwrap_or("Fake model response")
+            .to_string();
+        let usage = json!({
+            "content": content,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "provider": model.provider_name,
+            "model": model.model_name,
+            "latency_ms": 0,
+            "tool_calls": [],
+            "fallback_attempts": [],
+        });
+        return Ok((content, usage));
+    }
+    let mut messages = vec![json!({"role": "system", "content": prompt})];
+    for message in history {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        let content = message.get("content").and_then(Value::as_str).unwrap_or("");
+        if (role == "user" || role == "assistant") && !content.is_empty() {
+            messages.push(json!({"role": role, "content": content}));
+        }
+    }
+    let url = format!("{}/chat/completions", model.base_url.trim_end_matches('/'));
+    let mut request = state
+        .client
+        .post(&url)
+        .header("Accept", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&json!({
+            "model": model.model_name,
+            "messages": messages,
+            "max_tokens": model.max_output_tokens,
+        }));
+    if !credential.is_empty() {
+        request = request.header("Authorization", format!("Bearer {credential}"));
+    }
+    let started = std::time::Instant::now();
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(_) => {
+            return Err(legacy_error(
+                "The model provider could not be reached.",
+                StatusCode::BAD_GATEWAY,
+                "MODEL_PROVIDER_UNREACHABLE",
+            ))
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        return Err(legacy_error(
+            &format!(
+                "The model provider refused the request (HTTP {}).",
+                status.as_u16()
+            ),
+            StatusCode::BAD_GATEWAY,
+            "MODEL_PROVIDER_ERROR",
+        ));
+    }
+    let document: Value = match response.json().await {
+        Ok(document) => document,
+        Err(_) => {
+            return Err(legacy_error(
+                "The model provider returned an unreadable response.",
+                StatusCode::BAD_GATEWAY,
+                "MODEL_PROVIDER_ERROR",
+            ))
+        }
+    };
+    let content = document
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if content.is_empty() {
+        return Err(legacy_error(
+            "The model provider returned an empty response.",
+            StatusCode::BAD_GATEWAY,
+            "MODEL_PROVIDER_ERROR",
+        ));
+    }
+    let input_tokens = document
+        .pointer("/usage/prompt_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output_tokens = document
+        .pointer("/usage/completion_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let usage = json!({
+        "content": content,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "provider": model.provider_name,
+        "model": model.model_name,
+        "latency_ms": started.elapsed().as_millis() as u64,
+        "tool_calls": [],
+        "fallback_attempts": [],
+    });
+    Ok((content, usage))
+}
+
+fn new_message_json(
+    id: &str,
+    role: &str,
+    content: &str,
+    author: Option<&str>,
+    context: &Value,
+    usage: &Value,
+) -> Value {
+    json!({
+        "id": id,
+        "role": role,
+        "content": content,
+        "context": context,
+        "usage": usage,
+        "tool_calls": [],
+        "error_code": "",
+        "created_at": normalize_timestamp(&Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)),
+        "author": author,
+    })
+}
+
+pub async fn create_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(thread_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let thread = match thread_row(pool, &state, &thread_id).await {
+        Ok(Some(thread))
+            if tenant_member(pool, &thread.tenant_id, user.id)
+                .await
+                .unwrap_or(false) =>
+        {
+            thread
+        }
+        Ok(_) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let content = match payload.get("content").and_then(Value::as_str) {
+        Some(content) if !content.trim().is_empty() => content.trim().to_string(),
+        _ => {
+            return legacy_error(
+                "content must be a non-empty string.",
+                StatusCode::BAD_REQUEST,
+                "INVALID_MESSAGE",
+            )
+        }
+    };
+    if content.chars().count() > 20000 {
+        return legacy_error(
+            "content must be at most 20000 characters.",
+            StatusCode::BAD_REQUEST,
+            "INVALID_MESSAGE",
+        );
+    }
+    let context = match payload.get("context") {
+        None | Some(Value::Null) => json!({
+            "project_id": thread.project_id,
+            "skills": [],
+            "plugins": [],
+            "attachments": [],
+            "knowledge_documents": [],
+        }),
+        Some(Value::Object(map)) => Value::Object(map.clone()),
+        Some(_) => {
+            return legacy_error(
+                "context must be an object.",
+                StatusCode::BAD_REQUEST,
+                "INVALID_CONTEXT",
+            )
+        }
+    };
+    let requested_model = payload
+        .get("model_config_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let model_id = if let Some(model_id) = requested_model {
+        match visible_model(pool, &state, &thread.tenant_id, user.id, &model_id).await {
+            Ok(true) => {}
+            Ok(false) => return not_found(),
+            Err(error) => return database_error(error),
+        }
+        Some(model_id)
+    } else if let Some(model_id) = thread.model_config_id.clone() {
+        match visible_model(pool, &state, &thread.tenant_id, user.id, &model_id).await {
+            Ok(true) => Some(model_id),
+            Ok(false) => default_model(pool, &state, &thread.tenant_id, user.id)
+                .await
+                .ok()
+                .flatten(),
+            Err(error) => return database_error(error),
+        }
+    } else {
+        match default_model(pool, &state, &thread.tenant_id, user.id).await {
+            Ok(model) => model,
+            Err(error) => return database_error(error),
+        }
+    };
+    let Some(model_id) = model_id else {
+        return legacy_error(
+            "Configure a model provider for this tenant, or link your own account on a marketplace platform.",
+            StatusCode::CONFLICT,
+            "MODEL_NOT_CONFIGURED",
+        );
+    };
+    let model = match chat_model(pool, &state, &thread.tenant_id, user.id, &model_id).await {
+        Ok(Some(model)) => model,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let credential = match resolve_credential(pool, &state, &model, user.id).await {
+        Ok(credential) => credential,
+        Err(response) => return response,
+    };
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let user_message_id = uuid::Uuid::new_v4().to_string();
+    let mut title = thread.title.clone();
+    if title.is_empty() || title == "New conversation" {
+        title = content
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(60)
+            .collect();
+    }
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    if let Err(error) = sqlx::query(
+        "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
+         usage, tool_calls, error_code, created_at) VALUES (?, ?, 'user', ?, ?, ?, '{}', '[]', '', ?)",
+    )
+    .bind(&user_message_id)
+    .bind(&thread.id)
+    .bind(&content)
+    .bind(user.id)
+    .bind(serde_json::to_string(&context).unwrap_or_else(|_| "{}".to_string()))
+    .bind(&now)
+    .execute(&mut *transaction)
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE core_agentchatthread SET title = ?, model_config_id = ?, updated_at = ? \
+         WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&title)
+    .bind(&model.id)
+    .bind(&now)
+    .bind(&thread.id)
+    .execute(&mut *transaction)
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error.to_string());
+    }
+    let prompt = match chat_prompt(pool, &state, &thread, &context).await {
+        Ok(prompt) => prompt,
+        Err(error) => return database_error(error),
+    };
+    let history = match messages(pool, &state, &thread.id).await {
+        Ok(items) => items
+            .into_iter()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>(),
+        Err(error) => return database_error(error),
+    };
+    let (reply, usage) = match complete_model(&state, &model, &credential, &prompt, &history).await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    let assistant_id = uuid::Uuid::new_v4().to_string();
+    let assistant_now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let usage_text = serde_json::to_string(&usage).unwrap_or_else(|_| "{}".to_string());
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    if let Err(error) = sqlx::query(
+        "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
+         usage, tool_calls, error_code, created_at) VALUES (?, ?, 'assistant', ?, NULL, '{}', ?, '[]', '', ?)",
+    )
+    .bind(&assistant_id)
+    .bind(&thread.id)
+    .bind(&reply)
+    .bind(&usage_text)
+    .bind(&assistant_now)
+    .execute(&mut *transaction)
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) =
+        sqlx::query("UPDATE core_agentchatthread SET updated_at = ? WHERE CAST(id AS TEXT) = ?")
+            .bind(&assistant_now)
+            .bind(&thread.id)
+            .execute(&mut *transaction)
+            .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE core_agentchatthread SET model_config_id = ? WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&model.id)
+    .bind(&thread.id)
+    .execute(&mut *transaction)
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = crate::audit::record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &crate::audit::AuditEvent {
+            tenant_id: Some(&thread.tenant_id),
+            project_id: Some(&thread.project_id),
+            event_type: "agent.chat.message",
+            resource_type: "agent_chat_thread",
+            resource_id: &thread.id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(""),
+            remote_addr: None,
+            user_agent: headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(""),
+            metadata: json!({"thread_id": thread.id, "model_config_id": model.id}),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error.to_string());
+    }
+    let reply_context = json!({});
+    let response = json!({
+        "user": new_message_json(&user_message_id, "user", &content, Some(&user.username), &context, &json!({})),
+        "assistant": new_message_json(&assistant_id, "assistant", &reply, None, &reply_context, &usage),
+    });
+    (StatusCode::CREATED, Json(response)).into_response()
 }
 
 pub async fn chat_context(

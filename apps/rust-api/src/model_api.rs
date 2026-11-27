@@ -1489,7 +1489,7 @@ fn seal_value(secret_key: &str, plaintext: &str, scope: &str) -> Result<String, 
     Ok(base64::engine::general_purpose::URL_SAFE.encode(sealed))
 }
 
-fn unseal_value(secret_key: &str, sealed: &str, scope: &str) -> Result<String, String> {
+pub(crate) fn unseal_value(secret_key: &str, sealed: &str, scope: &str) -> Result<String, String> {
     let mut hasher = Sha256::new();
     hasher.update(format!("{scope}:{secret_key}").as_bytes());
     let key = hasher.finalize();
