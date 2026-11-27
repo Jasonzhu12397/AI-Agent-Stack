@@ -12,6 +12,21 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn for_test(
+        listen: String,
+        database_url: String,
+        platform_secret_key: Option<String>,
+    ) -> Self {
+        Self {
+            listen,
+            database_url: Some(database_url),
+            platform_secret_key,
+            secure_cookies: false,
+            external_scheme: "http".into(),
+            media_root: ".testdata/media".into(),
+        }
+    }
+
     pub fn from_env() -> Result<Self, String> {
         let listen = env::var("RUST_API_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
         let database_url = env::var("DATABASE_URL")
