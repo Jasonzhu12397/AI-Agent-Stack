@@ -1,5 +1,5 @@
 use ai_agent_stack_api::config::Config;
-use ai_agent_stack_api::identity::encode_session_data;
+use ai_agent_stack_api::identity::session_token_hash;
 use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -20,6 +20,12 @@ async fn state() -> AppState {
     for statement in [
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
+
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
+
+        "CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",
+
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
         "CREATE TABLE core_tenant (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
@@ -28,7 +34,7 @@ async fn state() -> AppState {
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
-    sqlx::query("INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
+    sqlx::query("INSERT INTO platform_users (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenant (id, name, slug, created_at) VALUES (?, 'Acme', 'acme', datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
@@ -40,9 +46,8 @@ async fn state() -> AppState {
         .bind(uuid::Uuid::new_v4().to_string()).bind(PROJECT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_cloudvminstance (id, tenant_id, project_id, created_by_id, provider_key, server_id, name, flavor_ref, image_ref, network_ids, status, ip_address, provider_metadata, created_at, updated_at) VALUES ('vm-1', ?, ?, 1, 'lab', 'srv-1', 'lab-vm', 'm1.small', 'ubuntu', '[\"net-1\"]', 'ACTIVE', '10.0.0.5', '{}', datetime('now'), datetime('now'))")
         .bind(TENANT).bind(PROJECT).execute(&pool).await.unwrap();
-    let data = encode_session_data(1, "password-hash", SECRET).unwrap();
-    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
-        .bind(SESSION).bind(data).execute(&pool).await.unwrap();
+    let data = session_token_hash(SESSION);
+    sqlx::query("INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, 1, datetime('now', '+1 day'), CURRENT_TIMESTAMP)").bind(&data).execute(&pool).await.unwrap();
     pool.close().await;
     let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
     AppState::new(config).unwrap()
@@ -152,4 +157,36 @@ async fn reports_incomplete_cloud_vm_provider_config() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["code"], "CLOUD_VM_PROVIDER_CONFIG_INVALID");
+}
+
+#[tokio::test]
+async fn rejects_cloud_vm_create_without_networks() {
+    let state = state().await;
+    let (status, body) = post_action(
+        &state,
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/cloud-vms/"),
+        serde_json::json!({
+            "provider": "lab",
+            "name": "web-1",
+            "flavor_ref": "m1.small",
+            "image_ref": "ubuntu-22.04",
+            "network_ids": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "CLOUD_VM_REQUEST_INVALID");
+}
+
+#[tokio::test]
+async fn reports_not_found_when_deleting_unknown_cloud_vm() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/cloud-vms/missing-vm/")
+        .header("x-session-token", SESSION)
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

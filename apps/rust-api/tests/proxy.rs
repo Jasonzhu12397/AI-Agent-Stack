@@ -1,8 +1,7 @@
 use std::net::SocketAddr;
-use std::time::Duration;
 
-use ai_agent_stack_api_edge::config::Config;
-use ai_agent_stack_api_edge::proxy::{router, AppState};
+use ai_agent_stack_api::config::Config;
+use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
@@ -65,15 +64,11 @@ async fn start_upstream() -> String {
 }
 
 fn state(upstream: String) -> AppState {
-    AppState::new(
-        Config::new(
-            "127.0.0.1:0".into(),
-            upstream,
-            Duration::from_secs(2),
-            Duration::from_secs(10),
-        )
-        .unwrap(),
-    )
+    AppState::new(Config::for_test(
+        "127.0.0.1:0".into(),
+        upstream,
+        Some("test-secret".into()),
+    ))
     .unwrap()
 }
 

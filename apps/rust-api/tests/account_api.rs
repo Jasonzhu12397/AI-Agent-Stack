@@ -179,7 +179,10 @@ async fn lists_and_revokes_only_owned_sessions() {
 
     let (status, body) = request(
         "POST",
-        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("second-session")),
+        &format!(
+            "/api/v1/users/me/sessions/{}/revoke/",
+            session_token_hash("second-session")
+        ),
         None,
     )
     .await;
@@ -188,7 +191,10 @@ async fn lists_and_revokes_only_owned_sessions() {
 
     let (status, body) = request(
         "POST",
-        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("second-session")),
+        &format!(
+            "/api/v1/users/me/sessions/{}/revoke/",
+            session_token_hash("second-session")
+        ),
         None,
     )
     .await;
@@ -198,7 +204,10 @@ async fn lists_and_revokes_only_owned_sessions() {
 
     let (status, body) = request(
         "POST",
-        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("bob-session")),
+        &format!(
+            "/api/v1/users/me/sessions/{}/revoke/",
+            session_token_hash("bob-session")
+        ),
         None,
     )
     .await;

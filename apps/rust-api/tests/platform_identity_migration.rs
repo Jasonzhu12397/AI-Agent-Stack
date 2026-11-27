@@ -58,9 +58,9 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
     sqlx::raw_sql(include_str!(
         "../migrations/0003_platform_user_profiles.sql"
     ))
-        .execute(&pool)
-        .await
-        .expect("create Rust-owned user profiles");
+    .execute(&pool)
+    .await
+    .expect("create Rust-owned user profiles");
 
     let account: (i64, String, String) = sqlx::query_as(
         "SELECT users.id, users.username, credentials.credential_hash

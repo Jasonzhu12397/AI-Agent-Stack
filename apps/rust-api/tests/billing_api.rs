@@ -1,5 +1,5 @@
 use ai_agent_stack_api::config::Config;
-use ai_agent_stack_api::identity::encode_session_data;
+use ai_agent_stack_api::identity::session_token_hash;
 use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -21,6 +21,12 @@ async fn state() -> AppState {
     for statement in [
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
+
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
+
+        "CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",
+
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
         "CREATE TABLE core_tenant (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_plan (id TEXT PRIMARY KEY, code VARCHAR(64) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, interval VARCHAR(16) NOT NULL, price_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, token_quota_daily INTEGER NOT NULL, token_quota_monthly INTEGER NOT NULL, token_quota_daily_expired INTEGER NOT NULL, token_quota_monthly_expired INTEGER NOT NULL, trial_days INTEGER NOT NULL, features TEXT NOT NULL, region_scope VARCHAR(16) NOT NULL, active BOOLEAN NOT NULL)",
@@ -35,7 +41,7 @@ async fn state() -> AppState {
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
-    sqlx::query("INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
+    sqlx::query("INSERT INTO platform_users (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_tenant (id, name, slug, created_at) VALUES (?, 'Acme', 'acme', datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
@@ -65,9 +71,8 @@ async fn state() -> AppState {
         .bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_entitlementgrant (id, tenant_id, order_id, period, tokens, reason, created_at) VALUES ('grant-1', ?, 'order-1', 'monthly', 500, 'purchase', datetime('now'))")
         .bind(TENANT).execute(&pool).await.unwrap();
-    let data = encode_session_data(1, "password-hash", SECRET).unwrap();
-    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
-        .bind(SESSION).bind(data).execute(&pool).await.unwrap();
+    let data = session_token_hash(SESSION);
+    sqlx::query("INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, 1, datetime('now', '+1 day'), CURRENT_TIMESTAMP)").bind(&data).execute(&pool).await.unwrap();
     pool.close().await;
     let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
     AppState::new(config).unwrap()

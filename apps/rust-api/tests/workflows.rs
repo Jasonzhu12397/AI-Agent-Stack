@@ -1,8 +1,6 @@
-use std::time::Duration;
-
-use ai_agent_stack_api_edge::config::Config;
-use ai_agent_stack_api_edge::identity::encode_session_data;
-use ai_agent_stack_api_edge::proxy::{router, AppState};
+use ai_agent_stack_api::config::Config;
+use ai_agent_stack_api::identity::session_token_hash;
+use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
@@ -24,6 +22,12 @@ async fn state() -> (AppState, String) {
     for statement in [
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
+
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
+
+        "CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",
+
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
         "CREATE TABLE core_tenant (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
@@ -36,7 +40,7 @@ async fn state() -> (AppState, String) {
     }
     for (id, username) in [(1, "alice"), (2, "carol")] {
         sqlx::query(
-            "INSERT INTO auth_user (id, username, email, is_staff, is_active) VALUES (?, ?, ?, 0, 1)",
+            "INSERT INTO platform_users (id, username, email, is_staff, is_active) VALUES (?, ?, ?, 0, 1)",
         )
         .bind(id)
         .bind(username)
@@ -77,24 +81,15 @@ async fn state() -> (AppState, String) {
             .unwrap();
     }
     for (session, user) in [(OWNER_SESSION, 1), (VIEWER_SESSION, 2)] {
-        let data = encode_session_data(user, "password-hash", SECRET).unwrap();
-        sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
-            .bind(session)
-            .bind(data)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let data = session_token_hash(session);
+        sqlx::query("INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, datetime('now', '+1 day'), CURRENT_TIMESTAMP)").bind(&data).bind(user).execute(&pool).await.unwrap();
     }
     pool.close().await;
-    let config = Config::new(
+    let config = Config::for_test(
         "127.0.0.1:0".into(),
         "http://127.0.0.1:1".into(),
-        Duration::from_secs(2),
-        Duration::from_secs(10),
-    )
-    .unwrap()
-    .with_native_identity(true, Some(url), Some(SECRET.to_string()))
-    .unwrap();
+        Some(SECRET.to_string()),
+    );
     (AppState::new(config).unwrap(), path.display().to_string())
 }
 

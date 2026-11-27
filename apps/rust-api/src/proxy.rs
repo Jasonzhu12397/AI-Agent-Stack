@@ -188,7 +188,8 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/cloud-vms/{vm_id}/",
-                axum::routing::get(crate::cloud_vm_api::get_instance),
+                axum::routing::get(crate::cloud_vm_api::get_instance)
+                    .delete(crate::cloud_vm_api::delete_instance),
             )
             .route(
                 "/api/v1/cloud-vms/{vm_id}/actions/",
@@ -196,7 +197,8 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cloud-vms/",
-                axum::routing::get(crate::cloud_vm_api::list_instances),
+                axum::routing::get(crate::cloud_vm_api::list_instances)
+                    .post(crate::cloud_vm_api::create_instance),
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/marketplace-agents/",
