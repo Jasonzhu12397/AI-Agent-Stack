@@ -691,10 +691,7 @@ async fn require_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
     };
-    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
-        return Err(unavailable());
-    };
-    match authenticate(pool, secret_key, headers).await {
+    match authenticate(pool, headers).await {
         Ok(user) => Ok(user),
         Err(AuthError::Unauthenticated(message)) => {
             Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": message}))).into_response())
