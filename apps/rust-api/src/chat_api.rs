@@ -1277,7 +1277,7 @@ async fn messages(pool: &AnyPool, state: &AppState, thread_id: &str) -> Result<V
         "SELECT CAST(message.id AS TEXT) AS id, message.role, message.content, \
          {context} AS context_text, {usage} AS usage_text, {tools} AS tools_text, \
          message.error_code, {created} AS created, author.username AS author \
-         FROM core_agentchatmessage message LEFT JOIN auth_user author \
+         FROM core_agentchatmessage message LEFT JOIN platform_users author \
            ON author.id = message.author_id \
          WHERE CAST(message.thread_id AS TEXT) = ? ORDER BY message.created_at"
     );
