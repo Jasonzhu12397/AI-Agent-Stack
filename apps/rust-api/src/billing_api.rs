@@ -2063,11 +2063,7 @@ pub async fn create_order(
             )
         })
         .unwrap_or(false);
-    let native_channel = if fake_enabled && channel == "wechat" {
-        true
-    } else {
-        false
-    };
+    let native_channel = fake_enabled && channel == "wechat";
     if !native_channel {
         return order_error(
             StatusCode::CONFLICT,
