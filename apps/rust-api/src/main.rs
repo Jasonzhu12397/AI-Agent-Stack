@@ -14,9 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
     let address: SocketAddr = config.listen.parse()?;
     let state = AppState::new(config)?;
-    if state.config.native_identity {
-        state.migrate_identity().await?;
-    }
+    state.migrate_identity().await?
     let listener = TcpListener::bind(address).await?;
 
     tracing::info!(%address, "rust api listening");
