@@ -5,6 +5,7 @@ use std::env;
 pub struct Config {
     pub listen: String,
     pub database_url: Option<String>,
+    pub platform_secret_key: Option<String>,
     pub secure_cookies: bool,
     pub external_scheme: String,
     pub media_root: String,
@@ -33,6 +34,7 @@ impl Config {
         Ok(Self {
             listen,
             database_url: Some(database_url),
+            platform_secret_key: env::var("PLATFORM_SECRET_KEY").ok(),
             secure_cookies,
             external_scheme,
             media_root: env::var("MEDIA_ROOT").unwrap_or_else(|_| ".devdata/media".into()),
