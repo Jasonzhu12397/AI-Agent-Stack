@@ -15,10 +15,7 @@ pub async fn current_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return service_unavailable("The Rust identity pool is not configured.");
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return service_unavailable("DJANGO_SECRET_KEY is not configured.");
-    };
-    match authenticate(pool, secret_key, &headers).await {
+    match authenticate(pool, &headers).await {
         Ok(user) => Json(json!({
             "id": user.id,
             "username": user.username,
