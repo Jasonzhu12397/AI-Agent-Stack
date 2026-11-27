@@ -752,7 +752,7 @@ pub async fn approve_command(
                 403,
             )
         }
-        Err(error) => return database_error(error),
+        Err(error) => return database_error(error.to_string()),
     }
     let requested_by: Option<i64> = row.try_get("requested_by").ok();
     if requested_by == Some(user.id) {
@@ -1015,7 +1015,7 @@ pub async fn create_agent_node(
     };
     let admin = match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
         Ok(value) => value,
-        Err(error) => return database_error(error),
+        Err(error) => return database_error(error.to_string()),
     };
     if let Err(response) = tenant_project_scope(pool, &tenant_id, &project_id, user.id).await {
         return response;
@@ -1906,4 +1906,208 @@ pub async fn collect_fleet_network(
         })),
     )
         .into_response()
+}
+
+/// `GET /api/v1/tenants/{tenant}/projects/{project}/fleet/machines/`
+pub async fn fleet_machines(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !matches!(
+        crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await,
+        Ok(true)
+    ) {
+        return error(StatusCode::NOT_FOUND, "Project not found.");
+    }
+    let limit: i64 = match params
+        .get("limit")
+        .map(|value| value.parse())
+        .unwrap_or(Ok(50))
+    {
+        Ok(value) if (1..=200).contains(&value) => value,
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "limit must be 1–200 and offset must be non-negative.",
+            )
+        }
+    };
+    let offset: i64 = match params
+        .get("offset")
+        .map(|value| value.parse())
+        .unwrap_or(Ok(0))
+    {
+        Ok(value) if value >= 0 => value,
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "limit must be 1–200 and offset must be non-negative.",
+            )
+        }
+    };
+    let node_type = params.get("node_type").cloned().unwrap_or_default();
+    if !node_type.is_empty()
+        && !["eph_node", "target_node", "target_cluster"].contains(&node_type.as_str())
+    {
+        return error(StatusCode::BAD_REQUEST, "Unknown node_type.");
+    }
+    let status = params.get("status").cloned().unwrap_or_default();
+    if !status.is_empty() && !["online", "offline", "revoked", "stale"].contains(&status.as_str()) {
+        return error(StatusCode::BAD_REQUEST, "Unknown machine status.");
+    }
+    let search = params.get("search").cloned().unwrap_or_default();
+    let postgres = is_postgres(&state);
+    let stale = if postgres {
+        "node.last_seen_at IS NULL OR node.last_seen_at < now() - interval '60 seconds'".to_string()
+    } else {
+        "node.last_seen_at IS NULL OR node.last_seen_at < datetime('now', '-60 seconds')"
+            .to_string()
+    };
+    let observed =
+        format!("CASE WHEN node.status = 'online' AND ({stale}) THEN 'stale' ELSE node.status END");
+    let mut conditions = vec![
+        "CAST(node.tenant_id AS TEXT) = ?".to_string(),
+        "CAST(node.project_id AS TEXT) = ?".to_string(),
+    ];
+    if !node_type.is_empty() {
+        conditions.push("node.node_type = ?".to_string());
+    }
+    if !status.is_empty() {
+        if status == "stale" {
+            conditions.push(format!("node.status = 'online' AND ({stale})"));
+        } else {
+            conditions.push("node.status = ?".to_string());
+        }
+    }
+    if !search.is_empty() {
+        conditions.push("(LOWER(node.name) LIKE '%' || LOWER(?) || '%' OR LOWER(node.cluster_name) LIKE '%' || LOWER(?) || '%' OR LOWER(node.agent_version) LIKE '%' || LOWER(?) || '%')".to_string());
+    }
+    let where_clause = conditions.join(" AND ");
+    let count_sql =
+        format!("SELECT COUNT(*) AS total FROM core_agentnode node WHERE {where_clause}");
+    let machine_json = if postgres {
+        "CAST(machine.hardware_inventory AS TEXT)"
+    } else {
+        "machine.hardware_inventory"
+    };
+    let sql = format!(
+        "SELECT CAST(node.id AS TEXT) AS id, CAST(node.tenant_id AS TEXT) AS tenant_id, \
+         CAST(node.project_id AS TEXT) AS project_id, node.name, node.node_type, node.cluster_name, \
+         node.agent_version, node.labels, CAST(node.status AS TEXT) AS status, {observed} AS observed_status, \
+         strftime('%Y-%m-%d %H:%M:%S', node.last_seen_at) AS last_seen, node.last_seen_ip, \
+         CAST(machine.id AS TEXT) AS machine_id, machine.system_uuid, machine.identity_status, \
+         machine.identity_fingerprint, machine.identity_conflicts, machine.inventory_source, \
+         machine.inventory_revision, machine.lifecycle_state, machine.bmc_endpoint, \
+         machine.bmc_credential_ref, machine.bmh_name, {machine_json} AS hardware_inventory \
+         FROM core_agentnode node LEFT JOIN core_agentmachine machine \
+         ON CAST(machine.agent_node_id AS TEXT) = CAST(node.id AS TEXT) \
+         WHERE {where_clause} ORDER BY node.name, CAST(node.id AS TEXT) LIMIT ? OFFSET ?"
+    );
+    let mut count_query = sqlx::query(&count_sql).bind(&tenant_id).bind(&project_id);
+    let mut list_query = sqlx::query(&sql).bind(&tenant_id).bind(&project_id);
+    for value in [&node_type, &search] {
+        if value == &node_type && node_type.is_empty() {
+            continue;
+        }
+        if value == &search && search.is_empty() {
+            continue;
+        }
+        if value == &search {
+            count_query = count_query.bind(value).bind(value).bind(value);
+            list_query = list_query.bind(value).bind(value).bind(value);
+        } else {
+            count_query = count_query.bind(value);
+            list_query = list_query.bind(value);
+        }
+    }
+    if !status.is_empty() && status != "stale" {
+        count_query = count_query.bind(&status);
+        list_query = list_query.bind(&status);
+    }
+    let total = match count_query.fetch_one(pool).await {
+        Ok(row) => row.try_get::<i64, _>("total").unwrap_or(0),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let rows = match list_query.bind(limit).bind(offset).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let results: Vec<Value> = rows.iter().map(|row| {
+        let labels: Value = row.try_get::<String, _>("labels").ok()
+            .and_then(|value| serde_json::from_str(&value).ok()).unwrap_or_else(|| json!({}));
+        let hardware: Value = row.try_get::<Option<String>, _>("hardware_inventory").ok().flatten()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_else(|| labels.get("hardware_inventory").cloned().unwrap_or_else(|| json!({})));
+        let conflicts: Value = row.try_get::<Option<String>, _>("identity_conflicts").ok().flatten()
+            .and_then(|value| serde_json::from_str(&value).ok()).unwrap_or_else(|| json!([]));
+        let lifecycle = row.try_get::<Option<String>, _>("lifecycle_state").ok().flatten();
+        let machine_id = row.try_get::<Option<String>, _>("machine_id").ok().flatten();
+        let bmc_endpoint = row.try_get::<Option<String>, _>("bmc_endpoint").ok().flatten().unwrap_or_default();
+        let bmc_ref = row.try_get::<Option<String>, _>("bmc_credential_ref").ok().flatten().unwrap_or_default();
+        json!({
+            "id": row.try_get::<String, _>("id").unwrap_or_default(),
+            "tenant_id": row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+            "project_id": row.try_get::<String, _>("project_id").unwrap_or_default(),
+            "name": row.try_get::<String, _>("name").unwrap_or_default(),
+            "node_type": row.try_get::<String, _>("node_type").unwrap_or_default(),
+            "cluster_name": row.try_get::<String, _>("cluster_name").unwrap_or_default(),
+            "agent_version": row.try_get::<String, _>("agent_version").unwrap_or_default(),
+            "labels": labels,
+            "status": row.try_get::<String, _>("status").unwrap_or_default(),
+            "observed_status": row.try_get::<String, _>("observed_status").unwrap_or_default(),
+            "last_seen_at": row.try_get::<Option<String>, _>("last_seen").ok().flatten(),
+            "last_seen_ip": row.try_get::<Option<String>, _>("last_seen_ip").ok().flatten(),
+            "identity": {
+                "agent_node_id": row.try_get::<String, _>("id").unwrap_or_default(),
+                "machine_id": machine_id,
+                "name": row.try_get::<String, _>("name").unwrap_or_default(),
+                "cluster_name": row.try_get::<String, _>("cluster_name").unwrap_or_default(),
+                "system_uuid": row.try_get::<Option<String>, _>("system_uuid").ok().flatten().unwrap_or_default(),
+                "identity_status": row.try_get::<Option<String>, _>("identity_status").ok().flatten().unwrap_or_else(|| "unverified".to_string()),
+                "identity_fingerprint": row.try_get::<Option<String>, _>("identity_fingerprint").ok().flatten(),
+                "identity_conflicts": conflicts,
+            },
+            "hardware_inventory": hardware,
+            "inventory_source": row.try_get::<Option<String>, _>("inventory_source").ok().flatten().unwrap_or_else(|| "legacy_agent_label".to_string()),
+            "observed_at": row.try_get::<Option<String>, _>("last_seen").ok().flatten(),
+            "machine_id": machine_id,
+            "lifecycle_state": lifecycle,
+            "lifecycle_targets": lifecycle.map(|value| lifecycle_targets(&value)).unwrap_or_default(),
+            "bmc_configured": !bmc_endpoint.is_empty() && !bmc_ref.is_empty(),
+            "bmc_host": bmc_endpoint,
+            "bmh_name": row.try_get::<Option<String>, _>("bmh_name").ok().flatten().unwrap_or_default(),
+            "inventory_revision": row.try_get::<i64, _>("inventory_revision").unwrap_or(0),
+        })
+    }).collect();
+    Json(json!({
+        "count": total,
+        "limit": limit,
+        "offset": offset,
+        "results": results,
+        "capabilities": {
+            "hardware_inventory": "agent_reported_when_available",
+            "stable_hardware_identity": "not_yet_attested",
+        },
+    }))
+    .into_response()
+}
+
+fn lifecycle_targets(state: &str) -> Vec<Value> {
+    let targets: &[&str] = match state {
+        "discovered" => &["identity_review"],
+        "identity_review" => &["commissioned", "discovered"],
+        "commissioned" => &["retired"],
+        "retired" => &["discovered"],
+        _ => &[],
+    };
+    targets.iter().map(|value| json!(value)).collect()
 }

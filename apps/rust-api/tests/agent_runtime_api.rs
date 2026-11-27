@@ -28,6 +28,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, agent_node_id TEXT NOT NULL, vendor VARCHAR(256) NOT NULL, product_name VARCHAR(256) NOT NULL, system_uuid VARCHAR(128) NOT NULL, identity_material TEXT NOT NULL, identity_fingerprint VARCHAR(64) NOT NULL, identity_status VARCHAR(16) NOT NULL, identity_conflicts TEXT NOT NULL, hardware_inventory TEXT NOT NULL, inventory_source VARCHAR(48) NOT NULL, inventory_revision INTEGER NOT NULL, observed_at DATETIME, bmc_credential_ref VARCHAR(160) NOT NULL, bmc_endpoint VARCHAR(500) NOT NULL, bmc_trust_bundle_ref VARCHAR(160) NOT NULL, bmc_tls_verify BOOLEAN NOT NULL, bmc_configured_at DATETIME, bmc_identity_evidence TEXT NOT NULL, bmh_name VARCHAR(253) NOT NULL, capi_machine_name VARCHAR(253) NOT NULL, kubernetes_node_name VARCHAR(253) NOT NULL, lifecycle_state VARCHAR(32) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(64) NOT NULL, payload TEXT NOT NULL, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, lease_token VARCHAR(32), lease_expires_at DATETIME, result TEXT, error TEXT, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, plan_hash VARCHAR(64), approved_plan_hash VARCHAR(64), approved_at DATETIME, approved_by_id INTEGER, started_at DATETIME, finished_at DATETIME, deployment_id TEXT, node_id TEXT, tenant_id TEXT, project_id TEXT, requested_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -37,6 +38,8 @@ async fn state() -> AppState {
     let hash = hex::encode(Sha256::digest(TOKEN.as_bytes()));
     sqlx::query("INSERT INTO core_agentnode (id, name, node_type, cluster_name, agent_version, capabilities, credential_hash, status, tenant_id, project_id, created_at, updated_at) VALUES (?, 'node-a', 'target_cluster', 'lab', '1.0.0', '[\"exec\"]', ?, 'online', 'tenant', 'project', datetime('now'), datetime('now'))")
         .bind(NODE).bind(hash).execute(&pool).await.unwrap();
+    sqlx::query(r#"INSERT INTO core_agentmachine (id, tenant_id, project_id, agent_node_id, vendor, product_name, system_uuid, identity_material, identity_fingerprint, identity_status, identity_conflicts, hardware_inventory, inventory_source, inventory_revision, bmc_credential_ref, bmc_endpoint, bmc_trust_bundle_ref, bmc_tls_verify, bmc_identity_evidence, bmh_name, capi_machine_name, kubernetes_node_name, lifecycle_state, created_at, updated_at) VALUES ('machine-1', 'tenant', 'project', ?, 'Dell', 'R750', 'uuid-1', '{}', '', 'verified', '[]', '{"cpu": 2}', 'agent_report', 3, 'bmc-cred', 'https://bmc.example.com', '', 1, '{}', 'bmh-1', '', '', 'commissioned', datetime('now'), datetime('now'))"#)
+        .bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, lease_token, lease_expires_at, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES (?, 'cluster.scale', '{}', 'running', 'key-1', ?, datetime('now', '+5 minutes'), 1, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
          .bind(COMMAND).bind(LEASE).bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('44444444444444444444444444444444', 'cluster.observe', '{}', 'queued', 'key-2', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
@@ -448,4 +451,30 @@ async fn queues_fleet_network_collection_idempotently() {
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     assert_eq!(body["queued_count"], 0);
     assert_eq!(body["skipped_count"], 1);
+}
+
+#[tokio::test]
+async fn lists_fleet_machines_with_identity_and_lifecycle() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/tenants/tenant/projects/project/fleet/machines/?limit=10")
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["results"][0]["machine_id"], "machine-1");
+    assert_eq!(body["results"][0]["identity"]["system_uuid"], "uuid-1");
+    assert_eq!(body["results"][0]["lifecycle_targets"][0], "retired");
+    assert_eq!(body["results"][0]["bmc_configured"], true);
 }
