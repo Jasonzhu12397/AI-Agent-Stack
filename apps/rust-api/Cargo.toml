@@ -1,9 +1,9 @@
 [package]
-name = "ai-agent-stack-api-edge"
+name = "ai-agent-stack-api"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Axum edge API for AI Agent Stack"
+description = "Rust Axum API for AI Agent Stack"
 
 [dependencies]
 aes-gcm = "0.10"
