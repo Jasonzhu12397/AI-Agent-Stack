@@ -91,7 +91,7 @@ pub async fn create_endpoint(
     if !url.starts_with("https://") {
         return invalid_endpoint("webhook_url must be an https URL.");
     }
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     let sealed_url = match seal(secret_key, url, SCOPE) {
@@ -188,7 +188,7 @@ pub async fn update_endpoint(
     {
         statements.push(("name", FieldValue::Text(truncate(name, 120))));
     }
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     if let Some(url) = payload
@@ -287,7 +287,7 @@ pub async fn test_endpoint(
     let Some(row) = endpoint_secret_row(pool, &tenant, &id).await else {
         return not_found();
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     let url = match unseal(secret_key, &row.0, SCOPE) {
@@ -605,7 +605,7 @@ async fn require_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return Err(unavailable());
     };
     match authenticate(pool, secret_key, headers).await {
