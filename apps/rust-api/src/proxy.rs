@@ -111,6 +111,18 @@ pub fn router(state: AppState) -> Router {
                     .patch(crate::agent_team_api::team_detail),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/archive-items/",
+                axum::routing::get(crate::archive_api::list_archive_items),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/archive-items/{item_type}/{item_id}/restore/",
+                axum::routing::post(crate::archive_api::restore_archive_item),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/archive-items/{item_type}/{item_id}/",
+                axum::routing::delete(crate::archive_api::purge_archive_item),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cloud-vms/providers/",
                 axum::routing::get(crate::cloud_vm_api::list_providers),
             )
