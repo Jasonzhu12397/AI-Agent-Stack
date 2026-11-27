@@ -22,6 +22,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugin (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, plugin_key VARCHAR(64) NOT NULL)",
         "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, granted_capabilities TEXT NOT NULL, credential_ref VARCHAR(200) NOT NULL, installed_by_id INTEGER NOT NULL, revision INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_deletionrequest (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT, scope TEXT NOT NULL, status VARCHAR(16) NOT NULL, requested_by_id INTEGER NOT NULL, idempotency_key VARCHAR(128) NOT NULL, audit_ref VARCHAR(64) NOT NULL, executed_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -74,4 +75,48 @@ async fn lists_privacy_grants() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["connector_slug"], "github");
     assert_eq!(results[0]["scopes"][0], "repo:read");
+}
+
+#[tokio::test]
+async fn creates_and_lists_deletion_requests() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/tenants/tenant/privacy/deletion-requests/")
+        .header(
+            "cookie",
+            "sessionid=privacy-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({"scope": "exports", "confirm": true, "idempotency_key": "key-1"})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["scope"], "exports");
+    assert_eq!(body["status"], "requested");
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/tenants/tenant/privacy/deletion-requests/")
+        .header("cookie", "sessionid=privacy-session")
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
 }
