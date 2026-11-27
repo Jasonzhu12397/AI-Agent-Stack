@@ -410,3 +410,42 @@ async fn binds_and_revokes_client_certificate() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["client_certificate"]["status"], "revoked");
 }
+
+async fn collect_network(state: &AppState) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/tenants/tenant/projects/project/fleet/network/collect/")
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("idempotency-key", "collect-1")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn queues_fleet_network_collection_idempotently() {
+    let state = state().await;
+    let (status, body) = collect_network(&state).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["queued_count"], 1);
+    let (status, body) = collect_network(&state).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["queued_count"], 0);
+    assert_eq!(body["skipped_count"], 1);
+}

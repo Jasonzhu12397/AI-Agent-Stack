@@ -1753,3 +1753,157 @@ pub async fn bound_client_certificate(
         Err(value) => database_error(value.to_string()),
     }
 }
+
+pub async fn collect_fleet_network(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return approval_error("Not found.", 404);
+    }
+    let admin = crate::billing_api::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false);
+    let editor: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM core_projectmembership WHERE CAST(project_id AS TEXT) = ? AND user_id = ? LIMIT 1",
+    )
+    .bind(&project_id)
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let can_edit = admin || matches!(editor.as_deref(), Some("admin" | "editor"));
+    if !can_edit {
+        return approval_error("Project editor permission required.", 403);
+    }
+    let idempotency = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if idempotency.is_empty() || idempotency.chars().count() > 96 {
+        return approval_error("A valid Idempotency-Key header is required.", 400);
+    }
+    let requested: Option<Vec<String>> = match payload.get("node_ids") {
+        None => None,
+        Some(Value::Array(items)) if items.len() <= 500 && items.iter().all(Value::is_string) => {
+            Some(
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect(),
+            )
+        }
+        Some(_) => return approval_error("node_ids must be a list of at most 500 ids.", 400),
+    };
+    let nodes = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id FROM core_agentnode WHERE CAST(tenant_id AS TEXT) = ? \
+         AND CAST(project_id AS TEXT) = ? AND status = 'online' \
+         AND node_type IN ('eph_node', 'target_cluster') ORDER BY name, CAST(id AS TEXT)",
+    )
+    .bind(&tenant_id)
+    .bind(&project_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(value) => return database_error(value.to_string()),
+    };
+    let plan_hash = payload_hash("host.network.observe", &json!({}));
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let mut queued = Vec::<Value>::new();
+    let mut skipped = Vec::<Value>::new();
+    for row in &nodes {
+        let node_id: String = row.try_get("id").unwrap_or_default();
+        if requested
+            .as_ref()
+            .is_some_and(|ids| !ids.iter().any(|value| value == &node_id))
+        {
+            continue;
+        }
+        let key = format!("{idempotency}:{node_id}");
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT CAST(id AS TEXT) FROM core_agentcommand WHERE CAST(tenant_id AS TEXT) = ? \
+             AND idempotency_key = ? LIMIT 1",
+        )
+        .bind(&tenant_id)
+        .bind(&key)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some(id) = existing {
+            skipped.push(json!({"node_id": node_id, "reason": "already_queued", "command_id": id}));
+            continue;
+        }
+        let command_id = uuid::Uuid::new_v4().simple().to_string();
+        let sql = format!(
+            "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, \
+             plan_hash, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, \
+             requested_by_id) VALUES (?, 'host.network.observe', '{{}}', 'queued', ?, ?, 0, 3, \
+             {now_expr}, {now_expr}, ?, ?, ?, ?)"
+        );
+        match sqlx::query(&sql)
+            .bind(&command_id)
+            .bind(&key)
+            .bind(&plan_hash)
+            .bind(&node_id)
+            .bind(&tenant_id)
+            .bind(&project_id)
+            .bind(user.id)
+            .execute(pool)
+            .await
+        {
+            Ok(_) => queued.push(json!({"node_id": node_id, "command_id": command_id})),
+            Err(value) => return database_error(value.to_string()),
+        }
+    }
+    if !queued.is_empty() {
+        let _ = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: "fleet.network.collect_queued",
+                resource_type: "project",
+                resource_id: project_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({"queued": queued.len(), "skipped": skipped.len()}),
+            },
+        )
+        .await;
+    }
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "queued_count": queued.len(),
+            "skipped_count": skipped.len(),
+            "queued": queued,
+            "skipped": skipped,
+        })),
+    )
+        .into_response()
+}
