@@ -53,6 +53,6 @@ fn parse_bool(name: &str, default: bool) -> Result<bool, String> {
 mod tests {
     #[test]
     fn rejects_invalid_external_scheme() {
-        assert!(matches!("ftp", "http" | "https") == false);
+        assert!(!matches!("ftp", "http" | "https"));
     }
 }
