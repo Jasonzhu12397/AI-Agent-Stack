@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(config)?;
     let listener = TcpListener::bind(address).await?;
 
-    tracing::info!(%address, "rust api edge listening");
+    tracing::info!(%address, "rust api listening");
     axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
