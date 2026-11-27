@@ -1220,7 +1220,7 @@ async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<SessionUs
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(service_unavailable());
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return Err(service_unavailable());
     };
     match authenticate(pool, secret_key, headers).await {
