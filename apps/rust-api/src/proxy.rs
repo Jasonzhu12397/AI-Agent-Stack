@@ -34,10 +34,15 @@ impl AppState {
         let Some(pool) = self.identity_pool.as_ref() else {
             return Err("DATABASE_URL is required to initialize Rust identity storage".into());
         };
-        sqlx::raw_sql(include_str!("../migrations/0001_rust_sessions.sql"))
-            .execute(pool)
-            .await
-            .map_err(|error| format!("failed to initialize Rust session storage: {error}"))?;
+        for migration in [
+            include_str!("../migrations/0001_rust_sessions.sql"),
+            include_str!("../migrations/0002_platform_identity.sql"),
+        ] {
+            sqlx::raw_sql(migration)
+                .execute(pool)
+                .await
+                .map_err(|error| format!("failed to apply Rust identity migration: {error}"))?;
+        }
         Ok(())
     }
 }
