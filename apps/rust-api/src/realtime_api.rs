@@ -196,10 +196,8 @@ fn stream_body(state: StreamState) -> impl Stream<Item = Result<String, std::io:
         if output.is_empty() {
             output.push_str(": keep-alive\n\n");
         }
-        if let Some(max) = state.max_events {
-            if state.emitted >= max {
-                return Some((Ok(output), None));
-            }
+        if state.max_events.is_some() {
+            return Some((Ok(output), None));
         }
         if state.ticks > 1800 {
             return Some((Ok(output), None));
