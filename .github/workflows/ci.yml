@@ -57,7 +57,7 @@ jobs:
       - name: Diagnose generated Cargo lockfile
         run: |
           cargo generate-lockfile
-          git diff -- apps/rust-api/Cargo.lock
+          git diff -- Cargo.lock
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
