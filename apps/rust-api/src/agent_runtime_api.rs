@@ -1211,43 +1211,7 @@ async fn load_nodes(
         .fetch_all(pool)
         .await
         .map_err(|error| database_error(error.to_string()))?;
-    Ok(rows
-        .iter()
-        .map(|row| {
-            let fingerprint: Option<String> =
-                row.try_get("client_certificate_fingerprint").ok().flatten();
-            let revoked: Option<String> =
-                row.try_get("client_certificate_revoked_at").ok().flatten();
-            let certificate_status = if revoked.is_some() {
-                "revoked"
-            } else if fingerprint.is_some() {
-                "active"
-            } else {
-                "unbound"
-            };
-            json!({
-                "id": row.try_get::<String, _>("id").unwrap_or_default(),
-                "tenant_id": row.try_get::<String, _>("tenant_id").unwrap_or_default(),
-                "project_id": row.try_get::<String, _>("project_id").unwrap_or_default(),
-                "name": row.try_get::<String, _>("name").unwrap_or_default(),
-                "node_type": row.try_get::<String, _>("node_type").unwrap_or_default(),
-                "cluster_name": row.try_get::<String, _>("cluster_name").unwrap_or_default(),
-                "agent_version": row.try_get::<String, _>("agent_version").unwrap_or_default(),
-                "capabilities": parse_optional_json(row, "capabilities_text"),
-                "labels": parse_optional_json(row, "labels_text"),
-                "status": row.try_get::<String, _>("status").unwrap_or_default(),
-                "client_certificate": {
-                    "fingerprint_sha256": fingerprint,
-                    "bound_at": timestamp_value(row, "client_certificate_bound_at"),
-                    "revoked_at": timestamp_value(row, "client_certificate_revoked_at"),
-                    "status": certificate_status,
-                },
-                "last_seen_at": timestamp_value(row, "last_seen_at"),
-                "last_seen_ip": row.try_get::<Option<String>, _>("last_seen_ip").ok().flatten(),
-                "created_at": timestamp_value(row, "created_at"),
-            })
-        })
-        .collect())
+    Ok(rows.iter().map(node_json).collect())
 }
 
 pub async fn list_project_commands(
@@ -1364,4 +1328,287 @@ pub async fn list_project_commands(
         "results": rows.iter().map(command_json).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+fn node_json(row: &sqlx::any::AnyRow) -> Value {
+    let fingerprint: Option<String> = row.try_get("client_certificate_fingerprint").ok().flatten();
+    let revoked: Option<String> = row.try_get("client_certificate_revoked_at").ok().flatten();
+    let certificate_status = if revoked.is_some() {
+        "revoked"
+    } else if fingerprint.is_some() {
+        "active"
+    } else {
+        "unbound"
+    };
+    json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "tenant_id": row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+        "project_id": row.try_get::<String, _>("project_id").unwrap_or_default(),
+        "name": row.try_get::<String, _>("name").unwrap_or_default(),
+        "node_type": row.try_get::<String, _>("node_type").unwrap_or_default(),
+        "cluster_name": row.try_get::<String, _>("cluster_name").unwrap_or_default(),
+        "agent_version": row.try_get::<String, _>("agent_version").unwrap_or_default(),
+        "capabilities": parse_optional_json(row, "capabilities_text"),
+        "labels": parse_optional_json(row, "labels_text"),
+        "status": row.try_get::<String, _>("status").unwrap_or_default(),
+        "client_certificate": {
+            "fingerprint_sha256": fingerprint,
+            "bound_at": timestamp_value(row, "client_certificate_bound_at"),
+            "revoked_at": timestamp_value(row, "client_certificate_revoked_at"),
+            "status": certificate_status,
+        },
+        "last_seen_at": timestamp_value(row, "last_seen_at"),
+        "last_seen_ip": row.try_get::<Option<String>, _>("last_seen_ip").ok().flatten(),
+        "created_at": timestamp_value(row, "created_at"),
+    })
+}
+
+fn node_select(state: &AppState) -> String {
+    let ts = |column: &str| {
+        if is_postgres(state) {
+            format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS {column}")
+        } else {
+            format!("strftime('%Y-%m-%d %H:%M:%S', {column}) AS {column}")
+        }
+    };
+    let columns = [
+        ts("last_seen_at"),
+        ts("created_at"),
+        ts("client_certificate_bound_at"),
+        ts("client_certificate_revoked_at"),
+    ]
+    .join(", ");
+    format!(
+        "SELECT CAST(id AS TEXT) AS id, CAST(tenant_id AS TEXT) AS tenant_id, \
+         CAST(project_id AS TEXT) AS project_id, name, node_type, cluster_name, agent_version, \
+         CAST(capabilities AS TEXT) AS capabilities_text, CAST(labels AS TEXT) AS labels_text, status, \
+         client_certificate_fingerprint, last_seen_ip, {columns} FROM core_agentnode \
+         WHERE CAST(id AS TEXT) = ? LIMIT 1"
+    )
+}
+
+async fn node_admin_scope(
+    pool: &sqlx::AnyPool,
+    state: &AppState,
+    headers: &HeaderMap,
+    node_id: &str,
+) -> Result<(crate::context::SessionUser, String, String, String), Response> {
+    let user = crate::billing_api::require_user(state, headers).await?;
+    let row = sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, status \
+         FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(node_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|value| database_error(value.to_string()))?
+    .ok_or_else(|| approval_error("Not found.", 404))?;
+    let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = row.try_get("project_id").unwrap_or_default();
+    let status: String = row.try_get("status").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(approval_error("Not found.", 404));
+    }
+    match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(approval_error(
+                "Tenant owner or admin role is required.",
+                403,
+            ))
+        }
+        Err(value) => return Err(database_error(value)),
+    }
+    Ok((user, tenant_id, project_id, status))
+}
+
+pub async fn revoke_agent_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let (user, tenant_id, project_id, status) =
+        match node_admin_scope(pool, &state, &headers, &node_id).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if status == "revoked" {
+        return approval_error("Agent node has been revoked.", 409);
+    }
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let pending = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, status, command_type FROM core_agentcommand \
+         WHERE CAST(node_id AS TEXT) = ? AND status IN ('queued', 'waiting_approval', 'running')",
+    )
+    .bind(&node_id)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(value) => return database_error(value.to_string()),
+    };
+    for row in &pending {
+        let id: String = row.try_get("id").unwrap_or_default();
+        let command_status: String = row.try_get("status").unwrap_or_default();
+        let command_type: String = row.try_get("command_type").unwrap_or_default();
+        let unknown =
+            command_status == "running" && MUTATING_COMMANDS.contains(&command_type.as_str());
+        let (status_value, error_value) = if unknown {
+            (
+                "failed",
+                Some(
+                    json!({"code": "MUTATING_COMMAND_OUTCOME_UNKNOWN_MANUAL_RECONCILIATION_REQUIRED", "retryable": false})
+                        .to_string(),
+                ),
+            )
+        } else {
+            ("cancelled", None)
+        };
+        let sql = format!(
+            "UPDATE core_agentcommand SET status = ?, error = ?, finished_at = {now_expr}, \
+             lease_token = NULL, lease_expires_at = NULL, updated_at = {now_expr} \
+             WHERE CAST(id AS TEXT) = ?"
+        );
+        if let Err(value) = sqlx::query(&sql)
+            .bind(status_value)
+            .bind(error_value)
+            .bind(id)
+            .execute(pool)
+            .await
+        {
+            return database_error(value.to_string());
+        }
+    }
+    let sql = format!(
+        "UPDATE core_agentnode SET status = 'revoked', revoked_at = {now_expr}, updated_at = {now_expr} \
+         WHERE CAST(id AS TEXT) = ?"
+    );
+    if let Err(value) = sqlx::query(&sql).bind(&node_id).execute(pool).await {
+        return database_error(value.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: Some(project_id.as_str()),
+            event_type: "agent.node.revoked",
+            resource_type: "agent_node",
+            resource_id: node_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"node_type": "unknown", "node_name": ""}),
+        },
+    )
+    .await;
+    match sqlx::query(&node_select(&state))
+        .bind(&node_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => Json(node_json(&row)).into_response(),
+        Ok(None) => approval_error("Not found.", 404),
+        Err(value) => database_error(value.to_string()),
+    }
+}
+
+pub async fn rotate_agent_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let (user, tenant_id, project_id, status) =
+        match node_admin_scope(pool, &state, &headers, &node_id).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if status == "revoked" {
+        return approval_error("A revoked agent node cannot rotate credentials.", 409);
+    }
+    let running = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_agentcommand WHERE CAST(node_id AS TEXT) = ? AND status = 'running'",
+    )
+    .bind(&node_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if running > 0 {
+        return approval_error(
+            "Credential rotation is blocked while commands are running. Wait for them to finish or reconcile their execution state.",
+            409,
+        );
+    }
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let hash = hex::encode(Sha256::digest(token.as_bytes()));
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let sql = format!(
+        "UPDATE core_agentnode SET credential_hash = ?, status = 'offline', last_seen_at = NULL, \
+         last_seen_ip = NULL, updated_at = {now_expr} WHERE CAST(id AS TEXT) = ?"
+    );
+    if let Err(value) = sqlx::query(&sql)
+        .bind(&hash)
+        .bind(&node_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(value.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: Some(project_id.as_str()),
+            event_type: "agent.node.credential_rotated",
+            resource_type: "agent_node",
+            resource_id: node_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"node_type": "unknown", "node_name": ""}),
+        },
+    )
+    .await;
+    let mut data = match sqlx::query(&node_select(&state))
+        .bind(&node_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => node_json(&row),
+        Ok(None) => return approval_error("Not found.", 404),
+        Err(value) => return database_error(value.to_string()),
+    };
+    data["enrollment_token"] = json!(token);
+    data["token_warning"] = json!(
+        "The previous credential is invalid. Store this new token securely; it is shown only once. The agent remains offline until restarted with it."
+    );
+    Json(data).into_response()
 }

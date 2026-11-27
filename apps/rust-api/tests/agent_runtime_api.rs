@@ -295,3 +295,54 @@ async fn lists_project_commands_with_pagination() {
     assert_eq!(body["limit"], 2);
     assert_eq!(body["results"].as_array().unwrap().len(), 2);
 }
+
+async fn admin_post(state: &AppState, uri: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn blocks_credential_rotation_while_command_runs() {
+    let state = state().await;
+    let (status, body) = admin_post(
+        &state,
+        &format!("/api/v1/agent-nodes/{NODE}/credentials/rotate/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn revokes_node_and_cancels_pending_commands() {
+    let state = state().await;
+    let (status, body) = admin_post(&state, &format!("/api/v1/agent-nodes/{NODE}/revoke/")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "revoked");
+    let (status, body) = admin_post(
+        &state,
+        &format!("/api/v1/agent-nodes/{NODE}/credentials/rotate/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}

@@ -83,6 +83,14 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::agent_runtime_api::renew_lease),
             )
             .route(
+                "/api/v1/agent-nodes/{node_id}/revoke/",
+                axum::routing::post(crate::agent_runtime_api::revoke_agent_node),
+            )
+            .route(
+                "/api/v1/agent-nodes/{node_id}/credentials/rotate/",
+                axum::routing::post(crate::agent_runtime_api::rotate_agent_credential),
+            )
+            .route(
                 "/api/v1/agent-plugins/{plugin_id}/",
                 axum::routing::get(crate::plugin_api::plugin_detail)
                     .post(crate::plugin_api::plugin_detail),
