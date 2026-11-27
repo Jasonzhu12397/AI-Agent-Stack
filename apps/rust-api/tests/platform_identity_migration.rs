@@ -10,6 +10,7 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
 
     sqlx::raw_sql(
         "DROP TABLE IF EXISTS auth_user CASCADE;
+         DROP TABLE IF EXISTS platform_user_profiles CASCADE;
          DROP TABLE IF EXISTS platform_session_activity CASCADE;
          DROP TABLE IF EXISTS rust_sessions CASCADE;
          DROP TABLE IF EXISTS platform_credentials CASCADE;
@@ -54,6 +55,11 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
         .await
         .expect("transfer legacy identity data to Rust tables");
 
+    sqlx::raw_sql(include_str!("../migrations/0003_platform_user_profiles.sql"))
+        .execute(&pool)
+        .await
+        .expect("create Rust-owned user profiles");
+
     let account: (i64, String, String) = sqlx::query_as(
         "SELECT users.id, users.username, credentials.credential_hash
          FROM platform_users users
@@ -68,6 +74,14 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
     assert_eq!(account.0, 101);
     assert_eq!(account.1, "migration-user");
     assert_eq!(account.2, "pbkdf2_sha256$test-hash");
+
+    let profile_table_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'platform_user_profiles')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("verify Rust profile table exists");
+    assert!(profile_table_exists);
 
     let next_id: i64 = sqlx::query_scalar(
         "INSERT INTO platform_users (username) VALUES ('sequence-check') RETURNING id",
