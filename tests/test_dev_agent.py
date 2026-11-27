@@ -97,6 +97,39 @@ def test_reviewer_reports_bare_except_sql_and_secrets(tmp_path):
     bare = next(finding for finding in report.findings if finding.rule == "bare-except")
     assert "except Exception:" in bare.diff
 
+def test_reviewer_timeout_rule_ignores_orm_and_mapping_methods(tmp_path):
+    (tmp_path / "network.py").write_text(
+        "import requests as rq\n"
+        "from requests import get as http_get\n"
+        "def check(payload, queryset):\n"
+        "    payload.get('name')\n"
+        "    queryset.get(pk=1)\n"
+        "    rq.get('https://example.test/api')\n"
+        "    http_get('https://example.test/other', timeout=5)\n"
+    )
+    report = review_paths(tmp_path)
+    findings = [item for item in report.findings if item.rule == "missing-network-timeout"]
+    assert len(findings) == 1
+    assert findings[0].line == 6
+
+
+def test_reviewer_ignores_test_assertions_and_marker_strings(tmp_path):
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_example.py").write_text("assert True\nvalue = 'TODO'\n")
+    report = review_paths(tmp_path)
+    rules = {finding.rule for finding in report.findings}
+    assert "assert-for-validation" not in rules
+    assert "unfinished-marker" not in rules
+
+
+def test_reviewer_reports_unfinished_markers_in_comments(tmp_path):
+    (tmp_path / "sample.py").write_text("# TODO: add request timeout\n")
+    report = review_paths(tmp_path)
+    finding = next(item for item in report.findings if item.rule == "unfinished-marker")
+    assert finding.line == 1
+
+
 
 def test_patch_requires_matching_one_time_approval(project):
     agent = SoftwareAgent(project)
