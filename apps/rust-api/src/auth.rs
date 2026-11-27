@@ -166,7 +166,7 @@ async fn record_session_activity(
 ) {
     let now = if postgres { "NOW()" } else { "datetime('now')" };
     let sql = format!(
-        "INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity, revoked_at) \
+        "INSERT INTO platform_session_activity (session_key, user_id, created_at, last_activity, revoked_at) \
          VALUES (?, ?, {now}, {now}, NULL) \
          ON CONFLICT(session_key) DO UPDATE SET user_id = excluded.user_id, \
          last_activity = excluded.last_activity, revoked_at = NULL"
@@ -184,7 +184,7 @@ async fn record_session_activity(
 async fn mark_session_revoked(pool: &sqlx::AnyPool, session_key: &str, postgres: bool) {
     let now = if postgres { "NOW()" } else { "datetime('now')" };
     let sql = format!(
-        "UPDATE core_sessionactivity SET revoked_at = {now} \
+        "UPDATE platform_session_activity SET revoked_at = {now} \
          WHERE session_key = ? AND revoked_at IS NULL"
     );
     let result = sqlx::query(&sql).bind(session_key).execute(pool).await;
@@ -622,16 +622,16 @@ if let Err(response) = enforce_csrf(&headers) {
             .into_response();
     }
     let encoded_password = encode_password(&payload.password, 870_000);
-    let user = sqlx::query(
+    let user = sqlx::query_scalar::<_, i64>(
         "INSERT INTO platform_users (username, email, is_active, is_staff, is_superuser, date_joined) \
-         VALUES (?, ?, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP) RETURNING id",
     )
     .bind(&username)
     .bind(&email)
-    .execute(pool)
+    .fetch_one(pool)
     .await;
     let user_id: i64 = match user {
-        Ok(result) => result.last_insert_id().unwrap_or(0),
+        Ok(id) => id,
         Err(error) => {
             tracing::error!(%error, "rust auth could not create the user");
             return unavailable("The account could not be created.");
