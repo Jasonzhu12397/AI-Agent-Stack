@@ -1,7 +1,6 @@
-use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -36,8 +35,7 @@ pub fn router(state: AppState) -> Router {
     let native_identity = state.config.native_identity;
     let mut router = Router::new()
         .route("/health/ready", get(health))
-        .route("/api/v1/edge/info", get(info))
-;
+        .route("/api/v1/edge/info", get(info));
     if native_identity {
         router = router
             .route("/api/v1/auth/csrf/", get(crate::auth::csrf))
