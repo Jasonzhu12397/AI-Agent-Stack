@@ -11,6 +11,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/ai-agent-stack-api-edge /usr/local/bin/rust-api-edge
-ENV RUST_LOG=info RUST_API_LISTEN=0.0.0.0:8080 RUST_API_UPSTREAM=http://api:8000
+ENV RUST_LOG=info RUST_API_LISTEN=0.0.0.0:8080
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/rust-api-edge"]
