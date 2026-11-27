@@ -30,6 +30,8 @@ async fn state() -> AppState {
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(120) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(64) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr TEXT, user_agent VARCHAR(256) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugindefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, plugin_key VARCHAR(100) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, version VARCHAR(40) NOT NULL, protocol VARCHAR(32) NOT NULL, endpoint_url VARCHAR(500) NOT NULL, auth_required BOOLEAN NOT NULL, credential_ref VARCHAR(2048) NOT NULL, capabilities TEXT NOT NULL, manifest TEXT NOT NULL, input_schema TEXT NOT NULL, output_schema TEXT NOT NULL, timeout_seconds INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, enabled BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentversion (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, config_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcapabilityinvocation (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, capability VARCHAR(100) NOT NULL, protocol VARCHAR(32) NOT NULL, status VARCHAR(16) NOT NULL, error_code VARCHAR(64) NOT NULL, latency_ms INTEGER NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, granted_capabilities TEXT NOT NULL, credential_ref VARCHAR(200) NOT NULL, installed_by_id INTEGER NOT NULL, revision INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
@@ -78,6 +80,11 @@ async fn state() -> AppState {
         .execute(&pool)
         .await
         .unwrap();
+    let draft = json!({"kind": "marketplace_agent", "plugin_key": "weather", "plugin_version": "1.0.0", "installation_id": INSTALLATION, "capability": "weather.lookup", "protocol": "http_json", "risk_level": "low"});
+    sqlx::query("INSERT INTO core_agentdefinition (id, tenant_id, project_id, created_by_id, name, slug, description, draft_config, current_version, is_archived, created_at, updated_at) VALUES ('agent-1', ?, ?, 1, 'Weather Agent', 'weather-agent', '', ?, 1, 0, datetime('now'), datetime('now'))")
+        .bind(TENANT).bind(PROJECT).bind(draft.to_string()).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, published_at) VALUES ('version-1', 'agent-1', 1, '{}', 1, datetime('now'))")
+        .execute(&pool).await.unwrap();
     let data = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
         .bind(SESSION)
@@ -247,4 +254,21 @@ async fn lists_project_agent_capabilities() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["name"], "weather.lookup");
     assert_eq!(entries[0]["installation_id"], INSTALLATION);
+}
+
+#[tokio::test]
+async fn lists_marketplace_agents_with_availability() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/marketplace-agents/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let agents = body["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["capability"], "weather.lookup");
+    assert_eq!(agents[0]["available"], true);
 }

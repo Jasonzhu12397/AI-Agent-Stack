@@ -1208,3 +1208,134 @@ pub async fn list_capabilities(
     });
     Json(json!({"capabilities": entries})).into_response()
 }
+
+/// Native replacement for `GET /api/v1/tenants/{tenant}/projects/{project}/marketplace-agents/`.
+pub async fn list_marketplace_agents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(),
+        Err(error) => return database_error(error),
+    }
+    let draft_text = if is_postgres(&state) {
+        "CAST(agent.draft_config AS TEXT)"
+    } else {
+        "agent.draft_config"
+    };
+    let sql = format!(
+        "SELECT CAST(agent.id AS TEXT) AS id, agent.slug, agent.name, agent.current_version, \
+         {draft_text} AS draft_text FROM core_agentdefinition agent \
+         WHERE CAST(agent.tenant_id AS TEXT) = ? AND CAST(agent.project_id AS TEXT) = ? \
+         AND NOT agent.is_archived ORDER BY agent.name"
+    );
+    let rows = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&project_id)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let mut entries = Vec::<Value>::new();
+    for row in &rows {
+        let draft: Value = row
+            .try_get::<String, _>("draft_text")
+            .ok()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_else(|| json!({}));
+        if draft.get("kind").and_then(Value::as_str) != Some("marketplace_agent") {
+            continue;
+        }
+        let agent_id: String = row.try_get("id").unwrap_or_default();
+        let version: i64 = row.try_get("current_version").unwrap_or(0);
+        let version_row = sqlx::query(
+            "SELECT CAST(id AS TEXT) AS id, version FROM core_agentversion \
+             WHERE CAST(agent_id AS TEXT) = ? AND version = ? LIMIT 1",
+        )
+        .bind(&agent_id)
+        .bind(version)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let installation_id = draft
+            .get("installation_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let installation = sqlx::query(
+            "SELECT installation.status, installation.plugin_version, \
+             CAST(installation.granted_capabilities AS TEXT) AS grants, \
+             CAST(plugin.enabled AS INTEGER) AS plugin_enabled \
+             FROM core_agentplugininstallation installation \
+             JOIN core_agentplugindefinition plugin ON plugin.id = installation.plugin_id \
+             WHERE CAST(installation.id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(installation_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let (available, reason) = availability(installation.as_ref(), &draft);
+        entries.push(json!({
+            "agent_id": agent_id,
+            "slug": row.try_get::<String, _>("slug").unwrap_or_default(),
+            "name": row.try_get::<String, _>("name").unwrap_or_default(),
+            "plugin_key": draft.get("plugin_key").cloned().unwrap_or(Value::Null),
+            "plugin_version": draft.get("plugin_version").cloned().unwrap_or(Value::Null),
+            "capability": draft.get("capability").cloned().unwrap_or(Value::Null),
+            "protocol": draft.get("protocol").cloned().unwrap_or(Value::Null),
+            "risk_level": draft.get("risk_level").cloned().unwrap_or(Value::Null),
+            "agent_version": version_row.as_ref().map(|row| row.try_get::<i64, _>("version").unwrap_or(0)).unwrap_or(0),
+            "agent_version_id": version_row.as_ref().and_then(|row| row.try_get::<String, _>("id").ok()),
+            "installation_id": installation_id,
+            "installation_status": installation.as_ref().and_then(|row| row.try_get::<String, _>("status").ok()),
+            "available": available,
+            "availability_reason": reason,
+        }));
+    }
+    Json(json!({"agents": entries})).into_response()
+}
+
+fn availability(installation: Option<&sqlx::any::AnyRow>, draft: &Value) -> (bool, Option<String>) {
+    let Some(row) = installation else {
+        return (false, Some("installation_missing".to_string()));
+    };
+    let status: String = row.try_get("status").unwrap_or_default();
+    if status == "uninstalled" {
+        return (false, Some("installation_uninstalled".to_string()));
+    }
+    if status == "disabled" {
+        return (false, Some("installation_disabled".to_string()));
+    }
+    if row.try_get::<i64, _>("plugin_enabled").unwrap_or(0) == 0 {
+        return (false, Some("plugin_disabled".to_string()));
+    }
+    let plugin_version: String = row.try_get("plugin_version").unwrap_or_default();
+    if draft.get("plugin_version").and_then(Value::as_str) != Some(plugin_version.as_str()) {
+        return (false, Some("version_mismatch".to_string()));
+    }
+    let grants: Vec<String> = row
+        .try_get::<String, _>("grants")
+        .ok()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default();
+    let capability = draft
+        .get("capability")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !grants.is_empty() && !grants.iter().any(|value| value == capability) {
+        return (false, Some("capability_not_granted".to_string()));
+    }
+    (true, None)
+}
