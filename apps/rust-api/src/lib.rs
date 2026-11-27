@@ -16,6 +16,7 @@ pub mod notification_api;
 pub mod platform_api;
 pub mod plugin_api;
 pub mod preferences_api;
+pub mod privacy_api;
 pub mod proxy;
 pub mod scheduled_api;
 pub mod settings_api;
