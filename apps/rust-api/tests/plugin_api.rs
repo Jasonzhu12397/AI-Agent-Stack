@@ -329,3 +329,47 @@ async fn rotates_installation_credential() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "CREDENTIAL_ACCESS_DENIED");
 }
+
+#[tokio::test]
+async fn binds_plugin_capabilities_to_marketplace_agents() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugin-installations/{INSTALLATION}/bind-agent/"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bound = body["bound"].as_array().unwrap();
+    assert_eq!(bound.len(), 1);
+    assert_eq!(bound[0]["capability"], "weather.lookup");
+    assert_eq!(bound[0]["agent_version"], 2);
+    assert_eq!(bound[0]["definition_created"], false);
+    assert_eq!(bound[0]["version_created"], true);
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugin-installations/{INSTALLATION}/bind-agent/"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["bound"][0]["agent_version"], 2);
+    assert_eq!(body["bound"][0]["version_created"], false);
+}
+
+#[tokio::test]
+async fn rejects_unknown_capability_when_binding_agents() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugin-installations/{INSTALLATION}/bind-agent/"),
+        Some(json!({"capabilities": ["weather.nope"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "BINDING_CAPABILITY_NOT_DECLARED");
+}

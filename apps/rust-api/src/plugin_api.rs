@@ -1969,3 +1969,470 @@ pub async fn invoke_project_capability(
         }
     }
 }
+
+fn declared_capabilities_from_row(plugin: &sqlx::any::AnyRow) -> Vec<Value> {
+    let manifest: Value = plugin
+        .try_get::<String, _>("manifest_text")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}));
+    if let Some(entries) = manifest.get("capabilities").and_then(Value::as_array) {
+        if !entries.is_empty() {
+            return entries
+                .iter()
+                .filter(|entry| entry.is_object())
+                .cloned()
+                .collect();
+        }
+    }
+    let legacy: Value = plugin
+        .try_get::<String, _>("capabilities_text")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!([]));
+    let input_schema: Value = plugin
+        .try_get::<String, _>("input_schema_text")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+    let output_schema: Value = plugin
+        .try_get::<String, _>("output_schema_text")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+    let timeout = plugin.try_get::<i64, _>("timeout_seconds").unwrap_or(30);
+    legacy
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    if let Some(name) = entry.as_str() {
+                        Some(json!({
+                            "name": name,
+                            "description": "",
+                            "risk_level": "low",
+                            "timeout_seconds": timeout,
+                            "input_schema": input_schema,
+                            "output_schema": output_schema,
+                        }))
+                    } else if entry.get("name").and_then(Value::as_str).is_some() {
+                        let mut object = entry.clone();
+                        if let Value::Object(ref mut map) = object {
+                            map.entry("description").or_insert(json!(""));
+                            map.entry("risk_level").or_insert(json!("low"));
+                            map.entry("timeout_seconds").or_insert(json!(timeout));
+                            map.entry("input_schema").or_insert(input_schema.clone());
+                            map.entry("output_schema").or_insert(output_schema.clone());
+                        }
+                        Some(object)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn hex_sha256(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn binding_slug(plugin_key: &str, capability: &str) -> String {
+    fn part(value: &str) -> String {
+        let normalized: String = value
+            .to_lowercase()
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect();
+        normalized.trim_matches('-').to_string()
+    }
+    let base = format!("{}-{}", part(plugin_key), part(capability));
+    let digest = hex_sha256(&format!("{plugin_key}:{capability}"));
+    let mut base = if base.len() > 72 {
+        base[..72].trim_end_matches('-').to_string()
+    } else {
+        base
+    };
+    base.push('-');
+    base.push_str(&digest[..6]);
+    base.chars().take(80).collect()
+}
+
+/// `POST /api/v1/agent-plugin-installations/{installation_id}/bind-agent/`
+pub async fn bind_installation_agents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(installation_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let manifest_text = if is_postgres(&state) {
+        "CAST(plugin.manifest AS TEXT)"
+    } else {
+        "plugin.manifest"
+    };
+    let capabilities_text = if is_postgres(&state) {
+        "CAST(plugin.capabilities AS TEXT)"
+    } else {
+        "plugin.capabilities"
+    };
+    let input_text = if is_postgres(&state) {
+        "CAST(plugin.input_schema AS TEXT)"
+    } else {
+        "plugin.input_schema"
+    };
+    let output_text = if is_postgres(&state) {
+        "CAST(plugin.output_schema AS TEXT)"
+    } else {
+        "plugin.output_schema"
+    };
+    let sql = format!(
+        "SELECT CAST(installation.id AS TEXT) AS id, CAST(installation.tenant_id AS TEXT) AS tenant_id, \
+         CAST(installation.project_id AS TEXT) AS project_id, installation.plugin_version, \
+         installation.status, {capabilities_text} AS capabilities_text, {manifest_text} AS manifest_text, \
+         {input_text} AS input_schema_text, {output_text} AS output_schema_text, plugin.timeout_seconds, \
+         plugin.protocol, plugin.plugin_key, plugin.name, CAST(plugin.enabled AS INTEGER) AS enabled_int \
+         FROM core_agentplugininstallation installation JOIN core_agentplugindefinition plugin \
+           ON CAST(plugin.id AS TEXT) = CAST(installation.plugin_id AS TEXT) \
+         WHERE CAST(installation.id AS TEXT) = ?"
+    );
+    let row = match sqlx::query(&sql)
+        .bind(&installation_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = row.try_get("project_id").unwrap_or_default();
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let editable = sqlx::query(
+        "SELECT 1 FROM core_tenantmembership \
+         WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ? AND role IN ('owner', 'admin') \
+         UNION SELECT 1 FROM core_projectmembership \
+         WHERE CAST(project_id AS TEXT) = ? AND user_id = ? AND role IN ('admin', 'editor') \
+         LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(user.id)
+    .bind(&project_id)
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await;
+    match editable {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"detail": "Project editor permission required."})),
+            )
+                .into_response()
+        }
+        Err(error) => return database_error(error.to_string()),
+    }
+    let status: String = row.try_get("status").unwrap_or_default();
+    let enabled = row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0;
+    if status != "installed" || !enabled {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "detail": "The agent plugin installation is not installed and cannot be bound.",
+                "code": "BINDING_INSTALLATION_INACTIVE",
+            })),
+        )
+            .into_response();
+    }
+    let declared = declared_capabilities_from_row(&row);
+    let names: Vec<String> = declared
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    let requested: Vec<String> = match body.get("capabilities") {
+        None | Some(Value::Null) => names.clone(),
+        Some(Value::Array(items)) => {
+            let mut result = Vec::new();
+            for item in items {
+                let Some(name) = item.as_str() else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(
+                            json!({"detail": "capabilities must be an array of capability names."}),
+                        ),
+                    )
+                        .into_response();
+                };
+                if !result.iter().any(|existing| existing == name) {
+                    result.push(name.to_string());
+                }
+            }
+            result
+        }
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "capabilities must be an array of capability names."})),
+            )
+                .into_response()
+        }
+    };
+    let unknown: Vec<&String> = requested
+        .iter()
+        .filter(|name| !names.iter().any(|known| known == *name))
+        .collect();
+    if !unknown.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "detail": format!("The plugin does not declare capabilities: {}.", unknown.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")),
+                "code": "BINDING_CAPABILITY_NOT_DECLARED",
+            })),
+        )
+            .into_response();
+    }
+    let plugin_key: String = row.try_get("plugin_key").unwrap_or_default();
+    let plugin_name: String = row.try_get("name").unwrap_or_default();
+    let plugin_version: String = row.try_get("plugin_version").unwrap_or_default();
+    let protocol: String = row.try_get("protocol").unwrap_or_default();
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let mut bound = Vec::new();
+    for capability in &requested {
+        let Some(definition) = declared
+            .iter()
+            .find(|entry| entry.get("name").and_then(Value::as_str) == Some(capability.as_str()))
+        else {
+            continue;
+        };
+        let snapshot = json!({
+            "kind": "marketplace_agent",
+            "plugin_key": plugin_key,
+            "plugin_version": plugin_version,
+            "installation_id": installation_id,
+            "capability": capability,
+            "protocol": protocol,
+            "input_schema": definition.get("input_schema").cloned().unwrap_or_else(|| json!({})),
+            "output_schema": definition.get("output_schema").cloned().unwrap_or_else(|| json!({})),
+            "risk_level": definition.get("risk_level").cloned().unwrap_or_else(|| json!("low")),
+        });
+        let snapshot_text = snapshot.to_string();
+        let existing = sqlx::query(
+            "SELECT CAST(id AS TEXT) AS id, name, slug, draft_config, current_version \
+             FROM core_agentdefinition WHERE CAST(project_id AS TEXT) = ?",
+        )
+        .bind(&project_id)
+        .fetch_all(&mut *transaction)
+        .await;
+        let existing = match existing {
+            Ok(rows) => rows.into_iter().find(|candidate| {
+                let config: Value = candidate
+                    .try_get::<String, _>("draft_config")
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_else(|| json!({}));
+                config.get("kind").and_then(Value::as_str) == Some("marketplace_agent")
+                    && config.get("installation_id").and_then(Value::as_str)
+                        == Some(installation_id.as_str())
+                    && config.get("capability").and_then(Value::as_str) == Some(capability.as_str())
+            }),
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+        };
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+        let postgres = is_postgres(&state);
+        if let Some(existing) = existing {
+            let definition_id: String = existing.try_get("id").unwrap_or_default();
+            let slug: String = existing.try_get("slug").unwrap_or_default();
+            let name: String = existing.try_get("name").unwrap_or_default();
+            let latest = sqlx::query(
+                "SELECT version, config_snapshot, CAST(id AS TEXT) AS id FROM core_agentversion \
+                 WHERE CAST(agent_id AS TEXT) = ? ORDER BY version DESC LIMIT 1",
+            )
+            .bind(&definition_id)
+            .fetch_optional(&mut *transaction)
+            .await;
+            let (version_number, version_id, _version_created, previous_snapshot) = match latest {
+                Ok(Some(version)) => {
+                    let number: i64 = version.try_get("version").unwrap_or(0);
+                    let id: String = version.try_get("id").unwrap_or_default();
+                    let previous: String = version.try_get("config_snapshot").unwrap_or_default();
+                    (number, id, false, previous)
+                }
+                Ok(None) => (0, String::new(), false, String::new()),
+                Err(error) => {
+                    let _ = transaction.rollback().await;
+                    return database_error(error.to_string());
+                }
+            };
+            if previous_snapshot == snapshot_text {
+                bound.push(json!({
+                    "definition_id": definition_id,
+                    "slug": slug,
+                    "name": name,
+                    "agent_version": version_number,
+                    "agent_version_id": version_id,
+                    "capability": capability,
+                    "plugin_key": plugin_key,
+                    "plugin_version": plugin_version,
+                    "definition_created": false,
+                    "version_created": false,
+                }));
+                continue;
+            }
+            let next = version_number + 1;
+            let new_version_id = uuid::Uuid::new_v4().to_string();
+            let insert = if postgres {
+                "INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, \
+                 published_at) VALUES (?::uuid, ?::uuid, ?, ?::jsonb, ?, ?::timestamptz)"
+            } else {
+                "INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, \
+                 published_at) VALUES (?, ?, ?, ?, ?, ?)"
+            };
+            if let Err(error) = sqlx::query(insert)
+                .bind(&new_version_id)
+                .bind(&definition_id)
+                .bind(next)
+                .bind(&snapshot_text)
+                .bind(user.id)
+                .bind(&now)
+                .execute(&mut *transaction)
+                .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+            let update = if postgres {
+                "UPDATE core_agentdefinition SET draft_config = ?::jsonb, current_version = ?, \
+                 updated_at = ?::timestamptz WHERE CAST(id AS TEXT) = ?"
+            } else {
+                "UPDATE core_agentdefinition SET draft_config = ?, current_version = ?, \
+                 updated_at = ? WHERE CAST(id AS TEXT) = ?"
+            };
+            if let Err(error) = sqlx::query(update)
+                .bind(&snapshot_text)
+                .bind(next)
+                .bind(&now)
+                .bind(&definition_id)
+                .execute(&mut *transaction)
+                .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+            bound.push(json!({
+                "definition_id": definition_id,
+                "slug": slug,
+                "name": name,
+                "agent_version": next,
+                "agent_version_id": new_version_id,
+                "capability": capability,
+                "plugin_key": plugin_key,
+                "plugin_version": plugin_version,
+                "definition_created": false,
+                "version_created": true,
+            }));
+        } else {
+            let definition_id = uuid::Uuid::new_v4().to_string();
+            let version_id = uuid::Uuid::new_v4().to_string();
+            let slug = binding_slug(&plugin_key, capability);
+            let name = {
+                let text = format!("{plugin_name}: {capability}");
+                text.chars().take(120).collect::<String>()
+            };
+            let description = definition
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(1000)
+                .collect::<String>();
+            let insert = if postgres {
+                "INSERT INTO core_agentdefinition (id, tenant_id, project_id, created_by_id, name, slug, \
+                 description, draft_config, current_version, is_archived, created_at, updated_at) \
+                 VALUES (?::uuid, ?::uuid, ?::uuid, ?, ?, ?, ?, ?::jsonb, 1, FALSE, ?::timestamptz, ?::timestamptz)"
+            } else {
+                "INSERT INTO core_agentdefinition (id, tenant_id, project_id, created_by_id, name, slug, \
+                 description, draft_config, current_version, is_archived, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)"
+            };
+            if let Err(error) = sqlx::query(insert)
+                .bind(&definition_id)
+                .bind(&tenant_id)
+                .bind(&project_id)
+                .bind(user.id)
+                .bind(&name)
+                .bind(&slug)
+                .bind(&description)
+                .bind(&snapshot_text)
+                .bind(&now)
+                .bind(&now)
+                .execute(&mut *transaction)
+                .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+            let insert_version = if postgres {
+                "INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, \
+                 published_at) VALUES (?::uuid, ?::uuid, 1, ?::jsonb, ?, ?::timestamptz)"
+            } else {
+                "INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, \
+                 published_at) VALUES (?, ?, 1, ?, ?, ?)"
+            };
+            if let Err(error) = sqlx::query(insert_version)
+                .bind(&version_id)
+                .bind(&definition_id)
+                .bind(&snapshot_text)
+                .bind(user.id)
+                .bind(&now)
+                .execute(&mut *transaction)
+                .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+            bound.push(json!({
+                "definition_id": definition_id,
+                "slug": slug,
+                "name": name,
+                "agent_version": 1,
+                "agent_version_id": version_id,
+                "capability": capability,
+                "plugin_key": plugin_key,
+                "plugin_version": plugin_version,
+                "definition_created": true,
+                "version_created": true,
+            }));
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error.to_string());
+    }
+    Json(json!({"bound": bound})).into_response()
+}
