@@ -55,7 +55,9 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
         .await
         .expect("transfer legacy identity data to Rust tables");
 
-    sqlx::raw_sql(include_str!("../migrations/0003_platform_user_profiles.sql"))
+    sqlx::raw_sql(include_str!(
+        "../migrations/0003_platform_user_profiles.sql"
+    ))
         .execute(&pool)
         .await
         .expect("create Rust-owned user profiles");
