@@ -274,3 +274,24 @@ async fn lists_and_enrolls_agent_nodes() {
     assert_eq!(body["name"], "node-b");
     assert_eq!(body["enrollment_token"].as_str().unwrap().len(), 64);
 }
+
+#[tokio::test]
+async fn lists_project_commands_with_pagination() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/tenants/tenant/projects/project/agent-commands/?limit=2&offset=0")
+        .header("cookie", "sessionid=approver-session")
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 3);
+    assert_eq!(body["limit"], 2);
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+}

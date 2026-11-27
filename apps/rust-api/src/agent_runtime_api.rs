@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -926,28 +926,31 @@ pub async fn list_node_commands(
         Ok(rows) => rows,
         Err(error) => return database_error(error.to_string()),
     };
-    let results: Vec<Value> = rows
-        .iter()
-        .map(|row| {
-            json!({
-                "id": row.try_get::<String, _>("id").unwrap_or_default(),
-                "node_id": row.try_get::<String, _>("node_id").unwrap_or_default(),
-                "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
-                "command_type": row.try_get::<String, _>("command_type").unwrap_or_default(),
-                "payload": serde_json::from_str::<Value>(&row.try_get::<String, _>("payload_text").unwrap_or_default()).unwrap_or_else(|_| json!({})),
-                "status": row.try_get::<String, _>("status").unwrap_or_default(),
-                "plan_hash": row.try_get::<Option<String>, _>("plan_hash").ok().flatten(),
-                "approved_at": timestamp_value(row, "approved_at"),
-                "attempts": row.try_get::<i64, _>("attempts").unwrap_or(0),
-                "result": parse_optional_json(row, "result_text"),
-                "error": parse_optional_json(row, "error_text"),
-                "created_at": timestamp_value(row, "created_at"),
-                "started_at": timestamp_value(row, "started_at"),
-                "finished_at": timestamp_value(row, "finished_at"),
-            })
-        })
-        .collect();
+    let results: Vec<Value> = rows.iter().map(command_json).collect();
     Json(json!({"count": results.len(), "results": results})).into_response()
+}
+
+fn command_json(row: &sqlx::any::AnyRow) -> Value {
+    json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "node_id": row.try_get::<String, _>("node_id").unwrap_or_default(),
+        "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
+        "command_type": row.try_get::<String, _>("command_type").unwrap_or_default(),
+        "payload": row
+            .try_get::<String, _>("payload_text")
+            .ok()
+            .and_then(|value| serde_json::from_str::<Value>(&value).ok())
+            .unwrap_or_else(|| json!({})),
+        "status": row.try_get::<String, _>("status").unwrap_or_default(),
+        "plan_hash": row.try_get::<Option<String>, _>("plan_hash").ok().flatten(),
+        "approved_at": timestamp_value(row, "approved_at"),
+        "attempts": row.try_get::<i64, _>("attempts").unwrap_or(0),
+        "result": parse_optional_json(row, "result_text"),
+        "error": parse_optional_json(row, "error_text"),
+        "created_at": timestamp_value(row, "created_at"),
+        "started_at": timestamp_value(row, "started_at"),
+        "finished_at": timestamp_value(row, "finished_at"),
+    })
 }
 
 fn parse_optional_json(row: &sqlx::any::AnyRow, column: &str) -> Value {
@@ -1245,4 +1248,120 @@ async fn load_nodes(
             })
         })
         .collect())
+}
+
+pub async fn list_project_commands(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return approval_error("Not found.", 404);
+    }
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(100);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    if !(1..=200).contains(&limit) || offset < 0 {
+        return approval_error("limit must be 1-200 and offset must be non-negative.", 400);
+    }
+    let status = params.get("status").cloned().unwrap_or_default();
+    if !status.is_empty()
+        && !matches!(
+            status.as_str(),
+            "queued" | "waiting_approval" | "running" | "succeeded" | "failed" | "cancelled"
+        )
+    {
+        return approval_error("Unknown command status.", 400);
+    }
+    let node_id = params.get("node_id").cloned().unwrap_or_default();
+    let command_type = params.get("command_type").cloned().unwrap_or_default();
+    let ts = |column: &str| {
+        if is_postgres(&state) {
+            format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS {column}")
+        } else {
+            format!("strftime('%Y-%m-%d %H:%M:%S', {column}) AS {column}")
+        }
+    };
+    let columns = [
+        ts("created_at"),
+        ts("started_at"),
+        ts("finished_at"),
+        ts("approved_at"),
+    ]
+    .join(", ");
+    let base = format!(
+        "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, \
+         CAST(deployment_id AS TEXT) AS deployment_id, command_type, CAST(payload AS TEXT) AS payload_text, \
+         status, plan_hash, CAST(attempts AS INTEGER) AS attempts, CAST(result AS TEXT) AS result_text, \
+         CAST(error AS TEXT) AS error_text, {columns} \
+         FROM core_agentcommand WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ?"
+    );
+    let mut filters = String::new();
+    if !status.is_empty() {
+        filters.push_str(" AND status = ?");
+    }
+    if !node_id.is_empty() {
+        filters.push_str(" AND CAST(node_id AS TEXT) = ?");
+    }
+    if !command_type.is_empty() {
+        filters.push_str(" AND command_type = ?");
+    }
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM core_agentcommand WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ?{filters}"
+    );
+    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql)
+        .bind(&tenant_id)
+        .bind(&project_id);
+    if !status.is_empty() {
+        count_query = count_query.bind(&status);
+    }
+    if !node_id.is_empty() {
+        count_query = count_query.bind(&node_id);
+    }
+    if !command_type.is_empty() {
+        count_query = count_query.bind(&command_type);
+    }
+    let total = match count_query.fetch_one(pool).await {
+        Ok(value) => value,
+        Err(value) => return database_error(value.to_string()),
+    };
+    let list_sql =
+        format!("{base}{filters} ORDER BY created_at DESC, CAST(id AS TEXT) DESC LIMIT ? OFFSET ?");
+    let mut list_query = sqlx::query(&list_sql).bind(&tenant_id).bind(&project_id);
+    if !status.is_empty() {
+        list_query = list_query.bind(&status);
+    }
+    if !node_id.is_empty() {
+        list_query = list_query.bind(&node_id);
+    }
+    if !command_type.is_empty() {
+        list_query = list_query.bind(&command_type);
+    }
+    let rows = match list_query.bind(limit).bind(offset).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(value) => return database_error(value.to_string()),
+    };
+    Json(json!({
+        "count": total,
+        "limit": limit,
+        "offset": offset,
+        "results": rows.iter().map(command_json).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
