@@ -15,6 +15,7 @@ pub struct Config {
     pub django_secret_key: Option<String>,
     pub secure_cookies: bool,
     pub external_scheme: String,
+    pub media_root: String,
 }
 
 impl Config {
@@ -81,6 +82,7 @@ impl Config {
             django_secret_key: None,
             secure_cookies: false,
             external_scheme: "http".into(),
+            media_root: env::var("MEDIA_ROOT").unwrap_or_else(|_| ".devdata/media".into()),
         })
     }
 

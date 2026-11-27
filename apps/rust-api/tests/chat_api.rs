@@ -274,7 +274,9 @@ async fn creates_user_and_assistant_messages_in_real_storage() {
 #[tokio::test]
 async fn tests_model_config_against_the_provider() {
     let state = state().await;
-    let uri = format!("/api/v1/tenants/{TENANT}/model-configs/bbbbbbbb-1111-1111-1111-111111111111/test/");
+    let uri = format!(
+        "/api/v1/tenants/{TENANT}/model-configs/bbbbbbbb-1111-1111-1111-111111111111/test/"
+    );
     let (status, body) = call(
         &state,
         "POST",
@@ -294,4 +296,82 @@ async fn tests_model_config_against_the_provider() {
     let missing = format!("/api/v1/tenants/{TENANT}/model-configs/missing/test/");
     let (status, _) = call(&state, "POST", &missing, Some(json!({}))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stores_chat_attachments_in_real_storage() {
+    let mut state = state().await;
+    let media = std::env::temp_dir().join(format!("rust-media-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&media).unwrap();
+    state.config.media_root = media.to_string_lossy().to_string();
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/agent-chat/threads/"),
+        Some(json!({"title": "Files"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let thread_id = body["id"].as_str().unwrap().to_string();
+    let collection = format!("/api/v1/agent-chat/threads/{thread_id}/attachments/");
+
+    let boundary = "X-BOUNDARY";
+    let multipart = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello attach\r\n--{boundary}--\r\n"
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri(&collection)
+        .header(
+            "cookie",
+            format!("sessionid={SESSION}; csrftoken=0123456789abcdef0123456789abcdef"),
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(multipart))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["filename"], "notes.txt");
+    assert_eq!(body["content_type"], "text/plain");
+    assert_eq!(body["size_bytes"], 12);
+    let attachment_id = body["id"].as_str().unwrap().to_string();
+
+    let (status, body) = call(&state, "GET", &collection, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/agent-chat/attachments/{attachment_id}/"))
+        .header("cookie", format!("sessionid={SESSION}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"hello attach");
+
+    let (status, _) = call(
+        &state,
+        "DELETE",
+        &format!("/api/v1/agent-chat/attachments/{attachment_id}/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&state, "GET", &collection, None).await;
+    assert_eq!(status, StatusCode::OK);
 }

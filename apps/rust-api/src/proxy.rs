@@ -333,6 +333,15 @@ pub fn router(state: AppState) -> Router {
                 get(crate::chat_api::list_messages).post(crate::chat_api::create_message),
             )
             .route(
+                "/api/v1/agent-chat/threads/{thread_id}/attachments/",
+                get(crate::chat_api::list_attachments).post(crate::chat_api::upload_attachment),
+            )
+            .route(
+                "/api/v1/agent-chat/attachments/{attachment_id}/",
+                get(crate::chat_api::download_attachment)
+                    .delete(crate::chat_api::delete_attachment),
+            )
+            .route(
                 "/api/v1/agent-chat/threads/{thread_id}/",
                 get(crate::chat_api::get_thread)
                     .patch(crate::chat_api::update_thread)

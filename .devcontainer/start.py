@@ -156,6 +156,10 @@ def edge_environment(env: dict, binary: Path | None) -> dict:
         "RUST_API_SECURE_COOKIES": "false",
         "RUST_LOG": os.getenv("RUST_LOG", "info"),
         "DJANGO_SECRET_KEY": env["SECRET_KEY"],
+        "MEDIA_ROOT": env.get(
+            "MEDIA_ROOT",
+            str(REPO_ROOT / "apps" / "platform-api" / ".devdata" / "media"),
+        ),
     }
 
 

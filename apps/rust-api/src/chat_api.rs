@@ -1,5 +1,3 @@
-#![allow(clippy::result_large_err)]
-
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -1760,4 +1758,367 @@ async fn model_test_audit(
     if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
         tracing::error!(%error, "rust model test could not append the audit event");
     }
+}
+
+pub async fn list_attachments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(thread_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let thread = match thread_row(pool, &state, &thread_id).await {
+        Ok(Some(thread))
+            if tenant_member(pool, &thread.tenant_id, user.id)
+                .await
+                .unwrap_or(false) =>
+        {
+            thread
+        }
+        Ok(_) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    match attachments(pool, &state, &thread.id).await {
+        Ok(items) => (StatusCode::OK, Json(json!({"items": items}))).into_response(),
+        Err(error) => database_error(error),
+    }
+}
+
+pub async fn upload_attachment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(thread_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let thread = match thread_row(pool, &state, &thread_id).await {
+        Ok(Some(thread))
+            if tenant_member(pool, &thread.tenant_id, user.id)
+                .await
+                .unwrap_or(false) =>
+        {
+            thread
+        }
+        Ok(_) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let content_type = headers
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let part = match multipart_file(content_type, &body) {
+        Ok(Some(part)) => part,
+        Ok(None) => {
+            return legacy_error(
+                "A file part named file is required.",
+                StatusCode::BAD_REQUEST,
+                "FILE_REQUIRED",
+            )
+        }
+        Err(message) => return legacy_error(message, StatusCode::BAD_REQUEST, "FILE_INVALID"),
+    };
+    if part.bytes.len() > 20 * 1024 * 1024 {
+        return legacy_error(
+            "Files must be at most 20 MB.",
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "FILE_TOO_LARGE",
+        );
+    }
+    let media_root = std::path::Path::new(&state.config.media_root);
+    let relative = format!(
+        "chat-attachments/{}/{}-{}",
+        Utc::now().format("%Y/%m"),
+        uuid::Uuid::new_v4(),
+        safe_filename(&part.filename)
+    );
+    let target = media_root.join(&relative);
+    if let Some(parent) = target.parent() {
+        if let Err(error) = tokio::fs::create_dir_all(parent).await {
+            return database_error(error.to_string());
+        }
+    }
+    if let Err(error) = tokio::fs::write(&target, &part.bytes).await {
+        return database_error(error.to_string());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let filename = part.filename.chars().take(255).collect::<String>();
+    let stored_type = part.content_type.chars().take(128).collect::<String>();
+    let inserted = sqlx::query(
+        "INSERT INTO core_agentchatattachment (id, thread_id, uploaded_by_id, filename, \
+         content_type, size_bytes, file, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&thread.id)
+    .bind(user.id)
+    .bind(&filename)
+    .bind(&stored_type)
+    .bind(part.bytes.len() as i64)
+    .bind(&relative)
+    .bind(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false))
+    .execute(pool)
+    .await;
+    if let Err(error) = inserted {
+        let _ = tokio::fs::remove_file(&target).await;
+        return database_error(error.to_string());
+    }
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "filename": filename,
+            "content_type": stored_type,
+            "size_bytes": part.bytes.len() as i64,
+            "created_at": normalize_timestamp(&Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)),
+        })),
+    )
+        .into_response()
+}
+
+pub async fn download_attachment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attachment_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let owner = match attachment_owner(pool, &AttachmentKind::File, &attachment_id).await {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    if !tenant_member(pool, &owner.tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let bytes =
+        match tokio::fs::read(std::path::Path::new(&state.config.media_root).join(&owner.file))
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, "rust chat api could not read the attachment");
+                return not_found();
+            }
+        };
+    let disposition = format!(
+        "attachment; filename=\"{}\"",
+        owner.filename.replace('"', "")
+    );
+    let mut response = (StatusCode::OK, bytes).into_response();
+    if !owner.content_type.is_empty() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&owner.content_type) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_TYPE, value);
+        }
+    }
+    if let Ok(value) = axum::http::HeaderValue::from_str(&disposition) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CONTENT_DISPOSITION, value);
+    }
+    response
+}
+
+pub async fn delete_attachment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(attachment_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let owner = match attachment_owner(pool, &AttachmentKind::Delete, &attachment_id).await {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    if !tenant_member(pool, &owner.tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if let Err(error) =
+        sqlx::query("DELETE FROM core_agentchatattachment WHERE CAST(id AS TEXT) = ?")
+            .bind(&attachment_id)
+            .execute(pool)
+            .await
+    {
+        return database_error(error.to_string());
+    }
+    if !owner.file.is_empty() {
+        let _ = tokio::fs::remove_file(
+            std::path::Path::new(&state.config.media_root).join(&owner.file),
+        )
+        .await;
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+struct AttachmentOwner {
+    tenant_id: String,
+    file: String,
+    filename: String,
+    content_type: String,
+}
+
+enum AttachmentKind {
+    File,
+    Delete,
+}
+
+async fn attachment_owner(
+    pool: &AnyPool,
+    kind: &AttachmentKind,
+    attachment_id: &str,
+) -> Result<Option<AttachmentOwner>, String> {
+    let columns = match kind {
+        AttachmentKind::File => {
+            "attachment.file, attachment.filename, attachment.content_type, thread.tenant_id"
+        }
+        AttachmentKind::Delete => {
+            "attachment.file, attachment.filename, attachment.content_type, thread.tenant_id"
+        }
+    };
+    let sql = format!(
+        "SELECT {columns} FROM core_agentchatattachment attachment \
+         JOIN core_agentchatthread thread ON CAST(thread.id AS TEXT) = CAST(attachment.thread_id AS TEXT) \
+         WHERE CAST(attachment.id AS TEXT) = ?"
+    );
+    let row = sqlx::query(&sql)
+        .bind(attachment_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(row.map(|row| AttachmentOwner {
+        tenant_id: row.try_get("tenant_id").unwrap_or_default(),
+        file: row.try_get("file").unwrap_or_default(),
+        filename: row.try_get("filename").unwrap_or_default(),
+        content_type: row.try_get("content_type").unwrap_or_default(),
+    }))
+}
+
+struct MultipartFile {
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+fn safe_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let mut cleaned = base
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || "._-".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if cleaned.is_empty() {
+        cleaned = "attachment".into();
+    }
+    cleaned.chars().take(180).collect()
+}
+
+fn multipart_file(content_type: &str, body: &[u8]) -> Result<Option<MultipartFile>, &'static str> {
+    let Some(boundary) = content_type
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("boundary="))
+        .map(|value| value.trim_matches('"'))
+    else {
+        return Err("the multipart boundary is missing");
+    };
+    let delimiter = format!("--{boundary}").into_bytes();
+    let mut cursor = 0;
+    while let Some(start) = find_bytes(body, &delimiter, cursor) {
+        cursor = start + delimiter.len();
+        if body.get(cursor..cursor + 2) == Some(b"--") {
+            break;
+        }
+        if body.get(cursor..cursor + 2) == Some(b"\r\n") {
+            cursor += 2;
+        }
+        let Some(header_end) = find_bytes(body, b"\r\n\r\n", cursor) else {
+            break;
+        };
+        let headers = String::from_utf8_lossy(&body[cursor..header_end]).to_string();
+        let content_start = header_end + 4;
+        let Some(next) = find_bytes(body, &delimiter, content_start) else {
+            break;
+        };
+        let mut content_end = next;
+        if content_end >= 2 && &body[content_end - 2..content_end] == b"\r\n" {
+            content_end -= 2;
+        }
+        let disposition = headers.lines().find(|line| {
+            line.to_ascii_lowercase()
+                .starts_with("content-disposition:")
+        });
+        let part_name = disposition
+            .and_then(|line| {
+                line.split(';')
+                    .map(str::trim)
+                    .find(|value| value.starts_with("name="))
+            })
+            .map(|value| value[5..].trim_matches('"').to_string());
+        let filename = disposition
+            .and_then(|line| {
+                line.split(';')
+                    .map(str::trim)
+                    .find(|value| value.starts_with("filename="))
+            })
+            .map(|value| value[9..].trim_matches('"').to_string());
+        if part_name.as_deref() == Some("file") {
+            if let Some(filename) = filename.filter(|value| !value.is_empty()) {
+                let part_type = headers
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+                    .map(|line| line[13..].trim().to_string())
+                    .unwrap_or_default();
+                return Ok(Some(MultipartFile {
+                    filename,
+                    content_type: part_type,
+                    bytes: body[content_start..content_end].to_vec(),
+                }));
+            }
+        }
+        cursor = next;
+    }
+    Ok(None)
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() || from >= haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|position| from + position)
 }
