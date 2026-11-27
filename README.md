@@ -191,18 +191,29 @@ python3 tools/offline_images.py build --offline
 
 ## Local application development
 
-Docker Compose is only for the local application/control-plane development stack. It must never start, supervise or substitute for EPH or Target Agent Pods.
+The Rust API is the only supported SaaS API runtime. Start it directly for local development:
 
 ```bash
-cp .env.example .env
-docker compose --env-file .env -f deploy/docker-compose.yml up --build
+cd apps/rust-api
+cargo run
 ```
 
 - Rust API: http://localhost:8080/api/v1/
 - Liveness: http://localhost:8080/health/live
 - Readiness: http://localhost:8080/health/ready
 
-The Rust API is the only supported API runtime. Provision the initial administrator through the Rust-native identity/bootstrap workflow; there is no Django Admin or `manage.py` bootstrap path.
+The API requires PostgreSQL and the environment variables documented by
+`apps/rust-api/src/config.rs`. Start Vue Studio separately using its
+development instructions. Provision the initial administrator through the
+Rust-native identity/bootstrap workflow; there is no Django Admin or
+`manage.py` bootstrap path.
+
+**Deployment migration warning:** the existing Compose files still contain
+legacy Django/Daphne API and backup-scheduler commands, and the optional
+`rust-edge` profile still proxies to that legacy service. Those manifests are
+not a valid Rust-only deployment and must not be used as proof of cutover.
+The production Compose/Kubernetes profiles must start the Rust binary
+directly; Django is not an approved fallback or rollback target.
 
 ## Three-Agent deployment
 
