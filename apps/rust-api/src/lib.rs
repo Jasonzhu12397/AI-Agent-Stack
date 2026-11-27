@@ -12,6 +12,7 @@ pub mod cloud_vm_api;
 pub mod cluster_api;
 pub mod config;
 pub mod context;
+pub mod etcd_api;
 pub mod identity;
 pub mod knowledge_api;
 pub mod model_api;

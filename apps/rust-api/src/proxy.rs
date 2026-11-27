@@ -120,6 +120,22 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::agent_team_api::team_run_detail),
             )
             .route(
+                "/api/v1/cluster-deployments/{deployment_id}/etcd-backup/",
+                axum::routing::get(crate::etcd_api::get_state),
+            )
+            .route(
+                "/api/v1/cluster-deployments/{deployment_id}/etcd-backup/policy/",
+                axum::routing::post(crate::etcd_api::update_policy),
+            )
+            .route(
+                "/api/v1/cluster-deployments/{deployment_id}/etcd-backup/run/",
+                axum::routing::post(crate::etcd_api::run_backup),
+            )
+            .route(
+                "/api/v1/cluster-deployments/{deployment_id}/etcd-backup/check/",
+                axum::routing::post(crate::etcd_api::run_check),
+            )
+            .route(
                 "/api/v1/cluster-deployments/{deployment_id}/network/evidence/verify/",
                 axum::routing::post(crate::cluster_api::verify_network_evidence),
             )
