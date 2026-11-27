@@ -1352,7 +1352,7 @@ async fn require_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return Err(unavailable());
     };
     match authenticate(pool, secret_key, headers).await {
@@ -1531,7 +1531,7 @@ pub async fn oauth_start(
         Ok(None) => return not_found(),
         Err(error) => return database_error_message(error),
     }
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     let Some(oauth) = oauth_config(&preset_key) else {
@@ -1632,7 +1632,7 @@ pub async fn oauth_exchange(
         Ok(None) => return not_found(),
         Err(error) => return database_error_message(error),
     }
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     let Some(oauth) = oauth_config(&preset_key) else {
@@ -2555,7 +2555,7 @@ pub async fn link_provider_account(
         Ok(None) => return not_found(),
         Err(error) => return database_error_message(error),
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     let payload = match parse_object(&body) {
