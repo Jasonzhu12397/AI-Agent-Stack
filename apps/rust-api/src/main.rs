@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
-use ai_agent_stack_api_edge::config::Config;
-use ai_agent_stack_api_edge::proxy::{router, AppState};
+use ai_agent_stack_api::config::Config;
+use ai_agent_stack_api::proxy::{router, AppState};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
