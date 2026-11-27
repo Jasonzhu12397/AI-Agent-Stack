@@ -624,7 +624,7 @@ async fn resolve_credential(
             }
             Err(error) => return Err(database_error(error.to_string())),
         };
-        let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
             return Err(unavailable());
         };
         return match crate::model_api::unseal_value(secret_key, &sealed, "member-credential-secret")
@@ -1545,7 +1545,7 @@ async fn require_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return Err(unavailable());
     };
     match authenticate(pool, secret_key, headers).await {
