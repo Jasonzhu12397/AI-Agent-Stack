@@ -17,6 +17,7 @@ pub mod identity;
 pub mod infra_api;
 pub mod knowledge_api;
 pub mod lab_api;
+pub mod mcp_api;
 pub mod model_api;
 pub mod native;
 pub mod notification_api;

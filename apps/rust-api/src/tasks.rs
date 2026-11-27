@@ -415,7 +415,7 @@ pub async fn cancel_task(
 }
 
 #[derive(Clone)]
-struct TaskRecord {
+pub(crate) struct TaskRecord {
     id: String,
     tenant_id: String,
     project_id: String,
@@ -436,7 +436,7 @@ struct TaskRecord {
 }
 
 impl TaskRecord {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "id": self.id,
             "tenant_id": self.tenant_id,
@@ -465,7 +465,7 @@ fn parse_json_field(value: Option<&str>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-async fn task_rows(
+pub(crate) async fn task_rows(
     pool: &AnyPool,
     state: &AppState,
     tenant_id: Option<&str>,
@@ -503,7 +503,7 @@ async fn task_rows(
         .collect()
 }
 
-async fn fetch_task(
+pub(crate) async fn fetch_task(
     pool: &AnyPool,
     state: &AppState,
     task_id: &str,
@@ -623,7 +623,11 @@ async fn task_access(
     Ok(None)
 }
 
-async fn project_editor(pool: &AnyPool, project_id: &str, user_id: i64) -> Result<bool, String> {
+pub(crate) async fn project_editor(
+    pool: &AnyPool,
+    project_id: &str,
+    user_id: i64,
+) -> Result<bool, String> {
     let role = sqlx::query_scalar::<_, String>(
         "SELECT role FROM core_projectmembership \
          WHERE CAST(project_id AS TEXT) = ? AND user_id = ?",
@@ -730,4 +734,14 @@ fn database_error(error: sqlx::Error) -> Response {
 fn database_error_message(message: String) -> Response {
     tracing::error!(%message, "rust task api database operation failed");
     unavailable()
+}
+
+pub(crate) async fn task_json(
+    pool: &AnyPool,
+    state: &AppState,
+    task_id: &str,
+) -> Result<Option<Value>, String> {
+    Ok(fetch_task(pool, state, task_id)
+        .await?
+        .map(|task| task.to_json()))
 }

@@ -375,7 +375,7 @@ fn capability_names(capabilities: Option<String>, manifest: Option<String>) -> V
         .collect()
 }
 
-fn capability_definitions(
+pub(crate) fn capability_definitions(
     capabilities: Option<String>,
     manifest: Option<String>,
     input: Option<String>,

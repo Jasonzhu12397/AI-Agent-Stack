@@ -208,6 +208,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::plugin_api::list_capabilities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/mcp/",
+                axum::routing::post(crate::mcp_api::serve),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/events/stream/",
                 axum::routing::get(crate::realtime_api::events_stream),
             )
