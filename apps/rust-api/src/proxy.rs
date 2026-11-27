@@ -200,6 +200,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::plugin_api::list_capabilities),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/events/stream/",
+                axum::routing::get(crate::realtime_api::events_stream),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/network/collect/",
                 axum::routing::post(crate::agent_runtime_api::collect_fleet_network),
             )

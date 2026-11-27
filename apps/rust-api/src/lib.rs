@@ -23,6 +23,7 @@ pub mod plugin_api;
 pub mod preferences_api;
 pub mod privacy_api;
 pub mod proxy;
+pub mod realtime_api;
 pub mod scheduled_api;
 pub mod settings_api;
 pub mod tasks;
