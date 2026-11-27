@@ -1,12 +1,11 @@
 use ai_agent_stack_api::config::Config;
-use ai_agent_stack_api::identity::encode_session_data;
+use ai_agent_stack_api::identity::session_token_hash;
 use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-const SECRET: &str = "local-only-change-before-production";
 const SESSION: &str = "account-session";
 
 async fn state() -> AppState {
@@ -16,35 +15,47 @@ async fn state() -> AppState {
     sqlx::any::install_default_drivers();
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
     for statement in [
-        "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
-        "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
-        "CREATE TABLE core_useraccountprofile (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, display_name VARCHAR(160) NOT NULL, timezone VARCHAR(64) NOT NULL, locale VARCHAR(16) NOT NULL, updated_by_id INTEGER, updated_at DATETIME NOT NULL)",
-        "CREATE TABLE core_sessionactivity (session_key VARCHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
+        "CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE platform_session_activity (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE platform_user_profiles (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, display_name VARCHAR(160) NOT NULL, timezone VARCHAR(64) NOT NULL, locale VARCHAR(16) NOT NULL, updated_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
-    sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 'pbkdf2_sha256$demo', 0, 1)")
+    sqlx::query("INSERT INTO platform_users (id, username, email, is_staff, is_active) VALUES (1, 'alice', 'alice@example.com', 0, 1), (2, 'bob', 'bob@example.com', 0, 1)")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO auth_user (id, username, email, password, is_staff, is_active) VALUES (2, 'bob', 'bob@example.com', '!disabled', 0, 1)")
+    sqlx::query("INSERT INTO platform_credentials (user_id, credential_type, credential_hash) VALUES (1, 'password', 'pbkdf2_sha256$demo'), (2, 'password', '!disabled')")
         .execute(&pool).await.unwrap();
-    let data = encode_session_data(1, "password-hash", SECRET).unwrap();
-    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
-        .bind(SESSION).bind(data.clone()).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity) VALUES (?, 1, datetime('now'), datetime('now'))")
-        .bind(SESSION).execute(&pool).await.unwrap();
+
+    let session_hash = session_token_hash(SESSION);
+    let second_session_hash = session_token_hash("second-session");
+    let bob_session_hash = session_token_hash("bob-session");
+    for (hash, user_id, days) in [
+        (session_hash.as_str(), 1_i64, 1_i64),
+        (second_session_hash.as_str(), 1_i64, 2_i64),
+        (bob_session_hash.as_str(), 2_i64, 3_i64),
+    ] {
+        sqlx::query("INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, datetime('now', ?), datetime('now'))")
+            .bind(hash)
+            .bind(user_id)
+            .bind(format!("+{days} days"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO platform_session_activity (token_hash, user_id, created_at, last_activity) VALUES (?, ?, datetime('now'), datetime('now'))")
+            .bind(hash)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES ('membership-1', 'privacy-tenant', 1, 'owner', datetime('now'))")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('second-session', ?, datetime('now', '+2 days'))")
-        .bind(&data).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_sessionactivity (session_key, user_id, created_at, last_activity) VALUES ('second-session', 1, datetime('now'), datetime('now'))")
-        .execute(&pool).await.unwrap();
-    let bob_data = encode_session_data(2, "password-hash", SECRET).unwrap();
-    sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('bob-session', ?, datetime('now', '+3 days'))")
-        .bind(bob_data).execute(&pool).await.unwrap();
     pool.close().await;
-    let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
+    let config = Config::for_test("127.0.0.1:0".into(), url, None);
     AppState::new(config).unwrap()
 }
 
@@ -163,12 +174,12 @@ async fn lists_and_revokes_only_owned_sessions() {
         .find(|row| row["session_key"] == SESSION)
         .unwrap();
     assert_eq!(current["is_current"], true);
-    assert_eq!(current["timestamps_source"], "session_metadata");
+    assert_eq!(current["timestamps_source"], "rust_session_store");
     assert!(current["created_at"].is_string());
 
     let (status, body) = request(
         "POST",
-        "/api/v1/users/me/sessions/second-session/revoke/",
+        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("second-session")),
         None,
     )
     .await;
@@ -187,7 +198,7 @@ async fn lists_and_revokes_only_owned_sessions() {
 
     let (status, body) = request(
         "POST",
-        "/api/v1/users/me/sessions/bob-session/revoke/",
+        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("bob-session")),
         None,
     )
     .await;
@@ -255,19 +266,21 @@ async fn lists_and_revokes_privacy_sessions() {
     assert_eq!(results[0]["session_key_masked"].as_str().unwrap().len(), 16);
     assert!(!body.to_string().contains("second-session"));
 
-    let revoke = format!("{base}second-session/revoke/");
+    let revoke = format!("{base}{}/revoke/", session_token_hash("second-session"));
     let (status, body) = privacy_request(&state, "POST", &revoke).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["already_revoked"], false);
+    assert_eq!(body["revoked"], true);
+    assert_eq!(body["idempotent"], false);
     let (status, body) = privacy_request(&state, "GET", base).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["results"].as_array().unwrap().len(), 1);
 
     let (status, body) = privacy_request(&state, "POST", &revoke).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["already_revoked"], true);
+    assert_eq!(body["revoked"], false);
+    assert_eq!(body["idempotent"], true);
 
-    let foreign = format!("{base}bob-session/revoke/");
+    let foreign = format!("{base}{}/revoke/", session_token_hash("bob-session"));
     let (status, body) = privacy_request(&state, "POST", &foreign).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "NOT_FOUND");
