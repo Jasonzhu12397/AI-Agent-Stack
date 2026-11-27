@@ -75,6 +75,18 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/auth/me/", get(crate::native::current_user))
             .route("/api/v1/platform/roadmap/", get(crate::platform_api::roadmap))
             .route(
+                "/api/v1/agent-runtime/heartbeat/",
+                axum::routing::post(crate::agent_runtime_api::heartbeat),
+            )
+            .route(
+                "/api/v1/agent-runtime/commands/{command_id}/lease/renew/",
+                axum::routing::post(crate::agent_runtime_api::renew_lease),
+            )
+            .route(
+                "/api/v1/agent-runtime/commands/{command_id}/result/",
+                axum::routing::post(crate::agent_runtime_api::command_result),
+            )
+            .route(
                 "/api/v1/tenants/",
                 get(crate::tenancy::list_tenants).post(crate::tenancy::create_tenant),
             )
