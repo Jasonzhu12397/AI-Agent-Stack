@@ -261,23 +261,27 @@ pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) ->
     )
     .bind(user.id)
     .fetch_all(pool)
-    .await {
+    .await
+    {
         Ok(rows) => rows,
         Err(error) => return database_error(error.to_string()),
     };
     let current_hash = crate::identity::session_token_hash(&user.session_key);
-    let results = rows.into_iter().map(|row| {
-        let token_hash: String = row.try_get("token_hash").unwrap_or_default();
-        json!({
-            "session_key": token_hash,
-            "session_key_masked": mask_session_key(&token_hash),
-            "is_current": token_hash == current_hash,
-            "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
-            "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
-            "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
-            "timestamps_source": "rust_session_store",
+    let results = rows
+        .into_iter()
+        .map(|row| {
+            let token_hash: String = row.try_get("token_hash").unwrap_or_default();
+            json!({
+                "session_key": token_hash,
+                "session_key_masked": mask_session_key(&token_hash),
+                "is_current": token_hash == current_hash,
+                "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
+                "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
+                "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
+                "timestamps_source": "rust_session_store",
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     Json(json!({"results": results})).into_response()
 }
 
@@ -301,7 +305,10 @@ pub async fn list_privacy_sessions(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if !tenant_member(pool, &tenant_id, user.id).await.unwrap_or(false) {
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
         return not_found();
     }
     let rows = match sqlx::query(
@@ -315,22 +322,26 @@ pub async fn list_privacy_sessions(
     )
     .bind(user.id)
     .fetch_all(pool)
-    .await {
+    .await
+    {
         Ok(rows) => rows,
         Err(error) => return database_error(error.to_string()),
     };
     let current_hash = crate::identity::session_token_hash(&user.session_key);
-    let results = rows.into_iter().map(|row| {
-        let token_hash: String = row.try_get("token_hash").unwrap_or_default();
-        json!({
-            "session_key": token_hash,
-            "session_key_masked": mask_session_key(&token_hash),
-            "is_current": token_hash == current_hash,
-            "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
-            "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
-            "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
+    let results = rows
+        .into_iter()
+        .map(|row| {
+            let token_hash: String = row.try_get("token_hash").unwrap_or_default();
+            json!({
+                "session_key": token_hash,
+                "session_key_masked": mask_session_key(&token_hash),
+                "is_current": token_hash == current_hash,
+                "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
+                "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
+                "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
+            })
         })
-    }).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     Json(json!({"results": results})).into_response()
 }
 
@@ -346,7 +357,10 @@ pub async fn revoke_privacy_session(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if !tenant_member(pool, &tenant_id, user.id).await.unwrap_or(false) {
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
         return not_found();
     }
     revoke_owned_session(&state, &headers, Some(&tenant_id), &session_key).await
@@ -390,7 +404,8 @@ async fn revoke_owned_session(
     .bind(token_hash)
     .bind(user.id)
     .execute(pool)
-    .await {
+    .await
+    {
         return database_error(error.to_string());
     }
     if let Some(database_url) = state.config.database_url.as_deref() {
@@ -398,7 +413,11 @@ async fn revoke_owned_session(
         let event = crate::audit::AuditEvent {
             tenant_id,
             project_id: None,
-            event_type: if tenant_id.is_some() { "privacy.session.revoked" } else { "session.revoked" },
+            event_type: if tenant_id.is_some() {
+                "privacy.session.revoked"
+            } else {
+                "session.revoked"
+            },
             resource_type: "session",
             resource_id: &masked,
             outcome: "success",
