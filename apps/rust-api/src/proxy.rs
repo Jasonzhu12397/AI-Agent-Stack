@@ -112,6 +112,10 @@ pub fn router(state: AppState) -> Router {
                     .patch(crate::agent_team_api::team_detail),
             )
             .route(
+                "/api/v1/agent-teams/{team_id}/publish/",
+                axum::routing::post(crate::agent_team_api::publish_team),
+            )
+            .route(
                 "/api/v1/agent-teams/{team_id}/runs/",
                 axum::routing::get(crate::agent_team_api::list_team_runs),
             )

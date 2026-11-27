@@ -25,6 +25,10 @@ async fn state() -> AppState {
         "CREATE TABLE core_agentteam (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE(project_id, slug))",
         "CREATE TABLE core_agentteamversion (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, version INTEGER NOT NULL, definition_snapshot TEXT NOT NULL, workflow_version_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentteamrun (id TEXT PRIMARY KEY, team_version_id TEXT NOT NULL, workflow_run_id TEXT NOT NULL, input_text TEXT NOT NULL, output_text TEXT, created_at DATETIME NOT NULL, finished_at DATETIME)",
+        "CREATE TABLE core_workflowdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_definition TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE(project_id, slug))",
+        "CREATE TABLE core_workflowversion (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, version INTEGER NOT NULL, definition_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE(project_id, slug))",
+        "CREATE TABLE core_agentversion (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, config_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
         "CREATE TABLE core_workflowrun (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workflow_version_id TEXT NOT NULL, input_data TEXT NOT NULL)",
         "CREATE TABLE core_task (id TEXT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
@@ -37,8 +41,10 @@ async fn state() -> AppState {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO core_agentteam (id, tenant_id, project_id, created_by_id, name, slug, description, draft_config, current_version, is_archived, created_at, updated_at) VALUES ('team-1', 'tenant', 'project', 1, 'Fixture Team', 'fixture-team', '', '{}', 1, 0, datetime('now'), datetime('now'))").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentteam (id, tenant_id, project_id, created_by_id, name, slug, description, draft_config, current_version, is_archived, created_at, updated_at) VALUES ('team-1', 'tenant', 'project', 1, 'Fixture Team', 'fixture-team', '', '{\"strategy\":\"sequential\",\"members\":[{\"agent_id\":\"11111111-1111-1111-1111-111111111111\",\"role\":\"analyst\",\"instructions\":\"Investigate the incident.\"}]}', 1, 0, datetime('now'), datetime('now'))").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentteamversion (id, team_id, version, definition_snapshot, workflow_version_id, created_by_id, published_at) VALUES ('version-1', 'team-1', 1, '{}', 'workflow-version-1', 1, datetime('now'))").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentdefinition (id, tenant_id, project_id, created_by_id, name, slug, description, draft_config, current_version, is_archived, created_at, updated_at) VALUES ('11111111-1111-1111-1111-111111111111', 'tenant', 'project', 1, 'Analyst', 'analyst', '', '{}', 1, 0, datetime('now'), datetime('now'))").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, published_at) VALUES ('11111111-1111-1111-1111-222222222222', '11111111-1111-1111-1111-111111111111', 1, '{\"tool_allowlist\":[]}', 1, datetime('now'))").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_task (id, status) VALUES ('task-1', 'running')")
         .execute(&pool)
         .await
@@ -156,4 +162,32 @@ async fn lists_team_runs_and_reads_run_detail() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["id"], "run-1");
     assert_eq!(body["task_id"], "task-1");
+}
+
+#[tokio::test]
+async fn publishes_team_and_creates_workflow_version() {
+    let state = state().await;
+    let (status, body) = call(&state, "POST", "/api/v1/agent-teams/team-1/publish/", None).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["version"], 2);
+    assert!(body["workflow_version_id"].as_str().is_some());
+    let snapshot = &body["definition_snapshot"];
+    assert_eq!(snapshot["strategy"], "sequential");
+    assert_eq!(snapshot["members"][0]["role"], "analyst");
+
+    let database = state.identity_pool.clone().expect("identity pool");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_workflowdefinition WHERE slug = 'agent-team-team1'",
+    )
+    .fetch_one(&database)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let versions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_workflowversion WHERE CAST(workflow_id AS TEXT) = CAST((SELECT id FROM core_workflowdefinition WHERE slug = 'agent-team-team1') AS TEXT)",
+    )
+    .fetch_one(&database)
+    .await
+    .unwrap();
+    assert_eq!(versions, 1);
 }
