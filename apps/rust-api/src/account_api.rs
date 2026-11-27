@@ -114,7 +114,7 @@ pub async fn update_profile(
                 .into_response();
         }
         let taken = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM auth_user WHERE LOWER(email) = ? AND id <> ?",
+            "SELECT COUNT(*) FROM platform_users WHERE LOWER(email) = ? AND id <> ?",
         )
         .bind(&normalized)
         .bind(user.id)
@@ -138,7 +138,7 @@ pub async fn update_profile(
     };
     let mut updates: Vec<String> = Vec::new();
     if let Some(value) = normalized_email.as_deref() {
-        if let Err(error) = sqlx::query("UPDATE auth_user SET email = ? WHERE id = ?")
+        if let Err(error) = sqlx::query("UPDATE platform_users SET email = ? WHERE id = ?")
             .bind(value)
             .bind(user.id)
             .execute(pool)
@@ -219,11 +219,12 @@ pub async fn list_identities(State(state): State<AppState>, headers: HeaderMap) 
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    let password: Result<Option<String>, _> =
-        sqlx::query_scalar("SELECT password FROM auth_user WHERE id = ?")
-            .bind(user.id)
-            .fetch_optional(pool)
-            .await;
+    let password: Result<Option<String>, _> = sqlx::query_scalar(
+        "SELECT credential_hash FROM platform_credentials WHERE user_id = ? AND credential_type = 'password'",
+    )
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await;
     let has_password = match password {
         Ok(Some(value)) => !value.is_empty() && !value.starts_with('!'),
         Ok(None) => false,
@@ -249,53 +250,34 @@ pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) ->
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable();
-    };
-    let expire_expr = timestamp_expr(&state, "session", "expire_date");
-    let created_expr = timestamp_expr(&state, "activity", "created_at");
-    let activity_expr = timestamp_expr(&state, "activity", "last_activity");
-    let revoked_expr = timestamp_expr(&state, "activity", "revoked_at");
-    let sql = format!(
-        "SELECT session.session_key, session.session_data, {expire_expr} AS expire_date, \
-         {created_expr} AS created_at, {activity_expr} AS last_activity, \
-         {revoked_expr} AS revoked_at FROM django_session session \
-         LEFT JOIN core_sessionactivity activity \
-         ON activity.session_key = session.session_key ORDER BY session.expire_date DESC"
-    );
-    let rows = match sqlx::query(&sql).fetch_all(pool).await {
+    let rows = match sqlx::query(
+        "SELECT s.token_hash, CAST(s.expires_at AS TEXT) AS expires_at, \
+         CAST(s.created_at AS TEXT) AS created_at, \
+         CAST(a.last_activity AS TEXT) AS last_activity \
+         FROM rust_sessions s LEFT JOIN platform_session_activity a \
+         ON a.token_hash = s.token_hash \
+         WHERE s.user_id = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP \
+         ORDER BY s.created_at DESC",
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await {
         Ok(rows) => rows,
         Err(error) => return database_error(error.to_string()),
     };
-    let mut results = Vec::new();
-    for row in rows {
-        let key: String = row.try_get("session_key").unwrap_or_default();
-        let data: String = row.try_get("session_data").unwrap_or_default();
-        let decoded = match crate::identity::decode_session_data(&data, secret_key) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let owner = decoded.get("_auth_user_id").and_then(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| value.as_i64().map(|id| id.to_string()))
-        });
-        if owner.as_deref() != Some(user.id.to_string().as_str()) {
-            continue;
-        }
-        let created: Option<String> = row.try_get("created_at").ok().flatten();
-        let last_activity: Option<String> = row.try_get("last_activity").ok().flatten();
-        let revoked: Option<String> = row.try_get("revoked_at").ok().flatten();
-        results.push(json!({
-            "session_key": key,
-            "is_current": key == user.session_key,
-            "expire_date": row.try_get::<Option<String>, _>("expire_date").ok().flatten(),
-            "created_at": created,
-            "last_activity": last_activity,
-            "timestamps_source": if created.is_some() || last_activity.is_some() || revoked.is_some() { "session_metadata" } else { "unavailable" },
-        }));
-    }
+    let current_hash = crate::identity::session_token_hash(&user.session_key);
+    let results = rows.into_iter().map(|row| {
+        let token_hash: String = row.try_get("token_hash").unwrap_or_default();
+        json!({
+            "session_key": token_hash,
+            "session_key_masked": mask_session_key(&token_hash),
+            "is_current": token_hash == current_hash,
+            "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
+            "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
+            "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
+            "timestamps_source": "rust_session_store",
+        })
+    }).collect::<Vec<_>>();
     Json(json!({"results": results})).into_response()
 }
 
@@ -304,197 +286,7 @@ pub async fn revoke_session(
     headers: HeaderMap,
     Path(session_key): Path<String>,
 ) -> Response {
-    let user = match require_user(&state, &headers).await {
-        Ok(user) => user,
-        Err(response) => return response,
-    };
-    let Some(pool) = state.identity_pool.as_ref() else {
-        return unavailable();
-    };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable();
-    };
-    let stored = sqlx::query_scalar::<_, String>(
-        "SELECT session_data FROM django_session WHERE session_key = ? LIMIT 1",
-    )
-    .bind(&session_key)
-    .fetch_optional(pool)
-    .await;
-    let stored = match stored {
-        Ok(Some(value)) => value,
-        Ok(None) => return Json(json!({"revoked": false, "idempotent": true})).into_response(),
-        Err(error) => return database_error(error.to_string()),
-    };
-    let owner = crate::identity::decode_session_data(&stored, secret_key)
-        .ok()
-        .and_then(|data| {
-            data.get("_auth_user_id").and_then(|value| {
-                value
-                    .as_str()
-                    .map(str::to_string)
-                    .or_else(|| value.as_i64().map(|id| id.to_string()))
-            })
-        });
-    if owner.as_deref() != Some(user.id.to_string().as_str()) {
-        return Json(json!({"revoked": false, "idempotent": true})).into_response();
-    }
-    if let Err(error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-        .bind(&session_key)
-        .execute(pool)
-        .await
-    {
-        return database_error(error.to_string());
-    }
-    let now_expr = if is_postgres(&state) {
-        "NOW()"
-    } else {
-        "datetime('now')"
-    };
-    let sql = format!(
-        "UPDATE core_sessionactivity SET revoked_at = {now_expr} \
-         WHERE session_key = ? AND revoked_at IS NULL"
-    );
-    if let Err(error) = sqlx::query(&sql).bind(&session_key).execute(pool).await {
-        return database_error(error.to_string());
-    }
-    if let Some(database_url) = state.config.database_url.as_deref() {
-        let event = crate::audit::AuditEvent {
-            tenant_id: None,
-            project_id: None,
-            event_type: "session.revoked",
-            resource_type: "session",
-            resource_id: &session_key,
-            outcome: "success",
-            actor_id: Some(user.id),
-            request_id: "",
-            remote_addr: None,
-            user_agent: "",
-            metadata: json!({"current": session_key == user.session_key}),
-        };
-        if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
-            tracing::error!(%error, "rust account api could not append the session audit event");
-            return unavailable();
-        }
-    }
-    Json(json!({"revoked": true, "idempotent": true})).into_response()
-}
-
-fn timestamp_expr(state: &AppState, alias: &str, field: &str) -> String {
-    if is_postgres(state) {
-        format!("to_char({alias}.{field} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
-    } else {
-        format!("strftime('%Y-%m-%dT%H:%M:%fZ', {alias}.{field})")
-    }
-}
-
-struct Profile {
-    id: String,
-    display_name: String,
-    timezone: String,
-    locale: String,
-}
-
-fn profile_payload(user: &SessionUser, profile: &Profile) -> Value {
-    json!({
-        "id": user.id.to_string(),
-        "username": user.username,
-        "display_name": profile.display_name,
-        "email": user.email,
-        "timezone": profile.timezone,
-        "locale": profile.locale,
-    })
-}
-
-async fn ensure_profile(
-    pool: &AnyPool,
-    state: &AppState,
-    user: &SessionUser,
-) -> Result<Profile, Response> {
-    if let Some(profile) = load_profile(pool, user.id).await? {
-        return Ok(profile);
-    }
-    let now = if is_postgres(state) {
-        "NOW()"
-    } else {
-        "datetime('now')"
-    };
-    let sql = format!(
-        "INSERT INTO core_useraccountprofile (id, user_id, display_name, timezone, locale, updated_by_id, updated_at) \
-         VALUES (?, ?, '', 'UTC', 'zh-hans', ?, {now})"
-    );
-    let id = uuid::Uuid::new_v4().to_string();
-    if let Err(error) = sqlx::query(&sql)
-        .bind(&id)
-        .bind(user.id)
-        .bind(user.id)
-        .execute(pool)
-        .await
-    {
-        return Err(database_error(error.to_string()));
-    }
-    Ok(Profile {
-        id,
-        display_name: String::new(),
-        timezone: "UTC".to_string(),
-        locale: "zh-hans".to_string(),
-    })
-}
-
-async fn load_profile(pool: &AnyPool, user_id: i64) -> Result<Option<Profile>, Response> {
-    let row = sqlx::query(
-        "SELECT CAST(id AS TEXT) AS id, display_name, timezone, locale \
-         FROM core_useraccountprofile WHERE user_id = ? LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|error| database_error(error.to_string()))?;
-    Ok(row.map(|row| Profile {
-        id: row.try_get::<String, _>("id").unwrap_or_default(),
-        display_name: row.try_get::<String, _>("display_name").unwrap_or_default(),
-        timezone: row.try_get::<String, _>("timezone").unwrap_or_default(),
-        locale: row.try_get::<String, _>("locale").unwrap_or_default(),
-    }))
-}
-
-async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<SessionUser, Response> {
-    let Some(pool) = state.identity_pool.as_ref() else {
-        return Err(unavailable());
-    };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return Err(unavailable());
-    };
-    match authenticate(pool, secret_key, headers).await {
-        Ok(user) => Ok(user),
-        Err(AuthError::Unauthenticated(message)) => {
-            Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": message}))).into_response())
-        }
-        Err(AuthError::Unavailable(message)) => {
-            tracing::error!(%message, "rust account api could not resolve the session");
-            Err(unavailable())
-        }
-    }
-}
-
-fn invalid_value(field: &str, message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error": {"code": "ACCOUNT_INVALID_VALUE", "message": message, "details": {field: [message]}}})),
-    )
-        .into_response()
-}
-
-fn unavailable() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"detail": "The service is temporarily unavailable."})),
-    )
-        .into_response()
-}
-
-fn database_error(error: String) -> Response {
-    tracing::error!(%error, "rust account api database operation failed");
-    unavailable()
+    revoke_owned_session(&state, &headers, None, &session_key).await
 }
 
 pub async fn list_privacy_sessions(
@@ -509,63 +301,36 @@ pub async fn list_privacy_sessions(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if !tenant_member(pool, &tenant_id, user.id)
-        .await
-        .unwrap_or(false)
-    {
+    if !tenant_member(pool, &tenant_id, user.id).await.unwrap_or(false) {
         return not_found();
-    };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable();
-    };
-    let expire_expr = timestamp_expr(&state, "session", "expire_date");
-    let created_expr = timestamp_expr(&state, "activity", "created_at");
-    let activity_expr = timestamp_expr(&state, "activity", "last_activity");
-    let sql = format!(
-        "SELECT session.session_key, session.session_data, {expire_expr} AS expire_date, \
-         {created_expr} AS created_at, {activity_expr} AS last_activity \
-         FROM django_session session LEFT JOIN core_sessionactivity activity \
-         ON activity.session_key = session.session_key ORDER BY session.expire_date DESC"
-    );
-    let rows = match sqlx::query(&sql).fetch_all(pool).await {
+    }
+    let rows = match sqlx::query(
+        "SELECT s.token_hash, CAST(s.expires_at AS TEXT) AS expires_at, \
+         CAST(s.created_at AS TEXT) AS created_at, \
+         CAST(a.last_activity AS TEXT) AS last_activity \
+         FROM rust_sessions s LEFT JOIN platform_session_activity a \
+         ON a.token_hash = s.token_hash \
+         WHERE s.user_id = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP \
+         ORDER BY s.created_at DESC",
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await {
         Ok(rows) => rows,
         Err(error) => return database_error(error.to_string()),
     };
-    let mut results = Vec::new();
-    for row in rows {
-        let key: String = row.try_get("session_key").unwrap_or_default();
-        let data: String = row.try_get("session_data").unwrap_or_default();
-        let decoded = match crate::identity::decode_session_data(&data, secret_key) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let owner = decoded.get("_auth_user_id").and_then(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| value.as_i64().map(|id| id.to_string()))
-        });
-        if owner.as_deref() != Some(user.id.to_string().as_str()) {
-            continue;
-        }
-        let expire: Option<String> = row.try_get("expire_date").ok().flatten();
-        let recorded_created: Option<String> = row.try_get("created_at").ok().flatten();
-        let last_activity: Option<String> = row.try_get("last_activity").ok().flatten();
-        let derived = expire
-            .as_deref()
-            .and_then(parse_timestamp)
-            .map(|value| value - chrono::Duration::seconds(1_209_600))
-            .map(|value| timestamp_text(&value));
-        results.push(json!({
-            "session_key_masked": mask_session_key(&key),
-            "is_current": key == user.session_key,
-            "expire_date": expire,
-            "created_at": recorded_created.clone().or(derived),
-            "created_at_source": if recorded_created.is_some() { "session_metadata" } else { "derived_from_expire_date" },
-            "last_activity": last_activity,
-            "last_activity_source": if last_activity.is_some() { "session_metadata" } else { "unavailable" },
-        }));
-    }
+    let current_hash = crate::identity::session_token_hash(&user.session_key);
+    let results = rows.into_iter().map(|row| {
+        let token_hash: String = row.try_get("token_hash").unwrap_or_default();
+        json!({
+            "session_key": token_hash,
+            "session_key_masked": mask_session_key(&token_hash),
+            "is_current": token_hash == current_hash,
+            "expire_date": row.try_get::<Option<String>, _>("expires_at").ok().flatten(),
+            "created_at": row.try_get::<Option<String>, _>("created_at").ok().flatten(),
+            "last_activity": row.try_get::<Option<String>, _>("last_activity").ok().flatten(),
+        })
+    }).collect::<Vec<_>>();
     Json(json!({"results": results})).into_response()
 }
 
@@ -581,68 +346,59 @@ pub async fn revoke_privacy_session(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    if !tenant_member(pool, &tenant_id, user.id)
-        .await
-        .unwrap_or(false)
-    {
+    if !tenant_member(pool, &tenant_id, user.id).await.unwrap_or(false) {
         return not_found();
+    }
+    revoke_owned_session(&state, &headers, Some(&tenant_id), &session_key).await
+}
+
+async fn revoke_owned_session(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_id: Option<&str>,
+    token_hash: &str,
+) -> Response {
+    let user = match require_user(state, headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    if token_hash.len() != 64 || !token_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return not_found();
+    }
+    let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    let stored = sqlx::query_scalar::<_, String>(
-        "SELECT session_data FROM django_session WHERE session_key = ? LIMIT 1",
+    let updated = sqlx::query(
+        "UPDATE rust_sessions SET revoked_at = CURRENT_TIMESTAMP \
+         WHERE token_hash = ? AND user_id = ? AND revoked_at IS NULL",
     )
-    .bind(&session_key)
-    .fetch_optional(pool)
+    .bind(token_hash)
+    .bind(user.id)
+    .execute(pool)
     .await;
-    let stored = match stored {
-        Ok(Some(value)) => value,
-        Ok(None) => return Json(json!({"revoked": true, "already_revoked": true})).into_response(),
+    let updated = match updated {
+        Ok(result) => result.rows_affected(),
         Err(error) => return database_error(error.to_string()),
     };
-    let owner = crate::identity::decode_session_data(&stored, secret_key)
-        .ok()
-        .and_then(|data| {
-            data.get("_auth_user_id").and_then(|value| {
-                value
-                    .as_str()
-                    .map(str::to_string)
-                    .or_else(|| value.as_i64().map(|id| id.to_string()))
-            })
-        });
-    if owner.as_deref() != Some(user.id.to_string().as_str()) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": {"code": "NOT_FOUND", "message": "Session not found for this user.", "details": {}}})),
-        )
-            .into_response();
+    if updated == 0 {
+        return Json(json!({"revoked": false, "idempotent": true})).into_response();
     }
-    let masked = mask_session_key(&session_key);
-    if let Err(error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-        .bind(&session_key)
-        .execute(pool)
-        .await
-    {
-        return database_error(error.to_string());
-    }
-    let now_expr = if is_postgres(&state) {
-        "NOW()"
-    } else {
-        "datetime('now')"
-    };
-    let sql = format!(
-        "UPDATE core_sessionactivity SET revoked_at = {now_expr} \
-         WHERE session_key = ? AND revoked_at IS NULL"
-    );
-    if let Err(error) = sqlx::query(&sql).bind(&session_key).execute(pool).await {
+    if let Err(error) = sqlx::query(
+        "UPDATE platform_session_activity SET revoked_at = CURRENT_TIMESTAMP \
+         WHERE token_hash = ? AND user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(token_hash)
+    .bind(user.id)
+    .execute(pool)
+    .await {
         return database_error(error.to_string());
     }
     if let Some(database_url) = state.config.database_url.as_deref() {
+        let masked = mask_session_key(token_hash);
         let event = crate::audit::AuditEvent {
-            tenant_id: Some(&tenant_id),
+            tenant_id,
             project_id: None,
-            event_type: "privacy.session.revoked",
+            event_type: if tenant_id.is_some() { "privacy.session.revoked" } else { "session.revoked" },
             resource_type: "session",
             resource_id: &masked,
             outcome: "success",
@@ -650,14 +406,14 @@ pub async fn revoke_privacy_session(
             request_id: "",
             remote_addr: None,
             user_agent: "",
-            metadata: json!({"session_key_masked": masked}),
+            metadata: json!({"session_key_masked": masked, "current": token_hash == crate::identity::session_token_hash(&user.session_key)}),
         };
         if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
-            tracing::error!(%error, "rust account api could not append the privacy audit event");
+            tracing::error!(%error, "rust account api could not append the session audit event");
             return unavailable();
         }
     }
-    Json(json!({"revoked": true, "already_revoked": false})).into_response()
+    Json(json!({"revoked": true, "idempotent": false})).into_response()
 }
 
 fn mask_session_key(key: &str) -> String {
