@@ -1951,3 +1951,222 @@ fn db_time(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     }
     None
 }
+
+pub async fn create_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    match tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return admin_required(),
+        Err(error) => return database_error(error),
+    }
+    let plan_code = payload
+        .get("plan_code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let channel = payload
+        .get("channel")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let idempotency_key = payload
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !matches!(channel.as_str(), "wechat" | "alipay") {
+        return order_error(
+            StatusCode::BAD_REQUEST,
+            "PAYMENT_CHANNEL_NOT_SUPPORTED",
+            &format!("Channel {channel:?} is not supported."),
+        );
+    }
+    if plan_code.is_empty() || idempotency_key.is_empty() {
+        return order_error(
+            StatusCode::BAD_REQUEST,
+            "ORDER_INVALID",
+            "plan_code and idempotency_key are required.",
+        );
+    }
+    let true_literal = if is_postgres(&state) { "TRUE" } else { "1" };
+    let plan_sql = format!(
+        "SELECT CAST(plan.id AS TEXT) AS id, plan.price_cents, plan.currency, plan.region_scope \
+         FROM core_plan plan WHERE plan.code = ? AND plan.active = {true_literal} LIMIT 1"
+    );
+    let plan = match sqlx::query(&plan_sql)
+        .bind(&plan_code)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let region_scope: String = plan.try_get("region_scope").unwrap_or_default();
+    if region_scope != "domestic" {
+        return order_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "PURCHASE_REGION_NOT_SUPPORTED",
+            "The selected plan is not purchasable in this region.",
+        );
+    }
+    match region_gate(pool, &tenant_id, true_literal).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return order_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "PURCHASE_REGION_NOT_SUPPORTED",
+                "The selected plan is not purchasable in this region.",
+            )
+        }
+        Err(error) => return database_error(error),
+    }
+    let existing_sql = order_select(&state, "AND order_row.idempotency_key = ? LIMIT 1");
+    let existing = match sqlx::query(&existing_sql)
+        .bind(&tenant_id)
+        .bind(&idempotency_key)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => Some(row),
+        Ok(None) => None,
+        Err(error) => return database_error(error.to_string()),
+    };
+    if let Some(row) = existing {
+        return Json(order_payload(&row)).into_response();
+    }
+    let fake_enabled = std::env::var("BILLING_FAKE_PROVIDER_ENABLED")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    let native_channel = if fake_enabled && channel == "wechat" {
+        true
+    } else {
+        false
+    };
+    if !native_channel {
+        return order_error(
+            StatusCode::CONFLICT,
+            "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            "No native payment provider is configured for this channel.",
+        );
+    }
+    let plan_id: String = plan.try_get("id").unwrap_or_default();
+    let amount_cents: i64 = plan.try_get("price_cents").unwrap_or(0);
+    let currency: String = plan
+        .try_get("currency")
+        .unwrap_or_else(|_| "CNY".to_string());
+    let order_id = uuid::Uuid::new_v4().to_string();
+    let trade_no = format!("fake-{order_id}");
+    let instructions = json!({
+        "provider": "fake",
+        "trade_no": trade_no,
+        "prepay_id": format!("fake-prepay-{order_id}"),
+        "code_url": format!("weixin://wxpay/bizpayurl?pr=fake{order_id}"),
+    });
+    let now = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        "datetime('now')".to_string()
+    };
+    let insert = format!(
+        "INSERT INTO core_order (id, tenant_id, plan_id, status, amount_cents, refunded_cents, \
+         currency, channel, provider_trade_no, payment_instruction, paid_at, idempotency_key, \
+         created_by_id, created_at, updated_at) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, ?, \
+         NULL, ?, ?, {now}, {now})"
+    );
+    if let Err(error) = sqlx::query(&insert)
+        .bind(&order_id)
+        .bind(&tenant_id)
+        .bind(&plan_id)
+        .bind(amount_cents)
+        .bind(&currency)
+        .bind(&channel)
+        .bind(&trade_no)
+        .bind(serde_json::to_string(&instructions).unwrap_or_else(|_| "{}".to_string()))
+        .bind(&idempotency_key)
+        .bind(user.id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "billing.order.created",
+            resource_type: "order",
+            resource_id: &order_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"channel": channel, "plan_code": plan_code}),
+        },
+    )
+    .await;
+    let sql = order_select(&state, "AND CAST(order_row.id AS TEXT) = ? LIMIT 1");
+    match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&order_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => {
+            let mut payload = order_payload(&row);
+            payload["payment"] = instructions;
+            (StatusCode::CREATED, Json(payload)).into_response()
+        }
+        Ok(None) => not_found(),
+        Err(error) => database_error(error.to_string()),
+    }
+}
+
+async fn region_gate(pool: &AnyPool, tenant_id: &str, true_literal: &str) -> Result<bool, String> {
+    let sql = format!(
+        "SELECT COUNT(*) FROM core_modelprovider provider WHERE CAST(provider.tenant_id AS TEXT) = ? \
+         AND provider.enabled = {true_literal} AND TRIM(COALESCE(provider.deployment_region, '')) <> 'domestic'"
+    );
+    let count = sqlx::query_scalar::<_, i64>(&sql)
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(count == 0)
+}
+
+fn order_error(status_code: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status_code,
+        Json(json!({"error": {"code": code, "message": message, "details": {}}})),
+    )
+        .into_response()
+}

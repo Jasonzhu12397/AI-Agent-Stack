@@ -31,7 +31,8 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenanttokenbudget (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL UNIQUE, daily_limit INTEGER NOT NULL, monthly_limit INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenanttokenusage (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, reserved_tokens INTEGER NOT NULL, consumed_tokens INTEGER NOT NULL, expires_at DATETIME NOT NULL, settled_at DATETIME, scope_ref TEXT, agent_run_id TEXT, workflow_run_id TEXT)",
         "CREATE TABLE core_entitlementgrant (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, order_id TEXT NOT NULL, subscription_id TEXT, period VARCHAR(16) NOT NULL, tokens INTEGER NOT NULL, expires_at DATETIME, reason TEXT NOT NULL, created_at DATETIME NOT NULL)",
-        "CREATE TABLE core_order (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, amount_cents INTEGER NOT NULL, refunded_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, channel VARCHAR(16) NOT NULL, provider_trade_no VARCHAR(128) NOT NULL, payment_instruction TEXT NOT NULL, paid_at DATETIME, idempotency_key VARCHAR(160) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_order (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, plan_id TEXT NOT NULL, status VARCHAR(16) NOT NULL, amount_cents INTEGER NOT NULL, refunded_cents INTEGER NOT NULL, currency VARCHAR(8) NOT NULL, channel VARCHAR(16) NOT NULL, provider_trade_no VARCHAR(128) NOT NULL, payment_instruction TEXT NOT NULL, paid_at DATETIME, idempotency_key VARCHAR(160) NOT NULL, created_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_modelprovider (id TEXT PRIMARY KEY, tenant_id TEXT, name VARCHAR(120) NOT NULL, provider_type VARCHAR(32) NOT NULL, base_url VARCHAR(300) NOT NULL, credential_ref VARCHAR(300) NOT NULL, config TEXT NOT NULL, enabled BOOLEAN NOT NULL, deployment_region VARCHAR(32) NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(80) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(160) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(64), user_agent VARCHAR(300) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -375,4 +376,65 @@ async fn renews_subscription_from_a_paid_order() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "SUBSCRIPTION_GRANT_ALREADY_ISSUED");
+}
+
+#[tokio::test]
+async fn creates_order_rejects_unconfigured_payment_provider() {
+    let state = state().await;
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/"),
+        Some(
+            json!({"plan_code": "starter", "channel": "wechat", "idempotency_key": "order-key-1"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "PAYMENT_PROVIDER_NOT_CONFIGURED");
+
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/"),
+        Some(
+            json!({"plan_code": "starter", "channel": "stripe", "idempotency_key": "order-key-2"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "PAYMENT_CHANNEL_NOT_SUPPORTED");
+}
+
+#[tokio::test]
+async fn creates_order_with_fake_provider_when_enabled() {
+    if std::env::var("BILLING_FAKE_PROVIDER_ENABLED").as_deref() != Ok("true") {
+        return;
+    }
+    let state = state().await;
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/"),
+        Some(json!({"plan_code": "starter", "channel": "wechat", "idempotency_key": "fake-key-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["amount_cents"], 9900);
+    assert_eq!(body["payment"]["provider"], "fake");
+    assert!(body["provider_trade_no"]
+        .as_str()
+        .unwrap()
+        .starts_with("fake-"));
+
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/"),
+        Some(json!({"plan_code": "starter", "channel": "wechat", "idempotency_key": "fake-key-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["idempotency_key"], "fake-key-1");
 }

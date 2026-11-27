@@ -239,7 +239,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/billing/orders/",
-                get(crate::billing_api::list_orders),
+                get(crate::billing_api::list_orders).post(crate::billing_api::create_order),
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/",
