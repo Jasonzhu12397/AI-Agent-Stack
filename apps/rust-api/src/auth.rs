@@ -30,7 +30,7 @@ struct LoginPayload {
 /// Native `GET /api/v1/auth/csrf/`.
 ///
 /// The cookie is the 32-character secret while the JSON token is the 64-char
-/// masked value Django hands to the console; the mask changes on every call,
+/// masked CSRF value returned to the web console; the mask changes on every call,
 /// so a cached response cannot pair a stale token with a live cookie.
 pub async fn csrf(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let secret = cookie_value(&headers, CSRF_COOKIE)
