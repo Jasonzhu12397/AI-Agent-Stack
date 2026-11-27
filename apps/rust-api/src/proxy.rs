@@ -10,6 +10,7 @@ use crate::config::Config;
 pub struct AppState {
     pub config: Config,
     pub identity_pool: Option<sqlx::AnyPool>,
+    pub client: reqwest::Client,
 }
 
 impl AppState {
@@ -27,6 +28,7 @@ impl AppState {
         Ok(Self {
             config,
             identity_pool,
+            client: reqwest::Client::new(),
         })
     }
 
@@ -37,6 +39,7 @@ impl AppState {
         for migration in [
             include_str!("../migrations/0001_rust_sessions.sql"),
             include_str!("../migrations/0002_platform_identity.sql"),
+            include_str!("../migrations/0003_platform_user_profiles.sql"),
         ] {
             sqlx::raw_sql(migration)
                 .execute(pool)
