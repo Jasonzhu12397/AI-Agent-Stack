@@ -947,3 +947,124 @@ fn json_column(state: &AppState, column: &str) -> String {
         column.to_string()
     }
 }
+
+/// Native replacement for `GET|POST /api/v1/agent-plugins/{plugin}/`.
+pub async fn plugin_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(plugin_id): Path<String>,
+    method: axum::http::Method,
+    payload: Option<Json<Value>>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let tenant_id: String = match sqlx::query_scalar(
+        "SELECT CAST(tenant_id AS TEXT) FROM core_agentplugindefinition \
+         WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&plugin_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(value)) => value,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if method == axum::http::Method::POST {
+        match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"detail": "Tenant administrator permission required."})),
+                )
+                    .into_response()
+            }
+            Err(error) => return database_error(error),
+        }
+        let body = payload
+            .map(|Json(value)| value)
+            .unwrap_or_else(|| json!({}));
+        let Some(enabled) = body.get("enabled").and_then(Value::as_bool) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "enabled must be a boolean."})),
+            )
+                .into_response();
+        };
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let now_expr = if is_postgres(&state) {
+            "NOW()".to_string()
+        } else {
+            format!("'{now}'")
+        };
+        let sql = format!(
+            "UPDATE core_agentplugindefinition SET enabled = ?, updated_at = {now_expr} \
+             WHERE CAST(id AS TEXT) = ?"
+        );
+        if let Err(error) = sqlx::query(&sql)
+            .bind(i64::from(enabled))
+            .bind(&plugin_id)
+            .execute(pool)
+            .await
+        {
+            return database_error(error.to_string());
+        }
+        let plugin_key: String = sqlx::query_scalar(
+            "SELECT plugin_key FROM core_agentplugindefinition WHERE CAST(id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(&plugin_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default();
+        let _ = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: None,
+                event_type: "agent_plugin.enabled_changed",
+                resource_type: "agent_plugin_definition",
+                resource_id: plugin_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({"plugin_key": plugin_key, "enabled": enabled}),
+            },
+        )
+        .await;
+    }
+    let created = timestamp(&state, "plugin", "created_at");
+    let updated = timestamp(&state, "plugin", "updated_at");
+    let sql = format!(
+        "SELECT CAST(plugin.id AS TEXT) AS id, CAST(plugin.tenant_id AS TEXT) AS tenant_id, \
+         plugin.plugin_key, plugin.name, plugin.description, plugin.version, plugin.protocol, \
+         plugin.endpoint_url, CAST(plugin.auth_required AS INTEGER) AS auth_required_int, \
+         plugin.credential_ref, plugin.capabilities, plugin.manifest, plugin.input_schema, \
+         plugin.output_schema, plugin.timeout_seconds, plugin.max_concurrency, \
+         CAST(plugin.enabled AS INTEGER) AS enabled_int, {created} AS created, {updated} AS updated \
+         FROM core_agentplugindefinition plugin WHERE CAST(plugin.id AS TEXT) = ? LIMIT 1"
+    );
+    match sqlx::query(&sql)
+        .bind(&plugin_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => Json(plugin_json(&row)).into_response(),
+        Ok(None) => not_found(),
+        Err(error) => database_error(error.to_string()),
+    }
+}

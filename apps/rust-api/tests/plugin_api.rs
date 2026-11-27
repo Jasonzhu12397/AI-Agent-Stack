@@ -205,3 +205,28 @@ async fn reads_the_marketplace_catalog() {
     );
     assert!(body["input_schema"].is_object());
 }
+
+#[tokio::test]
+async fn plugin_detail_toggles_enabled() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/api/v1/agent-plugins/{PLUGIN}/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["plugin_key"], "weather");
+    assert_eq!(body["enabled"], true);
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugins/{PLUGIN}/"),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["enabled"], false);
+}

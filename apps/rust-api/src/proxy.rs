@@ -83,6 +83,11 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::agent_runtime_api::renew_lease),
             )
             .route(
+                "/api/v1/agent-plugins/{plugin_id}/",
+                axum::routing::get(crate::plugin_api::plugin_detail)
+                    .post(crate::plugin_api::plugin_detail),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-teams/",
                 axum::routing::get(crate::agent_team_api::list_teams)
                     .post(crate::agent_team_api::create_team),
