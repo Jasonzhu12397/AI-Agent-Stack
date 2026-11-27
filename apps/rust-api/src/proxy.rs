@@ -149,7 +149,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/infrastructure-networks/",
-                axum::routing::get(crate::infra_api::profile).put(crate::infra_api::profile).delete(crate::infra_api::profile),
+                axum::routing::any(crate::infra_api::profile),
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/",
