@@ -481,7 +481,7 @@ pub async fn create_tenant_member(
         );
     }
     let target = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, username, email FROM auth_user WHERE username = ?",
+        "SELECT id, username, email FROM platform_users WHERE username = ?",
     )
     .bind(&username)
     .fetch_optional(pool)
@@ -612,7 +612,7 @@ pub async fn update_tenant_member(
     }
     let membership = sqlx::query_as::<_, (String, i64, String, String)>(
         "SELECT role, user_id, username, email FROM core_tenantmembership m \
-         JOIN auth_user u ON u.id = m.user_id \
+         JOIN platform_users u ON u.id = m.user_id \
          WHERE CAST(m.id AS TEXT) = ? AND CAST(m.tenant_id AS TEXT) = ?",
     )
     .bind(&membership_id)
@@ -736,7 +736,7 @@ pub async fn delete_tenant_member(
     }
     let membership = sqlx::query_as::<_, (String, i64, String)>(
         "SELECT role, user_id, username FROM core_tenantmembership m \
-         JOIN auth_user u ON u.id = m.user_id \
+         JOIN platform_users u ON u.id = m.user_id \
          WHERE CAST(m.id AS TEXT) = ? AND CAST(m.tenant_id AS TEXT) = ?",
     )
     .bind(&membership_id)
@@ -919,7 +919,7 @@ pub async fn create_project_member(
         );
     }
     let target = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, username, email FROM auth_user WHERE username = ?",
+        "SELECT id, username, email FROM platform_users WHERE username = ?",
     )
     .bind(&username)
     .fetch_optional(pool)
@@ -1067,7 +1067,7 @@ pub async fn update_project_member(
     }
     let membership = sqlx::query_as::<_, (String, i64, String, String)>(
         "SELECT role, user_id, username, email FROM core_projectmembership m \
-         JOIN auth_user u ON u.id = m.user_id \
+         JOIN platform_users u ON u.id = m.user_id \
          WHERE CAST(m.id AS TEXT) = ? AND CAST(m.project_id AS TEXT) = ?",
     )
     .bind(&membership_id)
@@ -1562,7 +1562,7 @@ async fn project_admin(
 async fn tenant_member_rows(pool: &sqlx::AnyPool, tenant_id: &str) -> Result<Vec<Value>, String> {
     let rows = sqlx::query_as::<_, (String, i64, String, String, String)>(
         "SELECT CAST(m.id AS TEXT), m.user_id, u.username, u.email, m.role \
-         FROM core_tenantmembership m JOIN auth_user u ON u.id = m.user_id \
+         FROM core_tenantmembership m JOIN platform_users u ON u.id = m.user_id \
          WHERE CAST(m.tenant_id AS TEXT) = ? ORDER BY u.username",
     )
     .bind(tenant_id)
@@ -1580,7 +1580,7 @@ async fn tenant_member_rows(pool: &sqlx::AnyPool, tenant_id: &str) -> Result<Vec
 async fn project_member_rows(pool: &sqlx::AnyPool, project_id: &str) -> Result<Vec<Value>, String> {
     let rows = sqlx::query_as::<_, (String, i64, String, String, String)>(
         "SELECT CAST(m.id AS TEXT), m.user_id, u.username, u.email, m.role \
-         FROM core_projectmembership m JOIN auth_user u ON u.id = m.user_id \
+         FROM core_projectmembership m JOIN platform_users u ON u.id = m.user_id \
          WHERE CAST(m.project_id AS TEXT) = ? ORDER BY u.username",
     )
     .bind(project_id)
