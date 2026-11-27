@@ -266,6 +266,15 @@ pub fn router(state: AppState) -> Router {
                 get(crate::settings_api::tenant_get).patch(crate::settings_api::tenant_patch),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/scheduled-jobs/",
+                get(crate::scheduled_api::list_jobs).post(crate::scheduled_api::create_job),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/scheduled-jobs/{job_id}/",
+                axum::routing::patch(crate::scheduled_api::update_job)
+                    .delete(crate::scheduled_api::delete_job),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/settings/{section}/",
                 get(crate::settings_api::project_get).patch(crate::settings_api::project_patch),
             )

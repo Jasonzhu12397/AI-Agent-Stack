@@ -32,6 +32,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_agentchatmessage (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, role VARCHAR(16) NOT NULL, content TEXT NOT NULL, author_id INTEGER, context TEXT NOT NULL, usage TEXT NOT NULL, tool_calls TEXT NOT NULL, error_code VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentchatattachment (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, uploaded_by_id INTEGER NOT NULL, filename VARCHAR(255) NOT NULL, content_type VARCHAR(128) NOT NULL, size_bytes INTEGER NOT NULL, file VARCHAR(100) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugindefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, plugin_key VARCHAR(100) NOT NULL, name VARCHAR(120) NOT NULL, description TEXT NOT NULL, version VARCHAR(40) NOT NULL, protocol VARCHAR(32) NOT NULL, endpoint_url VARCHAR(500) NOT NULL, auth_required BOOLEAN NOT NULL, credential_ref VARCHAR(2048) NOT NULL, capabilities TEXT NOT NULL, manifest TEXT NOT NULL, input_schema TEXT NOT NULL, output_schema TEXT NOT NULL, timeout_seconds INTEGER NOT NULL, max_concurrency INTEGER NOT NULL, enabled BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_scheduledchatjob (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(160) NOT NULL, prompt TEXT NOT NULL, cadence VARCHAR(16) NOT NULL, hour INTEGER NOT NULL, weekday INTEGER NOT NULL, execution_target VARCHAR(16) NOT NULL, effort VARCHAR(16) NOT NULL, status VARCHAR(16) NOT NULL, next_run_at DATETIME NOT NULL, last_run_at DATETIME, last_error_code VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, model_config_id TEXT, thread_id TEXT)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(120) NOT NULL, resource_type VARCHAR(80) NOT NULL, resource_id VARCHAR(64) NOT NULL, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr TEXT, user_agent VARCHAR(256) NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64) NOT NULL, event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, granted_capabilities TEXT NOT NULL, credential_ref VARCHAR(200) NOT NULL, installed_by_id INTEGER NOT NULL, revision INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
@@ -374,4 +375,67 @@ async fn stores_chat_attachments_in_real_storage() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = call(&state, "GET", &collection, None).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn manages_scheduled_chat_jobs() {
+    let state = state().await;
+    let base = format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/scheduled-jobs/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &base,
+        Some(json!({
+            "name": "Morning fleet check",
+            "prompt": "Check nodes",
+            "cadence": "weekly",
+            "hour": 8,
+            "weekday": 2,
+            "model_config_id": "bbbbbbbb-1111-1111-1111-111111111111"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["name"], "Morning fleet check");
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["weekday"], 2);
+    assert_eq!(
+        body["model_config_id"],
+        "bbbbbbbb-1111-1111-1111-111111111111"
+    );
+    let id = body["id"].as_str().unwrap().to_string();
+
+    let (status, body) = call(&state, "GET", &base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+
+    let item = format!("{base}{id}/");
+    let (status, body) = call(
+        &state,
+        "PATCH",
+        &item,
+        Some(json!({"enabled": false, "hour": 9})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "paused");
+    assert_eq!(body["enabled"], false);
+    assert_eq!(body["hour"], 9);
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &base,
+        Some(json!({"name": "", "prompt": "x"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "INVALID_SCHEDULED_JOB");
+
+    let (status, _) = call(&state, "DELETE", &item, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = call(&state, "GET", &base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 0);
 }

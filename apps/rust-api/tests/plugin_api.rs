@@ -179,7 +179,10 @@ async fn reads_the_marketplace_catalog() {
     assert_eq!(body["count"], 1);
     assert_eq!(body["entries"][0]["plugin_key"], "weather");
     assert_eq!(body["entries"][0]["installation_status"], "not_installed");
-    assert_eq!(body["entries"][0]["capabilities"][0]["name"], "weather.lookup");
+    assert_eq!(
+        body["entries"][0]["capabilities"][0]["name"],
+        "weather.lookup"
+    );
 
     let uri = format!("{base}?project_id={PROJECT}&installed=true");
     let (status, body) = call(&state, "GET", &uri, None).await;
@@ -196,6 +199,9 @@ async fn reads_the_marketplace_catalog() {
     let detail = format!("{base}weather/?project_id={PROJECT}");
     let (status, body) = call(&state, "GET", &detail, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["manifest"]["capabilities"][0]["name"], "weather.lookup");
+    assert_eq!(
+        body["manifest"]["capabilities"][0]["name"],
+        "weather.lookup"
+    );
     assert!(body["input_schema"].is_object());
 }
