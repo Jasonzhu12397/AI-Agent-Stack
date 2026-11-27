@@ -1,8 +1,7 @@
-use std::time::Duration;
 
-use ai_agent_stack_api_edge::config::Config;
-use ai_agent_stack_api_edge::identity::encode_session_data;
-use ai_agent_stack_api_edge::proxy::{router, AppState};
+use ai_agent_stack_api::config::Config;
+use ai_agent_stack_api::identity::encode_session_data;
+use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
@@ -71,15 +70,7 @@ async fn state() -> AppState {
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES (?, ?, datetime('now', '+1 day'))")
         .bind(SESSION).bind(data).execute(&pool).await.unwrap();
     pool.close().await;
-    let config = Config::new(
-        "127.0.0.1:0".into(),
-        "http://127.0.0.1:1".into(),
-        Duration::from_secs(2),
-        Duration::from_secs(10),
-    )
-    .unwrap()
-    .with_native_identity(true, Some(url), Some(SECRET.to_string()))
-    .unwrap();
+    let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
     AppState::new(config).unwrap()
 }
 
