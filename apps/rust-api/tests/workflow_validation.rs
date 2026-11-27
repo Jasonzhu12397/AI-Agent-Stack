@@ -1,4 +1,4 @@
-use ai_agent_stack_api_edge::workflow_validation::{execution_layers, validate};
+use ai_agent_stack_api::workflow_validation::{execution_layers, validate};
 use serde_json::json;
 
 fn graph(start: &str, end: &str, extra: serde_json::Value) -> serde_json::Value {
