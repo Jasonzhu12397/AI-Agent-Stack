@@ -13,6 +13,7 @@ pub mod cluster_api;
 pub mod cluster_sync_api;
 pub mod config;
 pub mod context;
+pub mod data_export_api;
 pub mod etcd_api;
 pub mod fleet_api;
 pub mod fleet_boot;

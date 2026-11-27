@@ -614,6 +614,19 @@ pub fn router(state: AppState) -> Router {
                 post(crate::plugin_api::bind_installation_agents),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/data-controls/exports/",
+                axum::routing::get(crate::data_export_api::list_or_create)
+                    .post(crate::data_export_api::list_or_create),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/data-controls/exports/{job_id}/",
+                axum::routing::get(crate::data_export_api::detail),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/data-controls/exports/{job_id}/expire/",
+                axum::routing::post(crate::data_export_api::expire),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/knowledge-bases/",
                 get(crate::knowledge_api::list_knowledge_bases)
                     .post(crate::knowledge_api::create_knowledge_base),
