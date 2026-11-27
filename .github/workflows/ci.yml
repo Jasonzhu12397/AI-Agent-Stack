@@ -54,6 +54,10 @@ jobs:
           restore-keys: rust-api-
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Diagnose generated Cargo lockfile
+        run: |
+          cargo generate-lockfile
+          git diff -- apps/rust-api/Cargo.lock
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
