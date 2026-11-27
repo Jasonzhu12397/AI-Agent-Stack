@@ -79,9 +79,10 @@ if let Err(response) = enforce_csrf(&headers) {
     };
 
     let user = sqlx::query_as::<_, (i64, String, String, String, i64)>(
-        "SELECT id, username, email, password, \
-         CASE WHEN is_active THEN 1 ELSE 0 END \
-         FROM auth_user WHERE username = ?",
+        "SELECT u.id, u.username, u.email, c.credential_hash, \
+         CASE WHEN u.is_active THEN 1 ELSE 0 END \
+         FROM platform_users u JOIN platform_credentials c ON c.user_id = u.id \
+         AND c.credential_type = 'password' WHERE u.username = ?",
     )
     .bind(&payload.username)
     .fetch_optional(pool)
@@ -138,7 +139,7 @@ let request_id = header_string(&headers, "x-request-id");
         }
         return unavailable("The login audit event could not be recorded.");
     }
-    let _ = sqlx::query("UPDATE auth_user SET last_login = CURRENT_TIMESTAMP WHERE id = ?")
+    let _ = sqlx::query("UPDATE platform_users SET last_login = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
         .bind(user_id)
         .execute(pool)
         .await;
@@ -607,7 +608,7 @@ if let Err(response) = enforce_csrf(&headers) {
         }
     };
     let exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM auth_user WHERE LOWER(username) = LOWER(?)",
+        "SELECT COUNT(*) FROM platform_users WHERE LOWER(username) = LOWER(?)",
     )
     .bind(&username)
     .fetch_one(pool)
@@ -622,10 +623,9 @@ if let Err(response) = enforce_csrf(&headers) {
     }
     let encoded_password = encode_password(&payload.password, 870_000);
     let user = sqlx::query(
-        "INSERT INTO auth_user (password, is_superuser, username, first_name, last_name, email, \
-         is_staff, is_active, date_joined) VALUES (?, 0, ?, '', '', ?, 0, 1, CURRENT_TIMESTAMP)",
+        "INSERT INTO platform_users (username, email, is_active, is_staff, is_superuser, date_joined) \
+         VALUES (?, ?, TRUE, FALSE, FALSE, CURRENT_TIMESTAMP)",
     )
-    .bind(&encoded_password)
     .bind(&username)
     .bind(&email)
     .execute(pool)
@@ -637,6 +637,18 @@ if let Err(response) = enforce_csrf(&headers) {
             return unavailable("The account could not be created.");
         }
     };
+    let credential = sqlx::query(
+        "INSERT INTO platform_credentials (user_id, credential_type, credential_hash) \
+         VALUES (?, 'password', ?)",
+    )
+    .bind(user_id)
+    .bind(&encoded_password)
+    .execute(pool)
+    .await;
+    if let Err(error) = credential {
+        tracing::error!(%error, "rust auth could not store the password credential");
+        return unavailable("The account credentials could not be created.");
+    }
     let tenant_id = uuid::Uuid::new_v4().simple().to_string();
     let project_id = uuid::Uuid::new_v4().simple().to_string();
     let tenant_slug = unique_tenant_slug(pool, &display_name).await;
