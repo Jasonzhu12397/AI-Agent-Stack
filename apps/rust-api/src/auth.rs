@@ -166,13 +166,13 @@ async fn record_session_activity(
 ) {
     let now = if postgres { "NOW()" } else { "datetime('now')" };
     let sql = format!(
-        "INSERT INTO platform_session_activity (session_key, user_id, created_at, last_activity, revoked_at) \
+        "INSERT INTO platform_session_activity (token_hash, user_id, created_at, last_activity, revoked_at) \
          VALUES (?, ?, {now}, {now}, NULL) \
-         ON CONFLICT(session_key) DO UPDATE SET user_id = excluded.user_id, \
+         ON CONFLICT(token_hash) DO UPDATE SET user_id = excluded.user_id, \
          last_activity = excluded.last_activity, revoked_at = NULL"
     );
     let result = sqlx::query(&sql)
-        .bind(session_key)
+        .bind(session_token_hash(session_key))
         .bind(user_id)
         .execute(pool)
         .await;
@@ -185,9 +185,9 @@ async fn mark_session_revoked(pool: &sqlx::AnyPool, session_key: &str, postgres:
     let now = if postgres { "NOW()" } else { "datetime('now')" };
     let sql = format!(
         "UPDATE platform_session_activity SET revoked_at = {now} \
-         WHERE session_key = ? AND revoked_at IS NULL"
+         WHERE token_hash = ? AND revoked_at IS NULL"
     );
-    let result = sqlx::query(&sql).bind(session_key).execute(pool).await;
+    let result = sqlx::query(&sql).bind(session_token_hash(session_key)).execute(pool).await;
     if let Err(error) = result {
         tracing::debug!(%error, "rust auth skipped session revocation metadata");
     }
