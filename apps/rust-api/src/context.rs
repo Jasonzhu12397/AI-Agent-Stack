@@ -28,7 +28,7 @@ pub async fn authenticate(
     let token_hash = session_token_hash(&session_key);
     let user = sqlx::query_as::<_, (i64, String, String, i64)>(
         "SELECT u.id, u.username, u.email, CASE WHEN u.is_staff THEN 1 ELSE 0 END \
-         FROM rust_sessions s JOIN auth_user u ON u.id = s.user_id \
+         FROM rust_sessions s JOIN platform_users u ON u.id = s.user_id \
          WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP \
          AND s.revoked_at IS NULL AND u.is_active = TRUE",
     )
