@@ -32,7 +32,10 @@ impl Config {
         }
 
         let platform_secret_key = env::var("PLATFORM_SECRET_KEY").ok();
-        if platform_secret_key.as_ref().is_some_and(|key| key.len() < 32) {
+        if platform_secret_key
+            .as_ref()
+            .is_some_and(|key| key.len() < 32)
+        {
             return Err("PLATFORM_SECRET_KEY must contain at least 32 characters".into());
         }
         if production && platform_secret_key.is_none() {
