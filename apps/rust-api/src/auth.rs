@@ -66,7 +66,7 @@ pub async fn login(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-if let Err(response) = enforce_csrf(&headers) {
+    if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
 
@@ -187,7 +187,10 @@ async fn mark_session_revoked(pool: &sqlx::AnyPool, session_key: &str, postgres:
         "UPDATE platform_session_activity SET revoked_at = {now} \
          WHERE token_hash = ? AND revoked_at IS NULL"
     );
-    let result = sqlx::query(&sql).bind(session_token_hash(session_key)).execute(pool).await;
+    let result = sqlx::query(&sql)
+        .bind(session_token_hash(session_key))
+        .execute(pool)
+        .await;
     if let Err(error) = result {
         tracing::debug!(%error, "rust auth skipped session revocation metadata");
     }
@@ -202,7 +205,7 @@ pub async fn logout(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-if let Err(response) = enforce_csrf(&headers) {
+    if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
     let Some(session_key) = crate::identity::session_key_from_headers(&headers) else {
@@ -215,7 +218,8 @@ if let Err(response) = enforce_csrf(&headers) {
     )
     .bind(&token_hash)
     .fetch_optional(pool)
-    .await {
+    .await
+    {
         Ok(Some(user_id)) => Some(user_id),
         Ok(None) => return unauthenticated("This session has expired. Sign in again."),
         Err(error) => {
@@ -559,7 +563,7 @@ pub async fn register(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-if let Err(response) = enforce_csrf(&headers) {
+    if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
     if std::env::var("PLATFORM_ALLOW_SELF_REGISTRATION")
