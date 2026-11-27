@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::Engine;
 use serde_json::{json, Value};
 use sqlx::{AnyPool, Row};
 
@@ -55,27 +56,141 @@ fn bmc_base(endpoint: &str) -> Result<String, &'static str> {
     Ok(format!("https://{authority}"))
 }
 
-async fn vault_secret(reference: &str) -> Result<String, String> {
+async fn vault_token(tenant_id: &str, project_id: &str, address: &str) -> Result<String, String> {
+    let jwt_path = std::env::var("BMC_VAULT_JWT_PATH").unwrap_or_default();
+    if jwt_path.is_empty() {
+        let token = std::env::var("BMC_VAULT_TOKEN").unwrap_or_default();
+        if token.trim() != token || token.chars().any(char::is_whitespace) {
+            return Err("BMC_VAULT_NOT_CONFIGURED".into());
+        }
+        return Ok(token);
+    }
+    let role = std::env::var("BMC_VAULT_JWT_ROLE").unwrap_or_default();
+    let mount = std::env::var("BMC_VAULT_JWT_AUTH_MOUNT").unwrap_or_else(|_| "jwt".into());
+    if role.is_empty() {
+        return Err("BMC_VAULT_NOT_CONFIGURED".into());
+    }
+    let jwt = std::fs::read_to_string(&jwt_path)
+        .map_err(|_| "BMC_VAULT_NOT_CONFIGURED".to_string())?
+        .trim()
+        .to_string();
+    if !(32..=16384).contains(&jwt.len()) || jwt.split('.').count() != 3 {
+        return Err("BMC_VAULT_JWT_INVALID".into());
+    }
+    let claim_path =
+        |name: &str, fallback: &str| std::env::var(name).unwrap_or_else(|_| fallback.into());
+    let claim_value = |value: &Value, path: &str| -> Option<String> {
+        let mut current = value;
+        for part in path.split('.') {
+            current = current.get(part)?;
+        }
+        current.as_str().map(str::to_string)
+    };
+    let payload_segment = jwt.split('.').nth(1).unwrap_or_default();
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_segment)
+        .map_err(|_| "BMC_VAULT_JWT_INVALID".to_string())?;
+    let claims: Value =
+        serde_json::from_slice(&decoded).map_err(|_| "BMC_VAULT_JWT_INVALID".to_string())?;
+    let tenant_path = claim_path("BMC_VAULT_JWT_TENANT_CLAIM", "tenant_id");
+    let project_path = claim_path("BMC_VAULT_JWT_PROJECT_CLAIM", "project_id");
+    if claim_value(&claims, &tenant_path).as_deref() != Some(tenant_id)
+        || claim_value(&claims, &project_path).as_deref() != Some(project_id)
+    {
+        return Err("BMC_VAULT_JWT_SCOPE_MISMATCH".into());
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(namespace) = std::env::var("BMC_VAULT_NAMESPACE") {
+        if !namespace.is_empty() {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&namespace) {
+                headers.insert("X-Vault-Namespace", value);
+            }
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| "BMC_VAULT_AUTH_FAILED".to_string())?;
+    let response = client
+        .post(format!(
+            "{}/v1/auth/{}/login",
+            address.trim_end_matches('/'),
+            mount
+        ))
+        .headers(headers)
+        .json(&json!({"role": role, "jwt": jwt}))
+        .send()
+        .await
+        .map_err(|_| "BMC_VAULT_AUTH_FAILED".to_string())?;
+    if !response.status().is_success() {
+        return Err("BMC_VAULT_AUTH_FAILED".into());
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|_| "BMC_VAULT_AUTH_FAILED".to_string())?;
+    let token = body
+        .pointer("/auth/client_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if token.is_empty() || token.trim() != token || token.chars().any(char::is_whitespace) {
+        return Err("BMC_VAULT_AUTH_FAILED".into());
+    }
+    Ok(token)
+}
+
+async fn vault_secret(
+    reference: &str,
+    tenant_id: &str,
+    project_id: &str,
+) -> Result<String, String> {
     let rest = reference
         .strip_prefix("vault://")
         .ok_or("BMC_CREDENTIAL_REFERENCE_INVALID")?;
     let (mount, path) = rest
         .split_once('/')
         .ok_or("BMC_CREDENTIAL_REFERENCE_INVALID")?;
-    if mount.is_empty() || path.is_empty() || path.contains("..") || path.contains('?') {
+    if mount.is_empty()
+        || path.is_empty()
+        || path.contains("..")
+        || path.contains('?')
+        || !mount
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || path.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || !part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        })
+    {
         return Err("BMC_CREDENTIAL_REFERENCE_INVALID".into());
     }
     let address = std::env::var("BMC_VAULT_ADDR").unwrap_or_default();
-    let token = std::env::var("BMC_VAULT_TOKEN").unwrap_or_default();
-    if address.is_empty() || token.is_empty() {
+    if address.is_empty() || !address.starts_with("https://") {
         return Err("BMC_VAULT_NOT_CONFIGURED".into());
     }
+    let tenant_valid = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if !tenant_valid(tenant_id) || !tenant_valid(project_id) {
+        return Err("BMC_VAULT_SCOPE_INVALID".into());
+    }
+    let token = vault_token(tenant_id, project_id, &address).await?;
+    let scoped = format!("tenants/{tenant_id}/projects/{project_id}/{path}");
     let response = reqwest::Client::new()
         .get(format!(
             "{}/v1/{}/data/{}",
             address.trim_end_matches('/'),
             mount,
-            path
+            scoped
         ))
         .header("X-Vault-Token", token)
         .timeout(Duration::from_secs(5))
@@ -85,14 +200,18 @@ async fn vault_secret(reference: &str) -> Result<String, String> {
     if !response.status().is_success() {
         return Err("BMC_CREDENTIAL_LOOKUP_FAILED".into());
     }
+    if response.content_length().unwrap_or(0) > 65536 {
+        return Err("BMC_CREDENTIAL_LOOKUP_FAILED".into());
+    }
     let body: Value = response
         .json()
         .await
-        .map_err(|_| "BMC_CREDENTIAL_LOOKUP_FAILED")?;
-    body.pointer("/data/data")
+        .map_err(|_| "BMC_CREDENTIAL_LOOKUP_FAILED".to_string())?;
+    let secret = body
+        .pointer("/data/data")
         .cloned()
-        .map(|value| value.to_string())
-        .ok_or_else(|| "BMC_CREDENTIAL_LOOKUP_FAILED".into())
+        .ok_or("BMC_CREDENTIAL_LOOKUP_FAILED")?;
+    Ok(secret.to_string())
 }
 
 async fn redfish(
@@ -135,9 +254,16 @@ async fn redfish(
     serde_json::from_slice(&bytes).map_err(|_| "PXE_BOOT_RESPONSE_INVALID".into())
 }
 
-async fn boot_one(endpoint: &str, credential_ref: &str, execute: bool) -> Result<Value, String> {
+async fn boot_one(
+    endpoint: &str,
+    credential_ref: &str,
+    trust_ref: &str,
+    tenant_id: &str,
+    project_id: &str,
+    execute: bool,
+) -> Result<Value, String> {
     let base = bmc_base(endpoint).map_err(str::to_string)?;
-    let secret_json = vault_secret(credential_ref).await?;
+    let secret_json = vault_secret(credential_ref, tenant_id, project_id).await?;
     let secret: Value = serde_json::from_str(&secret_json)
         .map_err(|_| "PXE_BOOT_CREDENTIAL_INVALID".to_string())?;
     let username = secret
@@ -154,10 +280,17 @@ async fn boot_one(endpoint: &str, credential_ref: &str, execute: bool) -> Result
         return Err("PXE_BOOT_CREDENTIAL_INVALID".into());
     }
     let credential = (username, password);
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
+        .no_proxy();
+    if !trust_ref.is_empty() {
+        let pem = vault_secret(trust_ref, tenant_id, project_id).await?;
+        let certificate = reqwest::Certificate::from_pem(pem.as_bytes())
+            .map_err(|_| "PXE_BOOT_TRUST_BUNDLE_INVALID".to_string())?;
+        builder = builder.add_root_certificate(certificate);
+    }
+    let client = builder
         .build()
         .map_err(|_| "PXE_BOOT_REQUEST_FAILED".to_string())?;
     let collection = redfish(
@@ -257,13 +390,14 @@ struct Machine {
     name: String,
     endpoint: String,
     credential_ref: String,
+    trust_ref: String,
     state: String,
 }
 
 async fn machines(pool: &AnyPool, tenant: &str, project: &str) -> Result<Vec<Machine>, String> {
     let rows = sqlx::query(
         "SELECT CAST(m.id AS TEXT) AS id, COALESCE(n.name, '') AS name, COALESCE(m.bmc_endpoint, '') AS endpoint, \
-         COALESCE(m.bmc_credential_ref, '') AS credential_ref, COALESCE(m.lifecycle_state, '') AS state \
+         COALESCE(m.bmc_credential_ref, '') AS credential_ref, COALESCE(m.bmc_trust_bundle_ref, '') AS trust_ref, COALESCE(m.lifecycle_state, '') AS state \
          FROM core_agentmachine m LEFT JOIN core_agentnode n ON n.id = m.agent_node_id \
          WHERE CAST(m.tenant_id AS TEXT) = ? AND CAST(m.project_id AS TEXT) = ? ORDER BY n.name, m.id LIMIT 100",
     )
@@ -279,6 +413,7 @@ async fn machines(pool: &AnyPool, tenant: &str, project: &str) -> Result<Vec<Mac
             name: text(&row, "name"),
             endpoint: text(&row, "endpoint"),
             credential_ref: text(&row, "credential_ref"),
+            trust_ref: text(&row, "trust_ref"),
             state: text(&row, "state"),
         })
         .collect())
@@ -414,7 +549,7 @@ pub async fn pxe_boot(
             results.push(json!({"machine_id": machine.id, "name": machine.name, "status": "skipped", "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED"}));
             continue;
         }
-        match boot_one(&machine.endpoint, &machine.credential_ref, execute).await {
+        match boot_one(&machine.endpoint, &machine.credential_ref, &machine.trust_ref, &tenant_id, &project_id, execute).await {
             Ok(evidence) => {
                 if execute { executed += 1; }
                 results.push(json!({"machine_id": machine.id, "name": machine.name, "status": if execute {"executed"} else {"planned"}, "evidence": evidence}));
@@ -576,7 +711,7 @@ pub async fn discovery(
             results.push(json!({"machine_id": machine.id, "name": machine.name, "status": "skipped", "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED"}));
             continue;
         }
-        match boot_one(&machine.endpoint, &machine.credential_ref, execute).await {
+        match boot_one(&machine.endpoint, &machine.credential_ref, &machine.trust_ref, &tenant_id, &project_id, execute).await {
             Ok(evidence) => {
                 if execute { executed += 1; }
                 results.push(json!({"machine_id": machine.id, "name": machine.name, "status": if execute {"executed"} else {"planned"}, "evidence": evidence}));

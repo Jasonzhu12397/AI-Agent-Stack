@@ -21,7 +21,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, name TEXT, tenant_id TEXT, project_id TEXT)",
-        "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, agent_node_id TEXT, bmc_endpoint TEXT, bmc_credential_ref TEXT, lifecycle_state TEXT)",
+        "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, agent_node_id TEXT, bmc_endpoint TEXT, bmc_credential_ref TEXT, bmc_trust_bundle_ref TEXT, lifecycle_state TEXT)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
