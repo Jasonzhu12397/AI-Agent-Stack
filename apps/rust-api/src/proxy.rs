@@ -73,6 +73,7 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/auth/login/", post(crate::auth::login))
             .route("/api/v1/auth/logout/", post(crate::auth::logout))
             .route("/api/v1/auth/me/", get(crate::native::current_user))
+            .route("/api/v1/platform/roadmap/", get(crate::platform_api::roadmap))
             .route(
                 "/api/v1/tenants/",
                 get(crate::tenancy::list_tenants).post(crate::tenancy::create_tenant),
@@ -244,6 +245,14 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/",
                 get(crate::billing_api::get_order),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/status/",
+                get(crate::billing_api::get_order_status),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/close/",
+                axum::routing::post(crate::billing_api::close_order),
             )
             .route(
                 "/api/v1/users/me/",

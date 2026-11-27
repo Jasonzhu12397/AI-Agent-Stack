@@ -438,3 +438,27 @@ async fn creates_order_with_fake_provider_when_enabled() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["idempotency_key"], "fake-key-1");
 }
+
+#[tokio::test]
+async fn reports_order_status_and_refuses_unconfigured_close() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/order-1/status/"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "pending");
+    assert_eq!(body["provider_status"], "unknown");
+    assert_eq!(body["payment"]["qr_code"], "https://pay.example/qr");
+
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/orders/order-1/close/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "PAYMENT_PROVIDER_NOT_CONFIGURED");
+}

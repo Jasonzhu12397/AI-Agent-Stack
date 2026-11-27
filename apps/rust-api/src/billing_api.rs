@@ -2166,3 +2166,143 @@ fn order_error(status_code: StatusCode, code: &str, message: &str) -> Response {
     )
         .into_response()
 }
+
+pub async fn get_order_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, order_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let sql = order_select(&state, "AND CAST(order_row.id AS TEXT) = ? LIMIT 1");
+    let row = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&order_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let status: String = row.try_get("status").unwrap_or_default();
+    let mut payload = order_payload(&row);
+    let payment_text: Option<String> = row.try_get("payment_text").ok();
+    if let Some(payment) = payment_text.and_then(|text| serde_json::from_str::<Value>(&text).ok()) {
+        payload["payment"] = payment;
+    }
+    payload["provider_status"] = Value::String(if status == "pending" {
+        "unknown".to_string()
+    } else {
+        String::new()
+    });
+    payload["provider_error"] = Value::String(String::new());
+    Json(payload).into_response()
+}
+
+pub async fn close_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, order_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    match tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return admin_required(),
+        Err(error) => return database_error(error),
+    }
+    let sql = order_select(&state, "AND CAST(order_row.id AS TEXT) = ? LIMIT 1");
+    let row = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&order_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let status: String = row.try_get("status").unwrap_or_default();
+    let channel: String = row.try_get("channel").unwrap_or_default();
+    if !matches!(status.as_str(), "created" | "pending") {
+        return order_error(
+            StatusCode::CONFLICT,
+            "ORDER_STATE_CONFLICT",
+            &format!("Order in status {status} cannot be closed."),
+        );
+    }
+    let fake = std::env::var("BILLING_FAKE_PROVIDER_ENABLED")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    if status == "pending" && !(fake && channel == "wechat") {
+        return order_error(
+            StatusCode::CONFLICT,
+            "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            "No native payment provider is configured for this channel.",
+        );
+    }
+    let now = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        "datetime('now')".to_string()
+    };
+    let update = format!(
+        "UPDATE core_order SET status = 'closed', updated_at = {now} \
+         WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?"
+    );
+    if let Err(error) = sqlx::query(&update)
+        .bind(&order_id)
+        .bind(&tenant_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "billing.order.closed",
+            resource_type: "order",
+            resource_id: &order_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"channel": channel}),
+        },
+    )
+    .await;
+    get_order(State(state), headers, Path((tenant_id, order_id))).await
+}
