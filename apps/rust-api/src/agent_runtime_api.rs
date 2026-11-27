@@ -1612,3 +1612,144 @@ pub async fn rotate_agent_credential(
     );
     Json(data).into_response()
 }
+
+pub async fn bound_client_certificate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+    method: axum::http::Method,
+    payload: Option<Json<Value>>,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let (user, tenant_id, project_id, status) =
+        match node_admin_scope(pool, &state, &headers, &node_id).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    if method == axum::http::Method::PUT {
+        let Some(Json(body)) = payload else {
+            return approval_error(
+                "Only fingerprint_sha256 is accepted; certificate and key material are forbidden.",
+                400,
+            );
+        };
+        if body
+            .as_object()
+            .is_none_or(|value| value.len() != 1 || !value.contains_key("fingerprint_sha256"))
+        {
+            return approval_error(
+                "Only fingerprint_sha256 is accepted; certificate and key material are forbidden.",
+                400,
+            );
+        }
+        let fingerprint = body
+            .get("fingerprint_sha256")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        if !(fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit())) {
+            return approval_error(
+                "fingerprint_sha256 must be exactly 64 hexadecimal characters.",
+                400,
+            );
+        }
+        if status == "revoked" {
+            return approval_error("A revoked node cannot bind a client certificate.", 409);
+        }
+        let sql = format!(
+            "UPDATE core_agentnode SET client_certificate_fingerprint = ?, \
+             client_certificate_bound_at = {now_expr}, client_certificate_revoked_at = NULL, \
+             updated_at = {now_expr} WHERE CAST(id AS TEXT) = ?"
+        );
+        if let Err(value) = sqlx::query(&sql)
+            .bind(&fingerprint)
+            .bind(&node_id)
+            .execute(pool)
+            .await
+        {
+            let text = value.to_string();
+            if text.contains("UNIQUE") || text.contains("unique") {
+                return approval_error(
+                    "This client certificate is already bound to another agent node.",
+                    409,
+                );
+            }
+            return database_error(text);
+        }
+        let _ = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: "agent.node.client_certificate_bound",
+                resource_type: "agent_node",
+                resource_id: node_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({"fingerprint_sha256": fingerprint}),
+            },
+        )
+        .await;
+    } else {
+        if payload.is_some() {
+            return approval_error("A request body is not accepted.", 400);
+        }
+        let fingerprint: Option<String> = sqlx::query_scalar(
+            "SELECT client_certificate_fingerprint FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(&node_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(None);
+        if fingerprint.as_deref().unwrap_or("").is_empty() {
+            return approval_error("No client certificate is bound.", 409);
+        }
+        let sql = format!(
+            "UPDATE core_agentnode SET client_certificate_fingerprint = '', \
+             client_certificate_revoked_at = {now_expr}, status = 'offline', last_seen_at = NULL, \
+             last_seen_ip = NULL, updated_at = {now_expr} WHERE CAST(id AS TEXT) = ?"
+        );
+        if let Err(value) = sqlx::query(&sql).bind(&node_id).execute(pool).await {
+            return database_error(value.to_string());
+        }
+        let _ = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: "agent.node.client_certificate_revoked",
+                resource_type: "agent_node",
+                resource_id: node_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({"fingerprint_sha256": fingerprint}),
+            },
+        )
+        .await;
+    }
+    match sqlx::query(&node_select(&state))
+        .bind(&node_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => Json(node_json(&row)).into_response(),
+        Ok(None) => approval_error("Not found.", 404),
+        Err(value) => database_error(value.to_string()),
+    }
+}

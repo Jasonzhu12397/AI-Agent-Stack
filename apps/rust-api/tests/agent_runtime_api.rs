@@ -346,3 +346,67 @@ async fn revokes_node_and_cancels_pending_commands() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }
+
+async fn admin_request(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        );
+    let request = match body {
+        Some(body) => builder
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+        None => builder.body(Body::empty()).unwrap(),
+    };
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn binds_and_revokes_client_certificate() {
+    let state = state().await;
+    let fingerprint = "a".repeat(64);
+    let (status, body) = admin_request(
+        &state,
+        "PUT",
+        &format!("/api/v1/agent-nodes/{NODE}/client-certificate/"),
+        Some(json!({"fingerprint_sha256": fingerprint})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["client_certificate"]["status"], "active");
+    assert_eq!(
+        body["client_certificate"]["fingerprint_sha256"],
+        fingerprint
+    );
+
+    let (status, body) = admin_request(
+        &state,
+        "DELETE",
+        &format!("/api/v1/agent-nodes/{NODE}/client-certificate/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["client_certificate"]["status"], "revoked");
+}
