@@ -296,6 +296,8 @@ struct Node {
     capabilities: Value,
     agent_version: String,
     cluster_name: String,
+    tenant_id: String,
+    project_id: String,
 }
 
 async fn authenticate_node(
@@ -320,7 +322,7 @@ async fn authenticate_node(
             "Invalid or revoked node credential.",
         ));
     };
-    let sql = "SELECT CAST(id AS TEXT) AS id, node_type, CAST(capabilities AS TEXT) AS capabilities, agent_version, cluster_name, credential_hash, status, CASE WHEN client_certificate_revoked_at IS NULL THEN 0 ELSE 1 END AS certificate_revoked FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1";
+    let sql = "SELECT CAST(id AS TEXT) AS id, node_type, CAST(capabilities AS TEXT) AS capabilities, agent_version, cluster_name, credential_hash, status, CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, CASE WHEN client_certificate_revoked_at IS NULL THEN 0 ELSE 1 END AS certificate_revoked FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1";
     let row = match sqlx::query(sql).bind(node_id).fetch_optional(pool).await {
         Ok(Some(row)) => row,
         Ok(None) => {
@@ -352,6 +354,8 @@ async fn authenticate_node(
             .unwrap_or_else(|| json!([])),
         agent_version: row.try_get("agent_version").unwrap_or_default(),
         cluster_name: row.try_get("cluster_name").unwrap_or_default(),
+        tenant_id: row.try_get("tenant_id").unwrap_or_default(),
+        project_id: row.try_get("project_id").unwrap_or_default(),
     })
 }
 
@@ -2110,4 +2114,332 @@ fn lifecycle_targets(state: &str) -> Vec<Value> {
         _ => &[],
     };
     targets.iter().map(|value| json!(value)).collect()
+}
+
+fn legacy_error(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(json!({"error": {"code": "INVALID_REQUEST", "message": message, "details": {}}})),
+    )
+        .into_response()
+}
+
+fn identity_material(system_identity: &Value) -> Value {
+    let mut material = serde_json::Map::new();
+    for (key, limit) in [
+        ("product_uuid", 128),
+        ("product_serial", 128),
+        ("board_serial", 128),
+        ("chassis_serial", 128),
+    ] {
+        if let Some(value) = system_identity.get(key).and_then(Value::as_str) {
+            let value = value.trim();
+            if !value.is_empty() {
+                material.insert(
+                    key.to_string(),
+                    json!(value.chars().take(limit).collect::<String>()),
+                );
+            }
+        }
+    }
+    Value::Object(material)
+}
+
+/// `POST /api/v1/agent-runtime/inventory/`
+pub async fn report_inventory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let payload: Value = match serde_json::from_slice::<Value>(&body) {
+        Ok(payload) if payload.is_object() => payload,
+        Ok(_) => {
+            return legacy_error(
+                StatusCode::BAD_REQUEST,
+                "Request body must be a JSON object.",
+            )
+        }
+        Err(_) => {
+            return legacy_error(
+                StatusCode::BAD_REQUEST,
+                "Request body must be a JSON object.",
+            )
+        }
+    };
+    let node = match authenticate_node(pool, &headers, payload.get("node_id")).await {
+        Ok(node) => node,
+        Err(_) => {
+            return legacy_error(
+                StatusCode::UNAUTHORIZED,
+                "Invalid or revoked node credential.",
+            )
+        }
+    };
+    let inventory = match payload.get("hardware_inventory") {
+        Some(Value::Object(map)) => Value::Object(map.clone()),
+        _ => {
+            return legacy_error(
+                StatusCode::BAD_REQUEST,
+                "hardware_inventory must be a JSON object.",
+            )
+        }
+    };
+    if serde_json::to_vec(&inventory)
+        .map(|text| text.len())
+        .unwrap_or(0)
+        > 262144
+    {
+        return legacy_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "hardware_inventory must not exceed 256 KiB.",
+        );
+    }
+    if inventory.get("status").and_then(Value::as_str) != Some("observed") {
+        return legacy_error(
+            StatusCode::BAD_REQUEST,
+            "Only observed hardware inventory can be ingested.",
+        );
+    }
+    let system_identity = inventory
+        .get("system_identity")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !system_identity.is_object() {
+        return legacy_error(
+            StatusCode::BAD_REQUEST,
+            "system_identity must be a JSON object.",
+        );
+    }
+    for key in [
+        "sys_vendor",
+        "product_name",
+        "product_uuid",
+        "product_serial",
+        "board_serial",
+        "chassis_serial",
+    ] {
+        match system_identity.get(key) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(value)) if value.len() <= 256 => {}
+            _ => return legacy_error(StatusCode::BAD_REQUEST, "Invalid system identity field."),
+        }
+    }
+    let material = identity_material(&system_identity);
+    let fingerprint = if material
+        .as_object()
+        .map(|map| map.is_empty())
+        .unwrap_or(true)
+    {
+        String::new()
+    } else {
+        let canonical = serde_json::to_string(&material).unwrap_or_default();
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    };
+    let observed_at = timestamp();
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1")
+            .bind(&node.id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .unwrap_or(None);
+    if status.as_deref() == Some("revoked") {
+        return legacy_error(
+            StatusCode::UNAUTHORIZED,
+            "Invalid or revoked node credential.",
+        );
+    }
+    let machine_id: Option<String> = sqlx::query_scalar(
+        "SELECT CAST(id AS TEXT) FROM core_agentmachine WHERE CAST(agent_node_id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&node.id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .unwrap_or(None);
+    let machine_id = match machine_id {
+        Some(id) => id,
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            if let Err(error) = sqlx::query(
+                "INSERT INTO core_agentmachine (id, tenant_id, project_id, agent_node_id, vendor, product_name, system_uuid, identity_material, identity_fingerprint, identity_status, identity_conflicts, hardware_inventory, inventory_source, inventory_revision, observed_at, bmc_credential_ref, bmc_endpoint, bmc_trust_bundle_ref, bmc_tls_verify, bmc_identity_evidence, bmh_name, capi_machine_name, kubernetes_node_name, lifecycle_state, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, '', '', '', '{}', '', 'unverified', '[]', '{}', 'agent_report', 0, NULL, '', '', '', 1, '{}', '', '', '', 'discovered', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .bind(&id)
+            .bind(&node.tenant_id)
+            .bind(&node.project_id)
+            .bind(&node.id)
+            .execute(&mut *transaction)
+            .await
+            {
+                return database_error(error.to_string());
+            }
+            id
+        }
+    };
+    let row = sqlx::query(
+        "SELECT CAST(agent_node_id AS TEXT) AS agent_node_id, identity_status, identity_material, identity_fingerprint, identity_conflicts FROM core_agentmachine WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&machine_id)
+    .fetch_one(&mut *transaction)
+    .await;
+    let row = match row {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let identity_status: String = row.try_get("identity_status").unwrap_or_default();
+    let stored_fingerprint: String = row.try_get("identity_fingerprint").unwrap_or_default();
+    let mut conflicts: Vec<Value> = row
+        .try_get::<Option<String>, _>("identity_conflicts")
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default();
+    let others = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(agent_node_id AS TEXT) AS agent_node_id, identity_material FROM core_agentmachine \
+         WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? AND CAST(agent_node_id AS TEXT) <> ?",
+    )
+    .bind(&node.tenant_id)
+    .bind(&node.project_id)
+    .bind(&node.id)
+    .fetch_all(&mut *transaction)
+    .await
+    .unwrap_or_default();
+    let material_map = material.as_object().cloned().unwrap_or_default();
+    for other in others {
+        let other_material: Value = other
+            .try_get::<Option<String>, _>("identity_material")
+            .ok()
+            .flatten()
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_else(|| json!({}));
+        let mut matching = Vec::new();
+        for (key, value) in &material_map {
+            if other_material.get(key) == Some(value)
+                && value.as_str().map(|text| !text.is_empty()).unwrap_or(false)
+            {
+                matching.push(key.clone());
+            }
+        }
+        matching.sort();
+        if matching.is_empty() {
+            continue;
+        }
+        let other_id: String = other.try_get("id").unwrap_or_default();
+        let other_node: String = other.try_get("agent_node_id").unwrap_or_default();
+        conflicts.push(json!({"machine_id": other_id, "agent_node_id": other_node, "matching_fields": matching}));
+        let candidate_conflicts = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT identity_conflicts FROM core_agentmachine WHERE CAST(id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(&other_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .unwrap_or(None)
+        .unwrap_or(None);
+        let mut candidate_conflicts: Vec<Value> = candidate_conflicts
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
+        let reverse_payload = json!({"machine_id": machine_id, "agent_node_id": node.id, "matching_fields": matching});
+        if !candidate_conflicts.contains(&reverse_payload) {
+            candidate_conflicts.push(reverse_payload);
+        }
+        let _ = sqlx::query(
+            "UPDATE core_agentmachine SET identity_conflicts = ?, identity_status = 'conflict', updated_at = CURRENT_TIMESTAMP WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(serde_json::to_string(&candidate_conflicts).unwrap_or_else(|_| "[]".into()))
+        .bind(&other_id)
+        .execute(&mut *transaction)
+        .await;
+    }
+    let mut next_status = if identity_status == "verified" {
+        if material_map.is_empty() {
+            return legacy_error(
+                StatusCode::CONFLICT,
+                "Verified machine identity cannot be replaced by an inventory report without identity material.",
+            );
+        }
+        if fingerprint != stored_fingerprint {
+            conflicts.push(json!({
+                "type": "verified_identity_material_changed",
+                "previous_fingerprint": stored_fingerprint,
+                "observed_fingerprint": fingerprint,
+                "observed_at": observed_at,
+            }));
+        }
+        if conflicts.is_empty() {
+            "verified".to_string()
+        } else {
+            "conflict".to_string()
+        }
+    } else if conflicts.is_empty() {
+        if material_map.is_empty() {
+            "unverified".to_string()
+        } else {
+            "candidate".to_string()
+        }
+    } else {
+        "conflict".to_string()
+    };
+    let vendor: String = system_identity
+        .get("sys_vendor")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(256)
+        .collect();
+    let product: String = system_identity
+        .get("product_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(256)
+        .collect();
+    let system_uuid = material
+        .get("product_uuid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let sql = if identity_status == "verified" {
+        "UPDATE core_agentmachine SET vendor = ?, product_name = ?, hardware_inventory = ?, inventory_source = 'host_sysfs_dmi_read_only', observed_at = ?, identity_conflicts = ?, identity_status = ?, updated_at = CURRENT_TIMESTAMP WHERE CAST(id AS TEXT) = ?"
+    } else {
+        "UPDATE core_agentmachine SET vendor = ?, product_name = ?, system_uuid = ?, identity_material = ?, identity_fingerprint = ?, hardware_inventory = ?, inventory_source = 'host_sysfs_dmi_read_only', observed_at = ?, identity_conflicts = ?, identity_status = ?, updated_at = CURRENT_TIMESTAMP WHERE CAST(id AS TEXT) = ?"
+    };
+    let mut query = sqlx::query(sql).bind(&vendor).bind(&product);
+    if identity_status != "verified" {
+        query = query
+            .bind(system_uuid)
+            .bind(material.to_string())
+            .bind(&fingerprint);
+    }
+    let result = query
+        .bind(inventory.to_string())
+        .bind(&observed_at)
+        .bind(serde_json::to_string(&conflicts).unwrap_or_else(|_| "[]".into()))
+        .bind(&next_status)
+        .bind(&machine_id)
+        .execute(&mut *transaction)
+        .await;
+    if let Err(error) = result {
+        return database_error(error.to_string());
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error.to_string());
+    }
+    if next_status.is_empty() {
+        next_status = "unverified".into();
+    }
+    Json(json!({
+        "machine_id": machine_id,
+        "agent_node_id": node.id,
+        "identity_status": next_status,
+        "identity_fingerprint": if fingerprint.is_empty() { Value::Null } else { json!(fingerprint) },
+        "identity_conflicts": conflicts,
+        "observed_at": observed_at,
+        "attestation": "unverified_agent_report",
+    }))
+    .into_response()
 }

@@ -478,3 +478,79 @@ async fn lists_fleet_machines_with_identity_and_lifecycle() {
     assert_eq!(body["results"][0]["lifecycle_targets"][0], "retired");
     assert_eq!(body["results"][0]["bmc_configured"], true);
 }
+
+async fn inventory(state: &AppState, payload: Value) -> (StatusCode, Value) {
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agent-runtime/inventory/")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn ingests_observed_inventory_and_reports_identity() {
+    let state = state().await;
+    let (status, body) = inventory(
+        &state,
+        json!({
+            "node_id": NODE,
+            "hardware_inventory": {
+                "status": "observed",
+                "system_identity": {
+                    "sys_vendor": "Dell Inc.",
+                    "product_name": "PowerEdge R750",
+                    "product_uuid": "4c4c4544-0044-3510-8051-b4c04f4d4e31"
+                },
+                "nics": [{"name": "eno1"}]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["machine_id"], "machine-1");
+    assert_eq!(body["agent_node_id"], NODE);
+    assert_eq!(body["attestation"], "unverified_agent_report");
+    assert_eq!(body["identity_status"], "conflict");
+}
+
+#[tokio::test]
+async fn rejects_inventory_that_was_not_observed() {
+    let state = state().await;
+    let (status, body) = inventory(
+        &state,
+        json!({"node_id": NODE, "hardware_inventory": {"status": "stale"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Only observed hardware inventory can be ingested."
+    );
+}
+
+#[tokio::test]
+async fn rejects_inventory_larger_than_256_kib() {
+    let state = state().await;
+    let filler = "x".repeat(262145);
+    let (status, body) = inventory(
+        &state,
+        json!({
+            "node_id": NODE,
+            "hardware_inventory": {"status": "observed", "filler": filler}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+}

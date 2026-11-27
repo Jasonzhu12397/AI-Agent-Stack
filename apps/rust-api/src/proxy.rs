@@ -242,6 +242,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::agent_runtime_api::approve_command),
             )
             .route(
+                "/api/v1/agent-runtime/inventory/",
+                axum::routing::post(crate::agent_runtime_api::report_inventory),
+            )
+            .route(
                 "/api/v1/agent-runtime/commands/poll/",
                 axum::routing::post(crate::agent_runtime_api::poll_commands),
             )
