@@ -14,6 +14,7 @@ pub mod config;
 pub mod context;
 pub mod etcd_api;
 pub mod fleet_api;
+pub mod fleet_boot;
 pub mod identity;
 pub mod infra_api;
 pub mod knowledge_api;

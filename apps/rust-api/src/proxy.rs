@@ -250,6 +250,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::agent_runtime_api::approve_command),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/pxe-boot/",
+                axum::routing::post(crate::fleet_boot::pxe_boot),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/bmh-inventory/",
                 axum::routing::post(crate::fleet_api::bmh_inventory),
             )
