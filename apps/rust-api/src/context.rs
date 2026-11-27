@@ -18,12 +18,11 @@ pub enum AuthError {
     Unavailable(String),
 }
 
-pub async fn authenticate(
-    pool: &AnyPool,
-    headers: &HeaderMap,
-) -> Result<SessionUser, AuthError> {
+pub async fn authenticate(pool: &AnyPool, headers: &HeaderMap) -> Result<SessionUser, AuthError> {
     let Some(session_key) = session_key_from_headers(headers) else {
-        return Err(AuthError::Unauthenticated("Authentication credentials were not provided."));
+        return Err(AuthError::Unauthenticated(
+            "Authentication credentials were not provided.",
+        ));
     };
     let token_hash = session_token_hash(&session_key);
     let user = sqlx::query_as::<_, (i64, String, String, i64)>(
@@ -37,7 +36,9 @@ pub async fn authenticate(
     .await
     .map_err(|error| AuthError::Unavailable(error.to_string()))?;
     let Some((id, username, email, is_staff)) = user else {
-        return Err(AuthError::Unauthenticated("This session has expired. Sign in again."));
+        return Err(AuthError::Unauthenticated(
+            "This session has expired. Sign in again.",
+        ));
     };
     Ok(SessionUser {
         id,
