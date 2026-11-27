@@ -1,4 +1,3 @@
-
 use ai_agent_stack_api::audit::{record_event, AuditEvent};
 use ai_agent_stack_api::config::Config;
 use ai_agent_stack_api::identity::encode_session_data;
