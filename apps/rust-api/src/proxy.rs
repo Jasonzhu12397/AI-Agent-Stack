@@ -148,6 +148,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::cluster_api::get_deployment),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/infrastructure-networks/",
+                axum::routing::get(crate::infra_api::profile).put(crate::infra_api::profile).delete(crate::infra_api::profile),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/",
                 axum::routing::get(crate::cluster_api::list_deployments),
             )
