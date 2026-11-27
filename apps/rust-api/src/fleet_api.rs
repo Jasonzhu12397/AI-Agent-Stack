@@ -34,7 +34,7 @@ fn mapping(value: Option<&Value>) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-fn bmc_host(address: &str) -> String {
+pub(crate) fn bmc_host(address: &str) -> String {
     let mut value = address.trim().to_lowercase();
     if value.is_empty() {
         return String::new();
@@ -166,14 +166,14 @@ fn parse_hosts(document: &Value) -> Result<Vec<Value>, String> {
     Ok(hosts)
 }
 
-struct Machine {
-    id: String,
-    bmc_endpoint: String,
-    bmh_name: String,
-    system_uuid: String,
-    vendor: String,
-    product_name: String,
-    inventory: Value,
+pub(crate) struct Machine {
+    pub(crate) id: String,
+    pub(crate) bmc_endpoint: String,
+    pub(crate) bmh_name: String,
+    pub(crate) system_uuid: String,
+    pub(crate) vendor: String,
+    pub(crate) product_name: String,
+    pub(crate) inventory: Value,
 }
 
 pub async fn bmh_inventory(
@@ -284,7 +284,7 @@ pub async fn bmh_inventory(
     ).into_response()
 }
 
-async fn load_machines(
+pub(crate) async fn load_machines(
     pool: &AnyPool,
     tenant_id: &str,
     project_id: &str,
@@ -318,7 +318,38 @@ async fn load_machines(
         .collect())
 }
 
-async fn merge_host(pool: &AnyPool, machine: &Machine, host: &Value) -> Result<bool, String> {
+pub(crate) fn normalize_hosts(value: &Value) -> Result<Vec<Value>, String> {
+    let hosts = value.as_array().ok_or("BMH_HOSTS_INVALID")?;
+    if hosts.len() > MAX_HOSTS {
+        return Err("BMH_HOST_COUNT_EXCEEDED".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::with_capacity(hosts.len());
+    for host in hosts {
+        let map = host.as_object().ok_or("BMH_ITEM_INVALID")?;
+        let name = text(map.get("bmh_name")).trim().to_string();
+        if name.is_empty() {
+            return Err("BMH_NAME_REQUIRED".into());
+        }
+        let namespace = text(map.get("namespace")).trim().to_string();
+        if !seen.insert(format!("{namespace}/{name}")) {
+            return Err("BMH_HOST_DUPLICATE".into());
+        }
+        if let Some(nics) = map.get("nics") {
+            if !nics.is_array() {
+                return Err("BMH_NIC_INVALID".into());
+            }
+        }
+        result.push(host.clone());
+    }
+    Ok(result)
+}
+
+pub(crate) async fn merge_host(
+    pool: &AnyPool,
+    machine: &Machine,
+    host: &Value,
+) -> Result<bool, String> {
     let mut inventory = machine.inventory.as_object().cloned().unwrap_or_default();
     let mut bmh = host.as_object().cloned().unwrap_or_default();
     bmh.insert(

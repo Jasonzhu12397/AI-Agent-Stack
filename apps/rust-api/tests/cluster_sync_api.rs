@@ -84,3 +84,27 @@ async fn unconfigured_cloud_control_is_service_unavailable() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], "EPH_PREFLIGHT_UNAVAILABLE");
 }
+
+#[tokio::test]
+async fn bmh_sync_is_unavailable_without_cloud_control() {
+    let state = state().await;
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cluster-deployments/deploy-1/bmh-inventory/sync/")
+                .header(
+                    "cookie",
+                    "sessionid=session-1; csrftoken=0123456789abcdef0123456789abcdef",
+                )
+                .header(
+                    "x-csrftoken",
+                    format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

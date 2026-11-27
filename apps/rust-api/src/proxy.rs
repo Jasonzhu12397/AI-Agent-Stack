@@ -124,6 +124,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::agent_team_api::team_run_detail),
             )
             .route(
+                "/api/v1/cluster-deployments/{deployment_id}/bmh-inventory/sync/",
+                axum::routing::post(crate::cluster_sync_api::sync_bmh_inventory),
+            )
+            .route(
                 "/api/v1/cluster-deployments/{deployment_id}/preflight/eph/sync/",
                 axum::routing::post(crate::cluster_sync_api::sync_eph_preflight),
             )
