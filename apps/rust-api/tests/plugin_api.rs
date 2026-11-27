@@ -33,6 +33,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_agentdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentversion (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, config_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcapabilityinvocation (id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, capability VARCHAR(100) NOT NULL, protocol VARCHAR(32) NOT NULL, status VARCHAR(16) NOT NULL, error_code VARCHAR(64) NOT NULL, latency_ms INTEGER NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentplugincredential (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, sealed_value TEXT NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentplugininstallation (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, granted_capabilities TEXT NOT NULL, credential_ref VARCHAR(200) NOT NULL, installed_by_id INTEGER NOT NULL, revision INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -302,4 +303,38 @@ async fn activates_plugin_version_and_migrates_installations() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["enabled"], true);
     assert_eq!(body["migration"]["installations"], 1);
+}
+
+#[tokio::test]
+async fn rotates_installation_credential() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query("UPDATE core_agentplugindefinition SET auth_required = 1")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_agentplugincredential (id, tenant_id, created_by_id, name, sealed_value, created_at) VALUES ('cred-1', ?, 1, 'Weather', 'sealed', datetime('now'))")
+        .bind(TENANT)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugin-installations/{INSTALLATION}/credential/"),
+        Some(json!({"credential_ref": "plugin://cred-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["credential_configured"], true);
+    assert_eq!(body["plugin"]["auth_required"], true);
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugin-installations/{INSTALLATION}/credential/"),
+        Some(json!({"credential_ref": "plugin://missing"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "CREDENTIAL_ACCESS_DENIED");
 }

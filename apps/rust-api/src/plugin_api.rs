@@ -1661,3 +1661,260 @@ pub async fn activate_plugin_version(
         Err(error) => database_error(error.to_string()),
     }
 }
+
+pub(crate) async fn installation_response(
+    state: &AppState,
+    pool: &AnyPool,
+    installation_id: &str,
+) -> Response {
+    let created = timestamp(state, "installation", "created_at");
+    let updated = timestamp(state, "installation", "updated_at");
+    let plugin_created = timestamp(state, "plugin", "created_at");
+    let plugin_updated = timestamp(state, "plugin", "updated_at");
+    let sql = format!(
+        "SELECT CAST(installation.id AS TEXT) AS id, \
+         CAST(installation.tenant_id AS TEXT) AS tenant_id, \
+         CAST(installation.project_id AS TEXT) AS project_id, \
+         installation.plugin_version, installation.status, \
+         {} AS granted, installation.credential_ref AS installation_credential, \
+         {created} AS created, {updated} AS updated, \
+         CAST(plugin.id AS TEXT) AS plugin_id, CAST(plugin.tenant_id AS TEXT) AS plugin_tenant_id, \
+         plugin.plugin_key, plugin.name, plugin.description, plugin.version, plugin.protocol, \
+         plugin.endpoint_url, CAST(plugin.auth_required AS INTEGER) AS auth_required_int, \
+         plugin.credential_ref AS plugin_credential, {} AS plugin_capabilities, \
+         {} AS plugin_manifest, {} AS plugin_input, {} AS plugin_output, \
+         plugin.timeout_seconds, plugin.max_concurrency, \
+         CAST(plugin.enabled AS INTEGER) AS enabled_int, {plugin_created} AS plugin_created, \
+         {plugin_updated} AS plugin_updated \
+         FROM core_agentplugininstallation installation \
+         JOIN core_agentplugindefinition plugin \
+           ON CAST(plugin.id AS TEXT) = CAST(installation.plugin_id AS TEXT) \
+         WHERE CAST(installation.id AS TEXT) = ?",
+        json_text(state, "installation.granted_capabilities"),
+        json_text(state, "plugin.capabilities"),
+        json_text(state, "plugin.manifest"),
+        json_text(state, "plugin.input_schema"),
+        json_text(state, "plugin.output_schema"),
+    );
+    match sqlx::query(&sql)
+        .bind(installation_id)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(row) => Json(installation_json(&row)).into_response(),
+        Err(error) => database_error(error.to_string()),
+    }
+}
+
+/// `POST /api/v1/agent-plugin-installations/{installation_id}/credential/`
+pub async fn rotate_installation_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(installation_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let scope = sqlx::query(
+        "SELECT CAST(installation.tenant_id AS TEXT) AS tenant_id, \
+         CAST(installation.project_id AS TEXT) AS project_id, installation.status, \
+         installation.credential_ref AS credential_ref, \
+         CAST(plugin.auth_required AS INTEGER) AS auth_required_int, plugin.plugin_key \
+         FROM core_agentplugininstallation installation \
+         JOIN core_agentplugindefinition plugin \
+           ON CAST(plugin.id AS TEXT) = CAST(installation.plugin_id AS TEXT) \
+         WHERE CAST(installation.id AS TEXT) = ?",
+    )
+    .bind(&installation_id)
+    .fetch_optional(pool)
+    .await;
+    let scope = match scope {
+        Ok(Some(scope)) => scope,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = scope.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = scope.try_get("project_id").unwrap_or_default();
+    if !crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id)
+        .await
+        .unwrap_or(false)
+        || !can_edit(pool, &tenant_id, &project_id, user.id)
+            .await
+            .unwrap_or(false)
+    {
+        return legacy_error(
+            "Project editor permission required.",
+            StatusCode::FORBIDDEN,
+            "PERMISSION_DENIED",
+        );
+    }
+    if scope.try_get::<String, _>("status").unwrap_or_default() == "uninstalled" {
+        return legacy_error(
+            "Uninstalled installations cannot rotate a credential; install it again.",
+            StatusCode::CONFLICT,
+            "INSTALLATION_NOT_ACTIVE",
+        );
+    }
+    if scope.try_get::<i64, _>("auth_required_int").unwrap_or(0) == 0 {
+        return legacy_error(
+            "This agent plugin does not accept a credential reference.",
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_NOT_ACCEPTED",
+        );
+    }
+    let payload = match parse_object(&body) {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let reference = payload
+        .get("credential_ref")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if reference.is_empty() || reference.chars().any(char::is_whitespace) {
+        return legacy_error(
+            "Connector credential reference is invalid.",
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_REFERENCE_INVALID",
+        );
+    }
+    if reference.len() > 200 {
+        return legacy_error(
+            "credential_ref must be at most 200 characters.",
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_REFERENCE_INVALID",
+        );
+    }
+    let (scheme, rest) = match reference.split_once("://") {
+        Some(value) => value,
+        None => {
+            return legacy_error(
+                "Connector credential reference is invalid.",
+                StatusCode::BAD_REQUEST,
+                "CREDENTIAL_REFERENCE_INVALID",
+            )
+        }
+    };
+    if rest.is_empty()
+        || scheme.is_empty()
+        || !scheme
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        || !scheme.chars().all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || matches!(value, '+' | '.' | '-')
+        })
+    {
+        return legacy_error(
+            "Connector credential reference is invalid.",
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_REFERENCE_INVALID",
+        );
+    }
+    if !matches!(scheme, "env" | "vault" | "plugin") {
+        return legacy_error(
+            &format!("No credential provider is registered for scheme '{scheme}'."),
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_PROVIDER_UNSUPPORTED",
+        );
+    }
+    if scheme == "plugin" {
+        let owned = sqlx::query(
+            "SELECT 1 FROM core_agentplugincredential \
+             WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(rest)
+        .bind(&tenant_id)
+        .fetch_optional(pool)
+        .await;
+        match owned {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return legacy_error(
+                    "Plugin credential is not available in this workspace.",
+                    StatusCode::BAD_REQUEST,
+                    "CREDENTIAL_ACCESS_DENIED",
+                )
+            }
+            Err(error) => return database_error(error.to_string()),
+        }
+    } else if scheme == "env" {
+        if !rest.starts_with("PLUGIN_SECRET_") {
+            return legacy_error(
+                "Credential variable is outside the configured provider allowlist.",
+                StatusCode::BAD_REQUEST,
+                "CREDENTIAL_NOT_FOUND",
+            );
+        }
+        if std::env::var(rest).is_err() {
+            return legacy_error(
+                "Credential variable is not available to the process.",
+                StatusCode::BAD_REQUEST,
+                "CREDENTIAL_NOT_FOUND",
+            );
+        }
+    } else if std::env::var("VAULT_ADDR").is_err() {
+        return legacy_error(
+            "Credential resolver is not configured.",
+            StatusCode::BAD_REQUEST,
+            "CREDENTIAL_RESOLVER_NOT_CONFIGURED",
+        );
+    }
+    let previous = scope
+        .try_get::<String, _>("credential_ref")
+        .unwrap_or_default();
+    let previous_scheme = previous
+        .split_once("://")
+        .map(|value| value.0)
+        .unwrap_or("");
+    if let Err(error) = sqlx::query(
+        "UPDATE core_agentplugininstallation SET credential_ref = ?, \
+         revision = revision + 1, updated_at = CURRENT_TIMESTAMP WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(reference)
+    .bind(&installation_id)
+    .execute(pool)
+    .await
+    {
+        return database_error(error.to_string());
+    }
+    let postgres = is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return sqlx_error(error),
+    };
+    if let Err(error) = record_event_in_transaction(
+        &mut transaction,
+        postgres,
+        &AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: Some(&project_id),
+            event_type: "agent_plugin.credential_rotated",
+            resource_type: "agent_plugin_installation",
+            resource_id: &installation_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: header(&headers, "x-request-id"),
+            remote_addr: None,
+            user_agent: header(&headers, "user-agent"),
+            metadata: json!({
+                "plugin_key": scope.try_get::<String, _>("plugin_key").unwrap_or_default(),
+                "previous_scheme": previous_scheme,
+                "new_scheme": scheme,
+            }),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    if let Err(error) = transaction.commit().await {
+        return sqlx_error(error);
+    }
+    installation_response(&state, pool, &installation_id).await
+}
