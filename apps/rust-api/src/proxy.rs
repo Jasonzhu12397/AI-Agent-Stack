@@ -459,6 +459,18 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::billing_api::close_order),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/billing/orders/{order_id}/refund/",
+                axum::routing::post(crate::billing_ext_api::refund_order),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/reconciliation/",
+                get(crate::billing_ext_api::reconciliation),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/billing/payments/{channel}/callback/",
+                axum::routing::post(crate::billing_ext_api::payment_callback),
+            )
+            .route(
                 "/api/v1/users/me/",
                 get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
             )

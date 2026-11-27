@@ -1520,7 +1520,7 @@ fn rfc3339(value: chrono::DateTime<chrono::Utc>) -> String {
     value.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
 }
 
-async fn payment_providers(state: &AppState) -> Vec<String> {
+pub(crate) async fn payment_providers(state: &AppState) -> Vec<String> {
     let mut providers = Vec::new();
     if env_slots(
         "alipay",
@@ -1575,7 +1575,7 @@ async fn payment_providers(state: &AppState) -> Vec<String> {
     providers
 }
 
-async fn stored_slots(state: &AppState, channel: &str, slots: &[&str]) -> bool {
+pub(crate) async fn stored_slots(state: &AppState, channel: &str, slots: &[&str]) -> bool {
     let Some(pool) = state.identity_pool.as_ref() else {
         return false;
     };
