@@ -172,7 +172,7 @@ pub async fn update_profile(
     }
     if !assignments.is_empty() {
         let sql = format!(
-            "UPDATE core_useraccountprofile SET {}, updated_by_id = ?, updated_at = {now} WHERE user_id = ?",
+            "UPDATE platform_user_profiles SET {}, updated_by_id = ?, updated_at = {now} WHERE user_id = ?",
             assignments.join(", ")
         );
         let mut query = sqlx::query(&sql);
@@ -458,4 +458,112 @@ async fn tenant_member(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found."}))).into_response()
+}
+
+struct Profile {
+    id: String,
+    display_name: String,
+    timezone: String,
+    locale: String,
+}
+
+fn profile_payload(user: &SessionUser, profile: &Profile) -> Value {
+    json!({
+        "id": user.id.to_string(),
+        "username": user.username,
+        "display_name": profile.display_name,
+        "email": user.email,
+        "timezone": profile.timezone,
+        "locale": profile.locale,
+    })
+}
+
+async fn ensure_profile(
+    pool: &AnyPool,
+    state: &AppState,
+    user: &SessionUser,
+) -> Result<Profile, Response> {
+    if let Some(profile) = load_profile(pool, user.id).await? {
+        return Ok(profile);
+    }
+    let now = if is_postgres(state) {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    let sql = format!(
+        "INSERT INTO platform_user_profiles          (id, user_id, display_name, timezone, locale, updated_by_id, created_at, updated_at)          VALUES (?, ?, '', 'UTC', 'zh-hans', ?, {now}, {now})          ON CONFLICT(user_id) DO NOTHING"
+    );
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) = sqlx::query(&sql)
+        .bind(&id)
+        .bind(user.id)
+        .bind(user.id)
+        .execute(pool)
+        .await
+    {
+        return Err(database_error(error.to_string()));
+    }
+    load_profile(pool, user.id)
+        .await?
+        .ok_or_else(unavailable)
+}
+
+async fn load_profile(pool: &AnyPool, user_id: i64) -> Result<Option<Profile>, Response> {
+    let row = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, display_name, timezone, locale          FROM platform_user_profiles WHERE user_id = ? LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?;
+    Ok(row.map(|row| Profile {
+        id: row.try_get::<String, _>("id").unwrap_or_default(),
+        display_name: row.try_get::<String, _>("display_name").unwrap_or_default(),
+        timezone: row.try_get::<String, _>("timezone").unwrap_or_default(),
+        locale: row.try_get::<String, _>("locale").unwrap_or_default(),
+    }))
+}
+
+async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<SessionUser, Response> {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(unavailable());
+    };
+    match authenticate(pool, headers).await {
+        Ok(user) => Ok(user),
+        Err(AuthError::Unauthenticated(message)) => {
+            Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": message}))).into_response())
+        }
+        Err(AuthError::Unavailable(message)) => {
+            tracing::error!(%message, "rust account api could not resolve the session");
+            Err(unavailable())
+        }
+    }
+}
+
+fn invalid_value(field: &str, message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": {
+                "code": "ACCOUNT_INVALID_VALUE",
+                "message": message,
+                "details": {field: [message]}
+            }
+        })),
+    )
+        .into_response()
+}
+
+fn unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"detail": "The service is temporarily unavailable."})),
+    )
+        .into_response()
+}
+
+fn database_error(error: String) -> Response {
+    tracing::error!(%error, "rust account api database operation failed");
+    unavailable()
 }
