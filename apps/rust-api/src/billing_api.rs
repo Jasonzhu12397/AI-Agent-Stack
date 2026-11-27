@@ -460,7 +460,7 @@ pub async fn put_payment_credentials(
     if !unknown.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": {"code": "INVALID_CREDENTIALS", "message": format!("Unknown slot(s) for {channel}: {}.", unknown.join(", ")), "details": {}}}))).into_response();
     }
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return unavailable();
     };
     for (slot, value) in values {
@@ -1647,7 +1647,7 @@ pub(crate) async fn require_user(
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(unavailable());
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
         return Err(unavailable());
     };
     match authenticate(pool, secret_key, headers).await {
