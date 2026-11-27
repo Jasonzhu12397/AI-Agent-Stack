@@ -1220,10 +1220,7 @@ async fn require_user(state: &AppState, headers: &HeaderMap) -> Result<SessionUs
     let Some(pool) = state.identity_pool.as_ref() else {
         return Err(service_unavailable());
     };
-    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
-        return Err(service_unavailable());
-    };
-    match authenticate(pool, secret_key, headers).await {
+    match authenticate(pool, headers).await {
         Ok(user) => Ok(user),
         Err(AuthError::Unauthenticated(_)) => Err(error(
             "AUTHENTICATION_REQUIRED",
