@@ -23,6 +23,10 @@ async fn state() -> AppState {
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentteam (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE(project_id, slug))",
+        "CREATE TABLE core_agentteamversion (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, version INTEGER NOT NULL, definition_snapshot TEXT NOT NULL, workflow_version_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentteamrun (id TEXT PRIMARY KEY, team_version_id TEXT NOT NULL, workflow_run_id TEXT NOT NULL, input_text TEXT NOT NULL, output_text TEXT, created_at DATETIME NOT NULL, finished_at DATETIME)",
+        "CREATE TABLE core_workflowrun (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workflow_version_id TEXT NOT NULL, input_data TEXT NOT NULL)",
+        "CREATE TABLE core_task (id TEXT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -33,6 +37,14 @@ async fn state() -> AppState {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("INSERT INTO core_agentteam (id, tenant_id, project_id, created_by_id, name, slug, description, draft_config, current_version, is_archived, created_at, updated_at) VALUES ('team-1', 'tenant', 'project', 1, 'Fixture Team', 'fixture-team', '', '{}', 1, 0, datetime('now'), datetime('now'))").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentteamversion (id, team_id, version, definition_snapshot, workflow_version_id, created_by_id, published_at) VALUES ('version-1', 'team-1', 1, '{}', 'workflow-version-1', 1, datetime('now'))").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_task (id, status) VALUES ('task-1', 'running')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_workflowrun (id, task_id, workflow_version_id, input_data) VALUES ('workflow-run-1', 'task-1', 'workflow-version-1', '{}')").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentteamrun (id, team_version_id, workflow_run_id, input_text, output_text, created_at, finished_at) VALUES ('run-1', 'version-1', 'workflow-run-1', 'investigate', NULL, datetime('now'), NULL)").execute(&pool).await.unwrap();
     let session = encode_session_data(1, "password-hash", SECRET).unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('team-session', ?, datetime('now', '+1 day'))")
         .bind(session).execute(&pool).await.unwrap();
@@ -106,7 +118,7 @@ async fn creates_lists_and_updates_team() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body.as_array().unwrap().len(), 2);
 
     let (status, body) = call(
         &state,
@@ -130,4 +142,18 @@ async fn rejects_secret_material_in_draft_config() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn lists_team_runs_and_reads_run_detail() {
+    let state = state().await;
+    let (status, body) = call(&state, "GET", "/api/v1/agent-teams/team-1/runs/", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["task_status"], "running");
+
+    let (status, body) = call(&state, "GET", "/api/v1/agent-team-runs/run-1/", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], "run-1");
+    assert_eq!(body["task_id"], "task-1");
 }

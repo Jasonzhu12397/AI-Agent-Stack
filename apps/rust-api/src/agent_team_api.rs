@@ -432,3 +432,137 @@ fn is_postgres(state: &AppState) -> bool {
 fn timestamp() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
+
+fn run_json(row: &sqlx::any::AnyRow) -> Value {
+    json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "team_version_id": row.try_get::<String, _>("team_version_id").unwrap_or_default(),
+        "task_id": row.try_get::<Option<String>, _>("task_id").ok().flatten(),
+        "task_status": row.try_get::<Option<String>, _>("task_status").ok().flatten(),
+        "input_text": row.try_get::<String, _>("input_text").unwrap_or_default(),
+        "output_text": row.try_get::<Option<String>, _>("output_text").ok().flatten(),
+        "created_at": timestamp_value(row, "created_at"),
+        "finished_at": timestamp_value(row, "finished_at"),
+    })
+}
+
+async fn team_scope(pool: &sqlx::AnyPool, team_id: &str, user_id: i64) -> Result<bool, Response> {
+    let team = sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id \
+         FROM core_agentteam WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(team_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|value| database_error(value.to_string()))?;
+    let Some(row) = team else {
+        return Err(error("Not found.", 404));
+    };
+    let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = row.try_get("project_id").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user_id)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(error("Not found.", 404));
+    }
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user_id).await {
+        Ok(true) => Ok(true),
+        Ok(false) => Err(error("Not found.", 404)),
+        Err(_) => Err(unavailable()),
+    }
+}
+
+/// `GET /api/v1/agent-teams/{team_id}/runs/`
+pub async fn list_team_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if let Err(response) = team_scope(pool, &team_id, user.id).await {
+        return response;
+    }
+    let created = timestamp_expr(&state, "run", "created_at");
+    let finished = timestamp_expr(&state, "run", "finished_at");
+    let sql = format!(
+        "SELECT CAST(run.id AS TEXT) AS id, CAST(run.team_version_id AS TEXT) AS team_version_id, \
+         CAST(task.id AS TEXT) AS task_id, task.status AS task_status, run.input_text, run.output_text, \
+         {created} AS created_at, {finished} AS finished_at \
+         FROM core_agentteamrun run \
+         JOIN core_agentteamversion version ON version.id = run.team_version_id \
+         LEFT JOIN core_workflowrun workflow ON workflow.id = run.workflow_run_id \
+         LEFT JOIN core_task task ON task.id = workflow.task_id \
+         WHERE CAST(version.team_id AS TEXT) = ? ORDER BY run.created_at DESC"
+    );
+    let rows = match sqlx::query(&sql).bind(&team_id).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(value) => return database_error(value.to_string()),
+    };
+    Json(Value::Array(rows.iter().map(run_json).collect())).into_response()
+}
+
+/// `GET /api/v1/agent-team-runs/{run_id}/`
+pub async fn team_run_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(run_id): Path<String>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let team_id: Option<String> = sqlx::query_scalar(
+        "SELECT CAST(version.team_id AS TEXT) FROM core_agentteamrun run \
+         JOIN core_agentteamversion version ON version.id = run.team_version_id \
+         WHERE CAST(run.id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&run_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let Some(team_id) = team_id else {
+        return error("Not found.", 404);
+    };
+    if let Err(response) = team_scope(pool, &team_id, user.id).await {
+        return response;
+    }
+    let created = timestamp_expr(&state, "run", "created_at");
+    let finished = timestamp_expr(&state, "run", "finished_at");
+    let sql = format!(
+        "SELECT CAST(run.id AS TEXT) AS id, CAST(run.team_version_id AS TEXT) AS team_version_id, \
+         CAST(task.id AS TEXT) AS task_id, task.status AS task_status, run.input_text, run.output_text, \
+         {created} AS created_at, {finished} AS finished_at \
+         FROM core_agentteamrun run \
+         LEFT JOIN core_workflowrun workflow ON workflow.id = run.workflow_run_id \
+         LEFT JOIN core_task task ON task.id = workflow.task_id \
+         WHERE CAST(run.id AS TEXT) = ? LIMIT 1"
+    );
+    match sqlx::query(&sql).bind(&run_id).fetch_optional(pool).await {
+        Ok(Some(row)) => Json(run_json(&row)).into_response(),
+        Ok(None) => error("Not found.", 404),
+        Err(value) => database_error(value.to_string()),
+    }
+}
+
+fn timestamp_expr(state: &AppState, alias: &str, name: &str) -> String {
+    let postgres = state
+        .config
+        .database_url
+        .as_deref()
+        .is_some_and(|url| url.starts_with("postgres"));
+    if postgres {
+        format!("to_char({alias}.{name} AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+    } else {
+        format!("strftime('%Y-%m-%d %H:%M:%S', {alias}.{name})")
+    }
+}

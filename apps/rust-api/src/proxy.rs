@@ -111,6 +111,14 @@ pub fn router(state: AppState) -> Router {
                     .patch(crate::agent_team_api::team_detail),
             )
             .route(
+                "/api/v1/agent-teams/{team_id}/runs/",
+                axum::routing::get(crate::agent_team_api::list_team_runs),
+            )
+            .route(
+                "/api/v1/agent-team-runs/{run_id}/",
+                axum::routing::get(crate::agent_team_api::team_run_detail),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/",
                 axum::routing::get(crate::cluster_api::list_deployments),
             )
