@@ -70,6 +70,7 @@ pub fn router(state: AppState) -> Router {
     if native_identity {
         router = router
             .route("/api/v1/auth/csrf/", get(crate::auth::csrf))
+            .route("/api/v1/auth/register/", post(crate::auth::register))
             .route("/api/v1/auth/login/", post(crate::auth::login))
             .route("/api/v1/auth/logout/", post(crate::auth::logout))
             .route("/api/v1/auth/me/", get(crate::native::current_user))

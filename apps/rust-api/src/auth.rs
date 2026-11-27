@@ -564,3 +564,319 @@ mod tests {
         assert!(!verify_password("pbkdf2_sha256$1000$salt$AA==", "password"));
     }
 }
+
+#[derive(Deserialize)]
+struct RegisterPayload {
+    identifier: String,
+    password: String,
+    #[serde(default)]
+    display_name: String,
+}
+
+/// Native `POST /api/v1/auth/register/`.
+pub async fn register(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable("The Rust identity pool is not configured.");
+    };
+    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
+        return unavailable("DJANGO_SECRET_KEY is not configured.");
+    };
+    if let Err(response) = enforce_csrf(&headers) {
+        return *response;
+    }
+    if std::env::var("PLATFORM_ALLOW_SELF_REGISTRATION")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no"
+            )
+        })
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "Self registration is disabled."})),
+        )
+            .into_response();
+    }
+    let payload: RegisterPayload = match serde_json::from_slice(&body) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return bad_request("An email address or phone number and a password are required.")
+        }
+    };
+    if payload.password.len() < 8 {
+        return bad_request("Password must be at least 8 characters.");
+    }
+    if payload.password.len() > 128 {
+        return bad_request("Password is too long.");
+    }
+    let (username, email) = match normalized_identity(&payload.identifier) {
+        Ok(value) => value,
+        Err(message) => return bad_request(message),
+    };
+    let display_name = {
+        let trimmed = payload.display_name.trim();
+        if trimmed.is_empty() {
+            username
+                .split('@')
+                .next()
+                .unwrap_or(&username)
+                .chars()
+                .take(120)
+                .collect::<String>()
+        } else {
+            trimmed.chars().take(120).collect::<String>()
+        }
+    };
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM auth_user WHERE LOWER(username) = LOWER(?)",
+    )
+    .bind(&username)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if exists > 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"detail": "An account with this email or phone number already exists."})),
+        )
+            .into_response();
+    }
+    let encoded_password = encode_password(&payload.password, 870_000);
+    let user = sqlx::query(
+        "INSERT INTO auth_user (password, is_superuser, username, first_name, last_name, email, \
+         is_staff, is_active, date_joined) VALUES (?, 0, ?, '', '', ?, 0, 1, CURRENT_TIMESTAMP)",
+    )
+    .bind(&encoded_password)
+    .bind(&username)
+    .bind(&email)
+    .execute(pool)
+    .await;
+    let user_id: i64 = match user {
+        Ok(result) => result.last_insert_id().unwrap_or(0),
+        Err(error) => {
+            tracing::error!(%error, "rust auth could not create the user");
+            return unavailable("The account could not be created.");
+        }
+    };
+    let tenant_id = uuid::Uuid::new_v4().simple().to_string();
+    let project_id = uuid::Uuid::new_v4().simple().to_string();
+    let tenant_slug = unique_tenant_slug(pool, &display_name).await;
+    let tenant = sqlx::query(
+        "INSERT INTO core_tenant (id, name, slug, created_at, updated_at) \
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+    )
+    .bind(&tenant_id)
+    .bind(
+        format!("{}'s workspace", display_name)
+            .chars()
+            .take(120)
+            .collect::<String>(),
+    )
+    .bind(&tenant_slug)
+    .execute(pool)
+    .await;
+    if let Err(error) = tenant {
+        tracing::error!(%error, "rust auth could not create the tenant");
+        return unavailable("The workspace could not be created.");
+    }
+    let membership = sqlx::query(
+        "INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) \
+         VALUES (?, ?, ?, 'owner', CURRENT_TIMESTAMP)",
+    )
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(&tenant_id)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+    if let Err(error) = membership {
+        tracing::error!(%error, "rust auth could not create the tenant membership");
+        return unavailable("The workspace membership could not be created.");
+    }
+    let project = sqlx::query(
+        "INSERT INTO core_project (id, tenant_id, name, slug, created_at) \
+         VALUES (?, ?, 'Default project', 'default', CURRENT_TIMESTAMP)",
+    )
+    .bind(&project_id)
+    .bind(&tenant_id)
+    .execute(pool)
+    .await;
+    if let Err(error) = project {
+        tracing::error!(%error, "rust auth could not create the default project");
+        return unavailable("The default project could not be created.");
+    }
+    let project_membership = sqlx::query(
+        "INSERT INTO core_projectmembership (id, project_id, user_id, role, created_at) \
+         VALUES (?, ?, ?, 'admin', CURRENT_TIMESTAMP)",
+    )
+    .bind(uuid::Uuid::new_v4().simple().to_string())
+    .bind(&project_id)
+    .bind(user_id)
+    .execute(pool)
+    .await;
+    if let Err(error) = project_membership {
+        tracing::error!(%error, "rust auth could not create the project membership");
+        return unavailable("The project membership could not be created.");
+    }
+    let session_key = new_session_key();
+    let session_data = match encode_session_data(user_id, &encoded_password, secret_key) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, "rust auth could not encode the session");
+            return unavailable("The session could not be created.");
+        }
+    };
+    if let Err(error) = persist_session(&state, pool, &session_key, &session_data).await {
+        tracing::error!(%error, "rust auth could not persist the session");
+        return unavailable("The session could not be created.");
+    }
+    record_session_activity(
+        pool,
+        user_id,
+        &session_key,
+        database_url(&state).starts_with("postgres"),
+    )
+    .await;
+    let request_id = header_string(&headers, "x-request-id");
+    let remote = peer.ip().to_string();
+    let user_agent = header_string(&headers, "user-agent");
+    let kind = if username.contains('@') {
+        "email"
+    } else {
+        "phone"
+    };
+    let _ = record_auth_event(
+        pool,
+        database_url(&state),
+        AuthAudit {
+            event_type: "auth.register.succeeded",
+            outcome: "success",
+            reason: if kind == "email" {
+                "email_self_registration"
+            } else {
+                "phone_self_registration"
+            },
+            actor_id: Some(user_id),
+            request_id: &request_id,
+            remote_addr: Some(&remote),
+            user_agent: &user_agent,
+        },
+    )
+    .await;
+    let mut response = (
+        StatusCode::CREATED,
+        Json(json!({
+            "id": user_id,
+            "username": username,
+            "email": email,
+            "session_token": session_key,
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+        })),
+    )
+        .into_response();
+    append_cookie(
+        &mut response,
+        &session_cookie(&session_key, state.config.secure_cookies),
+    );
+    response
+}
+
+fn encode_password(password: &str, iterations: u32) -> String {
+    let salt = uuid::Uuid::new_v4().simple().to_string();
+    let mut derived = vec![0u8; 32];
+    pbkdf2_hmac::<Sha256>(
+        password.as_bytes(),
+        salt.as_bytes(),
+        iterations,
+        &mut derived,
+    );
+    format!(
+        "pbkdf2_sha256${iterations}${salt}${}",
+        base64::engine::general_purpose::STANDARD.encode(derived)
+    )
+}
+
+fn normalized_identity(value: &str) -> Result<(String, String), &'static str> {
+    let identity = value.trim();
+    if identity.is_empty() {
+        return Err("An email address or phone number and a password are required.");
+    }
+    if identity.contains('@') {
+        let email = identity.to_ascii_lowercase();
+        let mut parts = email.split('@');
+        let local = parts.next().unwrap_or_default();
+        let domain = parts.next().unwrap_or_default();
+        if local.is_empty()
+            || domain.is_empty()
+            || !domain.contains('.')
+            || email.len() > 254
+            || !email
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "@._%+-".contains(ch))
+        {
+            return Err("Enter a valid email address.");
+        }
+        return Ok((email.clone(), email));
+    }
+    let phone: String = identity
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '(' | ')' | '-'))
+        .collect();
+    if !(6..=15).contains(&phone.len()) || !phone.chars().all(|ch| ch.is_ascii_digit() || ch == '+')
+    {
+        return Err("Enter a valid phone number with 6 to 15 digits.");
+    }
+    Ok((phone, String::new()))
+}
+
+async fn unique_tenant_slug(pool: &sqlx::AnyPool, name: &str) -> String {
+    let mut base: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while base.contains("--") {
+        base = base.replace("--", "-");
+    }
+    let base = base.trim_matches('-').chars().take(60).collect::<String>();
+    let base = if base.is_empty() {
+        "workspace".to_string()
+    } else {
+        base
+    };
+    let mut candidate = base.clone();
+    for _ in 0..20 {
+        let exists =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM core_tenant WHERE slug = ?")
+                .bind(&candidate)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+        if exists == 0 {
+            return candidate.chars().take(80).collect();
+        }
+        candidate = format!(
+            "{}-{}",
+            base.chars().take(70).collect::<String>(),
+            uuid::Uuid::new_v4()
+                .simple()
+                .to_string()
+                .chars()
+                .take(4)
+                .collect::<String>()
+        );
+    }
+    candidate.chars().take(80).collect()
+}
