@@ -439,3 +439,32 @@ async fn manages_scheduled_chat_jobs() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["items"].as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn runs_scheduled_job_now() {
+    let state = state().await;
+    let base = format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/scheduled-jobs/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &base,
+        Some(json!({
+            "name": "Fleet digest",
+            "prompt": "Summarize the fleet",
+            "cadence": "daily",
+            "model_config_id": "bbbbbbbb-1111-1111-1111-111111111111"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let id = body["id"].as_str().unwrap().to_string();
+    let (status, body) = call(&state, "POST", &format!("{base}{id}/run-now/"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["error_code"], "");
+    assert!(body["thread_id"].is_string());
+    assert!(!body["assistant_message_id"].as_str().unwrap().is_empty());
+    let (status, body) = call(&state, "GET", &base, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["items"][0]["last_run_at"].is_string());
+    assert!(body["items"][0]["thread_id"].is_string());
+}

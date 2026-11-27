@@ -2124,3 +2124,164 @@ fn find_bytes(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         .position(|window| window == needle)
         .map(|position| from + position)
 }
+
+/// Execute one scheduled prompt inside a chat thread and persist both turns.
+///
+/// The scheduler reuses the same thread for every run; a missing thread is
+/// created on the first run so the transcript survives provider failures.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn scheduled_run(
+    pool: &AnyPool,
+    state: &AppState,
+    tenant_id: &str,
+    project_id: &str,
+    user_id: i64,
+    thread_id: Option<&str>,
+    title: &str,
+    model_id: Option<&str>,
+    prompt_text: &str,
+    execution_target: &str,
+    effort: &str,
+    job_id: &str,
+) -> Result<(String, String, String, String), String> {
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let (thread, model_id) = if let Some(thread_id) = thread_id {
+        let thread = thread_row(pool, state, thread_id)
+            .await?
+            .ok_or_else(|| "The scheduled thread no longer exists.".to_string())?;
+        let model = model_id
+            .map(str::to_string)
+            .or_else(|| thread.model_config_id.clone());
+        sqlx::query(
+            "UPDATE core_agentchatthread SET execution_target = ?, effort = ?, \
+             model_config_id = ?, updated_at = ? WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(execution_target)
+        .bind(effort)
+        .bind(model.as_deref())
+        .bind(&now)
+        .bind(&thread.id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let mut updated = thread;
+        updated.execution_target = execution_target.to_string();
+        updated.effort = effort.to_string();
+        updated.model_config_id = model.clone();
+        (updated, model)
+    } else {
+        let model = match model_id {
+            Some(model_id) => Some(model_id.to_string()),
+            None => default_model(pool, state, tenant_id, user_id).await?,
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO core_agentchatthread (id, tenant_id, project_id, created_by_id, title, \
+             model_config_id, archived, execution_target, effort, goal, plan_first, created_at, \
+             updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(user_id)
+        .bind(title.chars().take(200).collect::<String>())
+        .bind(model.as_deref())
+        .bind(if is_postgres(state) { "FALSE" } else { "0" })
+        .bind(execution_target)
+        .bind(effort)
+        .bind(if is_postgres(state) { "FALSE" } else { "0" })
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let thread = ThreadRecord {
+            id,
+            tenant_id: tenant_id.to_string(),
+            project_id: project_id.to_string(),
+            title: title.chars().take(200).collect(),
+            model_config_id: model.clone(),
+            archived: false,
+            execution_target: execution_target.to_string(),
+            effort: effort.to_string(),
+            goal: String::new(),
+            plan_first: false,
+            created_at: Some(now.clone()),
+            updated_at: Some(now.clone()),
+        };
+        (thread, model)
+    };
+    let user_message_id = uuid::Uuid::new_v4().to_string();
+    let context = json!({"trigger": "manual", "scheduled_job_id": job_id});
+    sqlx::query(
+        "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
+         usage, tool_calls, error_code, created_at) VALUES (?, ?, 'user', ?, ?, ?, '{}', '[]', '', ?)",
+    )
+    .bind(&user_message_id)
+    .bind(&thread.id)
+    .bind(prompt_text)
+    .bind(user_id)
+    .bind(serde_json::to_string(&context).unwrap_or_else(|_| "{}".to_string()))
+    .bind(&now)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    sqlx::query("UPDATE core_agentchatthread SET updated_at = ? WHERE CAST(id AS TEXT) = ?")
+        .bind(&now)
+        .bind(&thread.id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut content = String::new();
+    let mut usage = json!({});
+    let mut error_code = String::new();
+    match model_id.as_deref() {
+        None => error_code = "MODEL_NOT_CONFIGURED".to_string(),
+        Some(model_id) => match chat_model(pool, state, tenant_id, user_id, model_id).await {
+            Ok(Some(model)) => {
+                let credential = resolve_credential(pool, state, &model, user_id)
+                    .await
+                    .map_err(|_| "MODEL_CREDENTIAL_MISSING".to_string());
+                match credential {
+                    Err(code) => error_code = code,
+                    Ok(credential) => {
+                        let system = chat_prompt(pool, state, &thread, &json!({})).await?;
+                        let history = vec![json!({"role": "user", "content": prompt_text})];
+                        match complete_model(state, &model, &credential, &system, &history).await {
+                            Ok((reply, turn_usage)) => {
+                                content = reply;
+                                usage = turn_usage;
+                            }
+                            Err(_) => error_code = "MODEL_PROVIDER_ERROR".to_string(),
+                        }
+                    }
+                }
+            }
+            Ok(None) => error_code = "MODEL_NOT_CONFIGURED".to_string(),
+            Err(error) => return Err(error),
+        },
+    }
+    let assistant_id = uuid::Uuid::new_v4().to_string();
+    let assistant_now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    sqlx::query(
+        "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
+         usage, tool_calls, error_code, created_at) VALUES (?, ?, 'assistant', ?, NULL, '{}', ?, '[]', ?, ?)",
+    )
+    .bind(&assistant_id)
+    .bind(&thread.id)
+    .bind(&content)
+    .bind(serde_json::to_string(&usage).unwrap_or_else(|_| "{}".to_string()))
+    .bind(&error_code)
+    .bind(&assistant_now)
+    .execute(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    sqlx::query("UPDATE core_agentchatthread SET updated_at = ? WHERE CAST(id AS TEXT) = ?")
+        .bind(&assistant_now)
+        .bind(&thread.id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((thread.id, user_message_id, assistant_id, error_code))
+}

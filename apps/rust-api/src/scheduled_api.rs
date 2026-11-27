@@ -538,3 +538,92 @@ fn database_error(error: String) -> Response {
     tracing::error!(%error, "rust scheduled api database operation failed");
     unavailable()
 }
+
+pub async fn run_job_now(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id, job_id)): Path<(String, String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(),
+        Err(error) => return database_error(error),
+    }
+    let current = match job(pool, &state, &tenant_id, &project_id, &job_id).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let prompt = current["prompt"].as_str().unwrap_or("").to_string();
+    let name = current["name"].as_str().unwrap_or("").to_string();
+    let thread_id = current["thread_id"].as_str().map(str::to_string);
+    let model_id = current["model_config_id"].as_str().map(str::to_string);
+    let target = current["execution_target"].as_str().unwrap_or("cloud");
+    let effort = current["effort"].as_str().unwrap_or("auto");
+    let run = crate::chat_api::scheduled_run(
+        pool,
+        &state,
+        &tenant_id,
+        &project_id,
+        user.id,
+        thread_id.as_deref(),
+        &name,
+        model_id.as_deref(),
+        &prompt,
+        target,
+        effort,
+        &job_id,
+    )
+    .await;
+    let (thread, user_message, assistant_message, error_code) = match run {
+        Ok(result) => result,
+        Err(error) => return database_error(error),
+    };
+    let now = Utc::now();
+    let cadence = current["cadence"].as_str().unwrap_or("daily");
+    let hour = current["hour"].as_u64().unwrap_or(9) as u32;
+    let weekday = current["weekday"].as_u64().unwrap_or(0) as u32;
+    let next = next_occurrence(cadence, hour, weekday, now);
+    if let Err(error) = sqlx::query(
+        "UPDATE core_scheduledchatjob SET thread_id = ?, last_run_at = ?, last_error_code = ?, \
+         next_run_at = ?, updated_at = ? WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&thread)
+    .bind(format_time(&now))
+    .bind(&error_code)
+    .bind(format_time(&next))
+    .bind(format_time(&now))
+    .bind(&job_id)
+    .execute(pool)
+    .await
+    {
+        return database_error(error.to_string());
+    }
+    if !error_code.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "detail": "The scheduled turn failed.",
+                "code": error_code,
+                "thread_id": thread,
+                "user_message_id": user_message,
+                "assistant_message_id": assistant_message,
+            })),
+        )
+            .into_response();
+    }
+    Json(json!({
+        "thread_id": thread,
+        "user_message_id": user_message,
+        "assistant_message_id": assistant_message,
+        "error_code": "",
+    }))
+    .into_response()
+}
