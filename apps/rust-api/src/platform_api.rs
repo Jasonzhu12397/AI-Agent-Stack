@@ -29,8 +29,7 @@ pub async fn roadmap(State(state): State<AppState>, headers: HeaderMap) -> Respo
     } {
         return response;
     }
-    let sql = format!(
-        "SELECT \
+    let sql = "SELECT \
          (SELECT COUNT(*) FROM core_agentversion) AS published_agents, \
          (SELECT COUNT(*) FROM core_agentrun run JOIN core_task task \
             ON CAST(task.id AS TEXT) = CAST(run.task_id AS TEXT) \
@@ -43,8 +42,7 @@ pub async fn roadmap(State(state): State<AppState>, headers: HeaderMap) -> Respo
          (SELECT COUNT(*) FROM core_agentcommand WHERE approved_at IS NOT NULL) AS approved_commands, \
          (SELECT COUNT(DISTINCT workflow_run_id) FROM core_workflowsteprun) AS workflow_runs, \
          (SELECT COUNT(DISTINCT command_type) FROM core_agentcommand) AS command_kinds, \
-         (SELECT COUNT(*) FROM core_task) AS tasks"
-    );
+         (SELECT COUNT(*) FROM core_task) AS tasks";
     let row = match sqlx::query(&sql).fetch_one(pool).await {
         Ok(row) => row,
         Err(error) => return database_error(error.to_string()),
