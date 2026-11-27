@@ -100,3 +100,16 @@ async fn reads_cluster_deployment_detail() {
     assert_eq!(body["status"], "provisioning");
     assert_eq!(body["network_evidence_status"], "missing");
 }
+
+#[tokio::test]
+async fn reports_missing_network_evidence() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        "/api/v1/cluster-deployments/deploy-1/network/evidence/verify/",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["status"], "missing");
+}

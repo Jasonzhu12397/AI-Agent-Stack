@@ -364,3 +364,87 @@ fn normalize_observed(value: &str) -> String {
     }
     text.trim_end_matches('.').to_string()
 }
+
+/// `POST /api/v1/cluster-deployments/{deployment_id}/network/evidence/verify/`
+pub async fn verify_network_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(deployment_id): Path<String>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "UNAVAILABLE",
+            "Database unavailable.",
+        );
+    };
+    let row = sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, \
+         CASE WHEN ? THEN CAST(spec AS TEXT) ELSE spec END AS spec_text \
+         FROM core_clusterdeployment WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(json_text(&state))
+    .bind(&deployment_id)
+    .fetch_optional(pool)
+    .await;
+    let row = match row {
+        Ok(Some(row)) => row,
+        Ok(None) => return fail(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => {
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_ERROR",
+                &error.to_string(),
+            )
+        }
+    };
+    let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = row.try_get("project_id").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            "Project membership required.",
+        );
+    }
+    if !matches!(
+        crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await,
+        Ok(true)
+    ) {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            "Project membership required.",
+        );
+    }
+    let spec = parse_json(row.try_get::<Option<String>, _>("spec_text").ok().flatten());
+    let evidence = spec.get("network_evidence").and_then(Value::as_array);
+    let Some(items) = evidence.filter(|items| !items.is_empty()) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"status": "missing", "detail": "This deployment has no bound network evidence."})),
+        )
+            .into_response();
+    };
+    let drift = network_evidence_drift(pool, &project_id, items).await;
+    if drift.is_empty() {
+        Json(json!({"status": "current", "evidence": items})).into_response()
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "status": "drift",
+                "detail": "Node network inventory changed after the readiness check. Re-run network collection and create a new deployment.",
+                "drift": drift,
+            })),
+        )
+            .into_response()
+    }
+}

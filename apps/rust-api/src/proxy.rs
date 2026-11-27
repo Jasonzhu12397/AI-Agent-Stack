@@ -120,6 +120,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::agent_team_api::team_run_detail),
             )
             .route(
+                "/api/v1/cluster-deployments/{deployment_id}/network/evidence/verify/",
+                axum::routing::post(crate::cluster_api::verify_network_evidence),
+            )
+            .route(
                 "/api/v1/cluster-deployments/{deployment_id}/",
                 axum::routing::get(crate::cluster_api::get_deployment),
             )
