@@ -3,29 +3,29 @@
 ## Technology decision
 
 - Frontend: Vue 3 + TypeScript + Vite + Element Plus + Pinia + Vue Router.
-- Backend: Python 3.12 + Django + Django REST Framework.
-- Realtime: Django Channels on ASGI; durable run streaming is part of the platform API boundary.
+- Backend/API: Rust + Axum (`apps/rust-api`) is the sole supported SaaS API runtime. Django and Django REST Framework are retired; no production, development, proxy-fallback or compatibility runtime may depend on them.
+- Realtime: Rust-native HTTP streaming and WebSocket services; authorization and connection lifecycle are owned by Rust.
 - Persistence: PostgreSQL is authoritative. Redis is auxiliary and never the only store for durable state.
-- Execution: independent Python Workers; task claiming, leases and recovery are separate from the three infrastructure Agent runtimes.
+- Execution: independent Python Workers may remain as execution services, but they do not expose or replace the SaaS API. Task claiming, leases and recovery are separate from the three infrastructure Agent runtimes.
 - Object storage: S3-compatible API. Vector retrieval: pgvector behind an abstraction.
 - Deployment: Docker Compose locally; Kubernetes with Helm/Kustomize in production.
 
 ## Runtime boundaries
 
-Django is the platform control plane: identity, tenant/project authorization, configuration, version publication, policy, audit and API orchestration.
+The Rust API is the platform control plane: identity, tenant/project authorization, configuration, version publication, policy, audit and API orchestration.
 
 Python Workers are the general execution plane: Agent runs, workflow steps, scheduled work and isolated integration execution. Long-running work must not be tied to an HTTP request lifecycle.
 
-Vue communicates with Django through versioned REST APIs and WebSocket channels. The browser is never authoritative for tenant identity, permissions, deployment state or execution policy.
+Vue communicates only with the Rust API through versioned REST APIs and Rust-owned realtime channels. The browser is never authoritative for tenant identity, permissions, deployment state or execution policy.
 
 ## Initial platform implementation status
 
-The platform includes the Django ASGI application, DRF APIs, health endpoints, Vue 3 application shell, PostgreSQL persistence and a standalone Python Worker. Authentication, durable task orchestration, model routing, plugin execution and workflow capabilities must be assessed independently against their implementation and integration tests; the presence of an application shell is not proof that those capabilities are production-complete.
+The platform API is implemented in Rust/Axum and uses PostgreSQL as its durable store. Python Workers and infrastructure Agents are separate execution processes, not API fallbacks. Authentication, durable task orchestration, model routing, plugin execution and workflow capabilities must be assessed independently against their implementation and integration tests; the presence of an application shell is not proof that those capabilities are production-complete.
 
 ## Security invariants
 
-- Production refuses the development secret key and DEBUG mode.
-- DRF defaults to authenticated access; intentionally public endpoints must explicitly opt in.
+- Production uses externally managed secrets and secure cookie/session settings.
+- Rust API routes default to authenticated access; intentionally public endpoints must explicitly opt in.
 - Server derives Principal and tenant scope; client-supplied tenant identifiers are untrusted.
 - Model output, retrieval results, Skill content, MCP responses and plugin data are untrusted.
 - Credentials are stored as secret references, never copied into prompts, logs or traces.
@@ -34,7 +34,7 @@ The platform includes the Django ASGI application, DRF APIs, health endpoints, V
 
 ## Deployment boundaries
 
-API and Worker are separate processes built from the platform Python packages. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager.
+The Rust API and execution Workers are separate processes. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager. Deployment manifests must start the Rust API directly and must not build or launch Django/Daphne.
 
 ## Three-Agent bare-metal Kubernetes control system
 
