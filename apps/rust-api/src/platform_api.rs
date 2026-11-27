@@ -43,7 +43,7 @@ pub async fn roadmap(State(state): State<AppState>, headers: HeaderMap) -> Respo
          (SELECT COUNT(DISTINCT workflow_run_id) FROM core_workflowsteprun) AS workflow_runs, \
          (SELECT COUNT(DISTINCT command_type) FROM core_agentcommand) AS command_kinds, \
          (SELECT COUNT(*) FROM core_task) AS tasks";
-    let row = match sqlx::query(&sql).fetch_one(pool).await {
+    let row = match sqlx::query(sql).fetch_one(pool).await {
         Ok(row) => row,
         Err(error) => return database_error(error.to_string()),
     };
