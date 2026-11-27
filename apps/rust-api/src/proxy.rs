@@ -212,6 +212,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::plugin_api::list_marketplace_agents),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-plugins/{plugin_id}/capabilities/{capability}/invoke/",
+                axum::routing::post(crate::plugin_api::invoke_project_capability),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-capabilities/",
                 axum::routing::get(crate::plugin_api::list_capabilities),
             )

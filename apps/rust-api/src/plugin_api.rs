@@ -1918,3 +1918,57 @@ pub async fn rotate_installation_credential(
     }
     installation_response(&state, pool, &installation_id).await
 }
+
+pub async fn invoke_project_capability(
+    State(state): State<AppState>,
+    Path((tenant_id, project_id, plugin_id, capability)): Path<(String, String, String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "Project access required."})),
+        )
+            .into_response();
+    }
+    let arguments = body.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let request = json!({"capability": capability, "arguments": arguments});
+    match crate::mcp_api::invoke(&state, &tenant_id, &project_id, &request, Some(&plugin_id)).await
+    {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(error) => {
+            let message = error
+                .pointer("/error/message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Capability invocation failed.");
+            let code = error
+                .pointer("/error/data/code")
+                .and_then(|value| value.as_str())
+                .unwrap_or("CAPABILITY_INVOCATION_FAILED");
+            let status = if code == "CAPABILITY_NOT_INSTALLED" || code == "CAPABILITY_NOT_DECLARED"
+            {
+                StatusCode::NOT_FOUND
+            } else if code == "APPROVAL_REQUIRED" {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            (
+                status,
+                Json(json!({"error": {"code": code, "message": message, "details": {}}})),
+            )
+                .into_response()
+        }
+    }
+}

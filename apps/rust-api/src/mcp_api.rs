@@ -265,11 +265,12 @@ async fn list_capabilities(state: &AppState, tenant: &str, project: &str) -> Res
     Ok(json!({"capabilities": capabilities}))
 }
 
-async fn invoke(
+pub(crate) async fn invoke(
     state: &AppState,
     tenant: &str,
     project: &str,
     args: &Value,
+    plugin_id: Option<&str>,
 ) -> Result<Value, Value> {
     let capability = args.get("capability").and_then(Value::as_str).unwrap_or("");
     if capability.is_empty() || capability.len() > 64 {
@@ -288,8 +289,8 @@ async fn invoke(
          plugin.plugin_key, plugin.protocol, plugin.endpoint_url, plugin.auth_required, CAST(plugin.capabilities AS TEXT) AS capabilities, CAST(plugin.manifest AS TEXT) AS manifest, \
          CAST(plugin.input_schema AS TEXT) AS input_schema, CAST(plugin.output_schema AS TEXT) AS output_schema, plugin.timeout_seconds, plugin.enabled \
          FROM core_agentplugininstallation installation JOIN core_agentplugindefinition plugin ON CAST(plugin.id AS TEXT) = CAST(installation.plugin_id AS TEXT) \
-         WHERE CAST(installation.tenant_id AS TEXT) = ? AND CAST(installation.project_id AS TEXT) = ?",
-    ).bind(tenant).bind(project).fetch_all(pool).await.map_err(|_| rpc_error(-32603, "Internal error."))?;
+         WHERE CAST(installation.tenant_id AS TEXT) = ? AND CAST(installation.project_id AS TEXT) = ? AND (? IS NULL OR CAST(plugin.id AS TEXT) = ?)",
+    ).bind(tenant).bind(project).bind(plugin_id).bind(plugin_id).fetch_all(pool).await.map_err(|_| rpc_error(-32603, "Internal error."))?;
     let mut selected = None;
     for row in rows {
         let definitions = crate::plugin_api::capability_definitions(
@@ -479,7 +480,9 @@ async fn dispatch(
                     create_task(state, tenant, project, user_id, &arguments).await?
                 }
                 "platform_list_capabilities" => list_capabilities(state, tenant, project).await?,
-                "platform_invoke_capability" => invoke(state, tenant, project, &arguments).await?,
+                "platform_invoke_capability" => {
+                    invoke(state, tenant, project, &arguments, None).await?
+                }
                 _ => return Err(rpc_error(-32602, "Unknown tool.")),
             };
             Ok(Some(text_result(result)))
