@@ -171,7 +171,7 @@ async fn lists_and_revokes_only_owned_sessions() {
     assert_eq!(results.len(), 2, "{body}");
     let current = results
         .iter()
-        .find(|row| row["session_key"] == SESSION)
+        .find(|row| row["session_key"] == session_token_hash(SESSION))
         .unwrap();
     assert_eq!(current["is_current"], true);
     assert_eq!(current["timestamps_source"], "rust_session_store");
@@ -188,7 +188,7 @@ async fn lists_and_revokes_only_owned_sessions() {
 
     let (status, body) = request(
         "POST",
-        "/api/v1/users/me/sessions/second-session/revoke/",
+        &format!("/api/v1/users/me/sessions/{}/revoke/", session_token_hash("second-session")),
         None,
     )
     .await;
