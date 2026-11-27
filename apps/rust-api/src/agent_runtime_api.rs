@@ -852,3 +852,111 @@ fn approval_error(message: &str, status: u16) -> Response {
     )
         .into_response()
 }
+
+pub async fn list_node_commands(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let node = match sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id \
+         FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&node_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return approval_error("Agent node not found.", 404),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = node.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = node.try_get("project_id").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return approval_error("Agent node not found.", 404);
+    }
+    let project_editor = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_projectmembership WHERE CAST(project_id AS TEXT) = ? \
+         AND user_id = ? AND role IN ('admin', 'editor')",
+    )
+    .bind(&project_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0;
+    let tenant_admin = crate::billing_api::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false);
+    if !project_editor && !tenant_admin {
+        return approval_error("Project membership required.", 403);
+    }
+    let ts = |column: &str| {
+        if is_postgres(&state) {
+            format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS {column}")
+        } else {
+            format!("strftime('%Y-%m-%d %H:%M:%S', {column}) AS {column}")
+        }
+    };
+    let columns = [
+        ts("created_at"),
+        ts("started_at"),
+        ts("finished_at"),
+        ts("approved_at"),
+    ]
+    .join(", ");
+    let select = format!(
+        "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, \
+         CAST(deployment_id AS TEXT) AS deployment_id, command_type, CAST(payload AS TEXT) AS payload_text, \
+         status, plan_hash, CAST(attempts AS INTEGER) AS attempts, CAST(result AS TEXT) AS result_text, \
+         CAST(error AS TEXT) AS error_text, {columns} \
+         FROM core_agentcommand WHERE CAST(node_id AS TEXT) = ? ORDER BY created_at DESC LIMIT 100"
+    );
+    let rows = match sqlx::query(&select).bind(&node_id).fetch_all(pool).await {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let results: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.try_get::<String, _>("id").unwrap_or_default(),
+                "node_id": row.try_get::<String, _>("node_id").unwrap_or_default(),
+                "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
+                "command_type": row.try_get::<String, _>("command_type").unwrap_or_default(),
+                "payload": serde_json::from_str::<Value>(&row.try_get::<String, _>("payload_text").unwrap_or_default()).unwrap_or_else(|_| json!({})),
+                "status": row.try_get::<String, _>("status").unwrap_or_default(),
+                "plan_hash": row.try_get::<Option<String>, _>("plan_hash").ok().flatten(),
+                "approved_at": timestamp_value(row, "approved_at"),
+                "attempts": row.try_get::<i64, _>("attempts").unwrap_or(0),
+                "result": parse_optional_json(row, "result_text"),
+                "error": parse_optional_json(row, "error_text"),
+                "created_at": timestamp_value(row, "created_at"),
+                "started_at": timestamp_value(row, "started_at"),
+                "finished_at": timestamp_value(row, "finished_at"),
+            })
+        })
+        .collect();
+    Json(json!({"count": results.len(), "results": results})).into_response()
+}
+
+fn parse_optional_json(row: &sqlx::any::AnyRow, column: &str) -> Value {
+    let text: Option<String> = row.try_get(column).ok().flatten();
+    text.and_then(|value| serde_json::from_str::<Value>(&value).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn timestamp_value(row: &sqlx::any::AnyRow, column: &str) -> Value {
+    let text: Option<String> = row.try_get(column).ok().flatten();
+    text.map(|value| json!(value)).unwrap_or(Value::Null)
+}
