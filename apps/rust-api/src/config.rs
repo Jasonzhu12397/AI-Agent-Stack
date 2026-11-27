@@ -31,10 +31,18 @@ impl Config {
             return Err("RUST_API_EXTERNAL_SCHEME must be http or https".into());
         }
 
+        let platform_secret_key = env::var("PLATFORM_SECRET_KEY").ok();
+        if platform_secret_key.as_ref().is_some_and(|key| key.len() < 32) {
+            return Err("PLATFORM_SECRET_KEY must contain at least 32 characters".into());
+        }
+        if production && platform_secret_key.is_none() {
+            return Err("PLATFORM_SECRET_KEY is required in production".into());
+        }
+
         Ok(Self {
             listen,
             database_url: Some(database_url),
-            platform_secret_key: env::var("PLATFORM_SECRET_KEY").ok(),
+            platform_secret_key,
             secure_cookies,
             external_scheme,
             media_root: env::var("MEDIA_ROOT").unwrap_or_else(|_| ".devdata/media".into()),
