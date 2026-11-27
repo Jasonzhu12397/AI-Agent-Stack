@@ -272,3 +272,34 @@ async fn lists_marketplace_agents_with_availability() {
     assert_eq!(agents[0]["capability"], "weather.lookup");
     assert_eq!(agents[0]["available"], true);
 }
+
+#[tokio::test]
+async fn lists_plugin_versions_for_key() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/versions/?plugin_key=weather"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["version"], "1.0.0");
+    assert_eq!(body[0]["is_active"], true);
+}
+
+#[tokio::test]
+async fn activates_plugin_version_and_migrates_installations() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/agent-plugins/{PLUGIN}/activate/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["migration"]["installations"], 1);
+}

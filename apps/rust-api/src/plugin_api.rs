@@ -1339,3 +1339,325 @@ fn availability(installation: Option<&sqlx::any::AnyRow>, draft: &Value) -> (boo
     }
     (true, None)
 }
+
+/// `GET /api/v1/tenants/{tenant}/agent-plugins/versions/?plugin_key=...`
+pub async fn list_plugin_versions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let plugin_key = params.get("plugin_key").cloned().unwrap_or_default();
+    if plugin_key.is_empty()
+        || plugin_key.len() > 100
+        || !plugin_key
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        || plugin_key.starts_with('-')
+        || plugin_key.ends_with('-')
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "plugin_key must be a lowercase hyphenated identifier."})),
+        )
+            .into_response();
+    }
+    let created = timestamp(&state, "plugin", "created_at");
+    let sql = format!(
+        "SELECT CAST(plugin.id AS TEXT) AS id, plugin.version, \
+         CAST(plugin.enabled AS INTEGER) AS enabled_int, plugin.capabilities, plugin.manifest, \
+         {created} AS created FROM core_agentplugindefinition plugin \
+         WHERE CAST(plugin.tenant_id AS TEXT) = ? AND plugin.plugin_key = ? \
+         ORDER BY plugin.created_at DESC"
+    );
+    let rows = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&plugin_key)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let active_id = rows
+        .iter()
+        .find(|row| row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0)
+        .and_then(|row| row.try_get::<String, _>("id").ok());
+    let results: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let manifest: Value = row
+                .try_get::<String, _>("manifest")
+                .ok()
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_else(|| json!({}));
+            let id = row.try_get::<String, _>("id").unwrap_or_default();
+            json!({
+                "id": id,
+                "version": row.try_get::<String, _>("version").unwrap_or_default(),
+                "enabled": row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0,
+                "is_active": active_id.as_deref() == Some(id.as_str()),
+                "schema_fingerprint": manifest.get("studio").and_then(|studio| studio.get("schema_fingerprint")).cloned().unwrap_or_else(|| json!("")),
+                "capabilities": capability_names(
+                    row.try_get::<Option<String>, _>("capabilities").ok().flatten(),
+                    row.try_get::<Option<String>, _>("manifest").ok().flatten(),
+                ).len(),
+                "created_at": row.try_get::<Option<String>, _>("created").ok().flatten(),
+            })
+        })
+        .collect();
+    Json(Value::Array(results)).into_response()
+}
+
+/// `POST /api/v1/agent-plugins/{plugin_id}/activate/`
+pub async fn activate_plugin_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(plugin_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let plugin = match sqlx::query(
+        "SELECT CAST(plugin.tenant_id AS TEXT) AS tenant_id, plugin.plugin_key, plugin.version, \
+         plugin.capabilities, plugin.manifest FROM core_agentplugindefinition plugin \
+         WHERE CAST(plugin.id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&plugin_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = plugin.try_get("tenant_id").unwrap_or_default();
+    match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"detail": "Tenant administrator permission required."})),
+            )
+                .into_response()
+        }
+        Err(error) => return database_error(error),
+    }
+    let plugin_key: String = plugin.try_get("plugin_key").unwrap_or_default();
+    let plugin_version: String = plugin.try_get("version").unwrap_or_default();
+    let target_names = capability_names(
+        plugin
+            .try_get::<Option<String>, _>("capabilities")
+            .ok()
+            .flatten(),
+        plugin
+            .try_get::<Option<String>, _>("manifest")
+            .ok()
+            .flatten(),
+    );
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let _ = sqlx::query(&format!(
+        "UPDATE core_agentplugindefinition SET enabled = 0, updated_at = {now_expr} \
+         WHERE CAST(tenant_id AS TEXT) = ? AND plugin_key = ? AND CAST(id AS TEXT) <> ?"
+    ))
+    .bind(&tenant_id)
+    .bind(&plugin_key)
+    .bind(&plugin_id)
+    .execute(pool)
+    .await;
+    if let Err(error) = sqlx::query(&format!(
+        "UPDATE core_agentplugindefinition SET enabled = 1, updated_at = {now_expr} \
+         WHERE CAST(id AS TEXT) = ?"
+    ))
+    .bind(&plugin_id)
+    .execute(pool)
+    .await
+    {
+        return database_error(error.to_string());
+    }
+    let grant_text = if is_postgres(&state) {
+        "CAST(installation.granted_capabilities AS TEXT)"
+    } else {
+        "installation.granted_capabilities"
+    };
+    let installations = sqlx::query(&format!(
+        "SELECT CAST(installation.id AS TEXT) AS id, CAST(installation.project_id AS TEXT) AS project_id, \
+         CAST(installation.plugin_id AS TEXT) AS current_plugin_id, installation.status, \
+         installation.plugin_version, {grant_text} AS grants FROM core_agentplugininstallation installation \
+         JOIN core_agentplugindefinition source ON source.id = installation.plugin_id \
+         WHERE CAST(installation.tenant_id AS TEXT) = ? AND source.plugin_key = ? \
+         ORDER BY installation.project_id, CAST(installation.id AS TEXT)"
+    ))
+    .bind(&tenant_id)
+    .bind(&plugin_key)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut grouped: std::collections::BTreeMap<String, Vec<&sqlx::any::AnyRow>> =
+        std::collections::BTreeMap::new();
+    for row in &installations {
+        grouped
+            .entry(row.try_get::<String, _>("project_id").unwrap_or_default())
+            .or_default()
+            .push(row);
+    }
+    let mut migrated = 0i64;
+    let mut dropped: serde_json::Map<String, Value> = serde_json::Map::new();
+    for rows in grouped.values() {
+        if rows
+            .iter()
+            .all(|row| row.try_get::<String, _>("status").unwrap_or_default() == "uninstalled")
+        {
+            continue;
+        }
+        let target = rows
+            .iter()
+            .find(|row| {
+                row.try_get::<String, _>("current_plugin_id")
+                    .ok()
+                    .as_deref()
+                    == Some(plugin_id.as_str())
+            })
+            .copied()
+            .unwrap_or_else(|| {
+                rows.iter()
+                    .max_by_key(|row| {
+                        (
+                            row.try_get::<String, _>("status").unwrap_or_default() == "installed",
+                            row.try_get::<String, _>("id").unwrap_or_default(),
+                        )
+                    })
+                    .copied()
+                    .unwrap()
+            });
+        let mut kept: Vec<String> = Vec::new();
+        let mut removed: Vec<String> = Vec::new();
+        for row in rows {
+            let grants: Vec<String> = row
+                .try_get::<String, _>("grants")
+                .ok()
+                .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+                .unwrap_or_default();
+            for name in grants {
+                if target_names.iter().any(|item| item == &name) {
+                    if !kept.contains(&name) {
+                        kept.push(name);
+                    }
+                } else if !removed.contains(&name) {
+                    removed.push(name);
+                }
+            }
+        }
+        let target_id: String = target.try_get("id").unwrap_or_default();
+        if !removed.is_empty() {
+            dropped.insert(target_id.clone(), json!(removed));
+        }
+        let any_installed = rows
+            .iter()
+            .any(|row| row.try_get::<String, _>("status").unwrap_or_default() == "installed");
+        let _ = sqlx::query(
+            "UPDATE core_agentplugininstallation SET plugin_id = ?, plugin_version = ?, \
+             status = ?, granted_capabilities = ? WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&plugin_id)
+        .bind(&plugin_version)
+        .bind(if any_installed {
+            "installed"
+        } else {
+            "disabled"
+        })
+        .bind(json!(kept).to_string())
+        .bind(&target_id)
+        .execute(pool)
+        .await;
+        migrated += 1;
+        for row in rows {
+            let row_id: String = row.try_get("id").unwrap_or_default();
+            if row_id == target_id {
+                continue;
+            }
+            if row.try_get::<String, _>("status").unwrap_or_default() == "installed" {
+                let _ = sqlx::query(
+                    "UPDATE core_agentplugininstallation SET status = 'disabled' WHERE CAST(id AS TEXT) = ?",
+                )
+                .bind(&row_id)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: None,
+            event_type: "agent_plugin.version_activated",
+            resource_type: "agent_plugin_definition",
+            resource_id: plugin_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({
+                "plugin_key": plugin_key,
+                "version": plugin_version,
+                "migrated_installations": migrated,
+                "dropped_capabilities": dropped,
+            }),
+        },
+    )
+    .await;
+    let created = timestamp(&state, "plugin", "created_at");
+    let updated = timestamp(&state, "plugin", "updated_at");
+    let sql = format!(
+        "SELECT CAST(plugin.id AS TEXT) AS id, CAST(plugin.tenant_id AS TEXT) AS tenant_id, \
+         plugin.plugin_key, plugin.name, plugin.description, plugin.version, plugin.protocol, \
+         plugin.endpoint_url, CAST(plugin.auth_required AS INTEGER) AS auth_required_int, \
+         plugin.credential_ref, plugin.capabilities, plugin.manifest, plugin.input_schema, \
+         plugin.output_schema, plugin.timeout_seconds, plugin.max_concurrency, \
+         CAST(plugin.enabled AS INTEGER) AS enabled_int, {created} AS created, {updated} AS updated \
+         FROM core_agentplugindefinition plugin WHERE CAST(plugin.id AS TEXT) = ? LIMIT 1"
+    );
+    match sqlx::query(&sql)
+        .bind(&plugin_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => {
+            let mut body = plugin_json(&row);
+            if let Some(object) = body.as_object_mut() {
+                object.insert(
+                    "migration".to_string(),
+                    json!({"installations": migrated, "dropped_capabilities": dropped}),
+                );
+            }
+            Json(body).into_response()
+        }
+        Ok(None) => not_found(),
+        Err(error) => database_error(error.to_string()),
+    }
+}
