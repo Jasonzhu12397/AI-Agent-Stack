@@ -190,7 +190,7 @@ async fn list_events(
     } else {
         ""
     };
-    let table = "core_auditevent e LEFT JOIN auth_user u ON u.id = e.actor_id";
+    let table = "core_auditevent e LEFT JOIN platform_users u ON u.id = e.actor_id";
     let count_sql = format!("SELECT COUNT(*) FROM {table} WHERE {tenant_filter}{project_filter}");
     let mut count = sqlx::query_scalar::<_, i64>(&count_sql);
     if let Some(tenant_id) = tenant_id {
