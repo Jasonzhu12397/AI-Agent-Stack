@@ -424,3 +424,254 @@ pub async fn pxe_boot(
     }
     (StatusCode::OK, Json(json!({"execution": execute, "machine_count": selected.len(), "executed": executed, "results": results}))).into_response()
 }
+
+async fn online_eph_nodes(
+    pool: &AnyPool,
+    tenant: &str,
+    project: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, COALESCE(name, '') AS name FROM core_agentnode \
+         WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? \
+         AND status = 'online' AND node_type = 'eph_node' ORDER BY name, id",
+    )
+    .bind(tenant)
+    .bind(project)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (text(&row, "id"), text(&row, "name")))
+        .collect())
+}
+
+pub async fn discovery(
+    State(state): State<AppState>,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Database unavailable.",
+            "DATABASE_UNAVAILABLE",
+            json!({}),
+        );
+    };
+    let admin = crate::billing_api::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+        || crate::tasks::project_editor(pool, &project_id, user.id)
+            .await
+            .unwrap_or(false);
+    if !admin {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "Tenant or project administrator role is required.",
+            "PERMISSION_DENIED",
+            json!({}),
+        );
+    }
+    if !body.is_object() {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "Request body must be a JSON object.",
+            "INVALID_BODY",
+            json!({}),
+        );
+    }
+    let execute = body
+        .get("execution")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if execute && body.get("confirm").and_then(Value::as_str) != Some(CONFIRMATION) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            "execution requires confirm=PXE_ONCE.",
+            "EXECUTION_CONFIRMATION_REQUIRED",
+            json!({"confirmation": CONFIRMATION}),
+        );
+    }
+    let all = match machines(pool, &tenant_id, &project_id).await {
+        Ok(rows) => rows,
+        Err(code) => {
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &code,
+                "DATABASE_ERROR",
+                json!({}),
+            )
+        }
+    };
+    let selected: Vec<Machine> = match body.get("machine_ids") {
+        None => all
+            .into_iter()
+            .filter(|m| {
+                BOOTABLE.contains(&m.state.as_str())
+                    && !m.endpoint.is_empty()
+                    && !m.credential_ref.is_empty()
+            })
+            .collect(),
+        Some(Value::Array(ids)) => {
+            if ids.is_empty()
+                || ids.len() > MAX_MACHINES
+                || ids
+                    .iter()
+                    .any(|id| uuid::Uuid::parse_str(id.as_str().unwrap_or_default()).is_err())
+            {
+                return fail(
+                    StatusCode::BAD_REQUEST,
+                    "machine_ids must be a non-empty list of up to 100 UUIDs.",
+                    "INVALID_MACHINE_IDS",
+                    json!({}),
+                );
+            }
+            let ids: Vec<String> = ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            all.into_iter().filter(|m| ids.contains(&m.id)).collect()
+        }
+        Some(_) => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "machine_ids must be a non-empty list of up to 100 UUIDs.",
+                "INVALID_MACHINE_IDS",
+                json!({}),
+            )
+        }
+    };
+    if selected.is_empty() {
+        return fail(
+            StatusCode::NOT_FOUND,
+            "No machines with BMC configuration found.",
+            "MACHINES_NOT_FOUND",
+            json!({}),
+        );
+    }
+    let blocked: Vec<Value> = selected
+        .iter()
+        .filter(|m| !BOOTABLE.contains(&m.state.as_str()))
+        .map(|m| json!({"machine_id": m.id, "name": m.name, "lifecycle_state": m.state}))
+        .collect();
+    if !blocked.is_empty() {
+        return fail(
+            StatusCode::CONFLICT,
+            "Machines must be in a bootable lifecycle state for this action.",
+            "MACHINE_NOT_BOOTABLE",
+            json!({"action": "discovery", "machines": blocked}),
+        );
+    }
+    let mut results = Vec::new();
+    let mut executed = 0;
+    for machine in &selected {
+        if machine.endpoint.is_empty() || machine.credential_ref.is_empty() {
+            results.push(json!({"machine_id": machine.id, "name": machine.name, "status": "skipped", "error_code": "PXE_BOOT_BMC_NOT_CONFIGURED"}));
+            continue;
+        }
+        match boot_one(&machine.endpoint, &machine.credential_ref, execute).await {
+            Ok(evidence) => {
+                if execute { executed += 1; }
+                results.push(json!({"machine_id": machine.id, "name": machine.name, "status": if execute {"executed"} else {"planned"}, "evidence": evidence}));
+            }
+            Err(code) => results.push(json!({"machine_id": machine.id, "name": machine.name, "status": "failed", "error_code": code})),
+        }
+    }
+    let mut inspect = json!({"queued": [], "skipped": [], "reason": null});
+    if !execute {
+        inspect["reason"] = json!("NOT_EXECUTED");
+    } else if executed == 0 {
+        inspect["reason"] = json!("NO_MACHINE_BOOTED");
+    } else {
+        let idempotency_key = headers
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if idempotency_key.is_empty() || idempotency_key.len() > 96 {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "A valid Idempotency-Key header is required.",
+                "IDEMPOTENCY_KEY_REQUIRED",
+                json!({}),
+            );
+        }
+        let nodes = match online_eph_nodes(pool, &tenant_id, &project_id).await {
+            Ok(nodes) => nodes,
+            Err(code) => {
+                return fail(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &code,
+                    "DATABASE_ERROR",
+                    json!({}),
+                )
+            }
+        };
+        if nodes.is_empty() {
+            inspect["reason"] = json!("EPH_OFFLINE");
+        } else {
+            let plan_hash =
+                crate::agent_runtime_api::payload_hash("metal3.host.inspect", &json!({}));
+            let mut queued = Vec::new();
+            let mut skipped = Vec::new();
+            for (node_id, _) in nodes {
+                let key = format!("discovery:{idempotency_key}:{node_id}");
+                let existing: Option<String> = sqlx::query_scalar("SELECT CAST(id AS TEXT) FROM core_agentcommand WHERE CAST(tenant_id AS TEXT) = ? AND idempotency_key = ? LIMIT 1")
+                    .bind(&tenant_id).bind(&key).fetch_optional(pool).await.unwrap_or(None);
+                if let Some(_command_id) = existing {
+                    skipped.push(json!({"node_id": node_id, "reason": "already_queued"}));
+                    continue;
+                }
+                let command_id = uuid::Uuid::new_v4().simple().to_string();
+                let sql = "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, plan_hash, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) \
+                           VALUES (?, 'metal3.host.inspect', '{}', 'queued', ?, ?, 0, 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?)";
+                match sqlx::query(sql)
+                    .bind(&command_id)
+                    .bind(&key)
+                    .bind(&plan_hash)
+                    .bind(&node_id)
+                    .bind(&tenant_id)
+                    .bind(&project_id)
+                    .bind(user.id)
+                    .execute(pool)
+                    .await
+                {
+                    Ok(_) => queued.push(json!({"node_id": node_id, "command_id": command_id})),
+                    Err(error) => {
+                        return fail(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &error.to_string(),
+                            "DATABASE_ERROR",
+                            json!({}),
+                        )
+                    }
+                }
+            }
+            inspect["queued"] = json!(queued);
+            inspect["skipped"] = json!(skipped);
+        }
+    }
+    (
+        if execute {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({
+            "execution": execute,
+            "machine_count": selected.len(),
+            "executed": executed,
+            "results": results,
+            "inspect": inspect,
+        })),
+    )
+        .into_response()
+}

@@ -706,7 +706,7 @@ fn cutoff(minutes: i64) -> String {
         .to_string()
 }
 
-fn payload_hash(command_type: &str, payload: &Value) -> String {
+pub(crate) fn payload_hash(command_type: &str, payload: &Value) -> String {
     let document = json!({"command_type": command_type, "payload": payload});
     let canonical = serde_json::to_string(&document).unwrap_or_else(|_| "{}".to_string());
     hex::encode(Sha256::digest(canonical.as_bytes()))

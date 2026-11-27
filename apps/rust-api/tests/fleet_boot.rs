@@ -96,3 +96,46 @@ async fn rejects_non_uuid_machine_ids() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "INVALID_MACHINE_IDS");
 }
+
+async fn post_discovery(state: &AppState, payload: Value) -> (StatusCode, Value) {
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/tenants/tenant/projects/project/fleet/machines/discovery/")
+                .header(
+                    "cookie",
+                    "sessionid=session-1; csrftoken=0123456789abcdef0123456789abcdef",
+                )
+                .header(
+                    "x-csrftoken",
+                    format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn discovery_requires_confirmation_when_executing() {
+    let state = state().await;
+    let (status, body) = post_discovery(&state, json!({"execution": true})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "EXECUTION_CONFIRMATION_REQUIRED");
+}
+
+#[tokio::test]
+async fn discovery_reports_no_machines() {
+    let state = state().await;
+    let (status, body) = post_discovery(&state, json!({"execution": false})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], "MACHINES_NOT_FOUND");
+}
