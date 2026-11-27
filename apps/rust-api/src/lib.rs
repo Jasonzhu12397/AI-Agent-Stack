@@ -9,6 +9,7 @@ pub mod auth;
 pub mod billing_api;
 pub mod chat_api;
 pub mod cloud_vm_api;
+pub mod cluster_api;
 pub mod config;
 pub mod context;
 pub mod identity;
