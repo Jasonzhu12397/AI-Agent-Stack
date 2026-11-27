@@ -620,9 +620,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/health/live", get(edge_liveness));
     }
-    router
-        .fallback(not_found)
-        .with_state(state)
+    router.fallback(not_found).with_state(state)
 }
 
 async fn not_found() -> Response {
