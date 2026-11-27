@@ -1068,3 +1068,143 @@ pub async fn plugin_detail(
         Err(error) => database_error(error.to_string()),
     }
 }
+
+/// Native replacement for `GET /api/v1/tenants/{tenant}/projects/{project}/agent-capabilities/`.
+pub async fn list_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(),
+        Err(error) => return database_error(error),
+    }
+    let manifest_text = if is_postgres(&state) {
+        "CAST(plugin.manifest AS TEXT)"
+    } else {
+        "plugin.manifest"
+    };
+    let capabilities_text = if is_postgres(&state) {
+        "CAST(plugin.capabilities AS TEXT)"
+    } else {
+        "plugin.capabilities"
+    };
+    let input_text = if is_postgres(&state) {
+        "CAST(plugin.input_schema AS TEXT)"
+    } else {
+        "plugin.input_schema"
+    };
+    let output_text = if is_postgres(&state) {
+        "CAST(plugin.output_schema AS TEXT)"
+    } else {
+        "plugin.output_schema"
+    };
+    let sql = format!(
+        "SELECT CAST(installation.id AS TEXT) AS installation_id, installation.plugin_version, \
+         installation.status AS installation_status, plugin.plugin_key, plugin.protocol, \
+         CAST(plugin.enabled AS INTEGER) AS enabled_int, plugin.timeout_seconds, \
+         {manifest_text} AS manifest, {capabilities_text} AS capabilities, \
+         {input_text} AS input_schema, {output_text} AS output_schema \
+         FROM core_agentplugininstallation installation \
+         JOIN core_agentplugindefinition plugin ON plugin.id = installation.plugin_id \
+         WHERE CAST(installation.tenant_id AS TEXT) = ? AND CAST(installation.project_id AS TEXT) = ? \
+         AND installation.status = 'installed' ORDER BY plugin.name, CAST(installation.id AS TEXT)"
+    );
+    let rows = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .bind(&project_id)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let created = timestamp(&state, "invocation", "created_at");
+    let mut entries = Vec::<Value>::new();
+    for row in &rows {
+        let enabled: i64 = row.try_get("enabled_int").unwrap_or(0);
+        if enabled == 0 {
+            continue;
+        }
+        let installation_id: String = row.try_get("installation_id").unwrap_or_default();
+        let plugin_key: String = row.try_get("plugin_key").unwrap_or_default();
+        let plugin_version: String = row.try_get("plugin_version").unwrap_or_default();
+        let protocol: String = row.try_get("protocol").unwrap_or_default();
+        let definitions = capability_definitions(
+            row.try_get::<Option<String>, _>("capabilities")
+                .ok()
+                .flatten(),
+            row.try_get::<Option<String>, _>("manifest").ok().flatten(),
+            row.try_get::<Option<String>, _>("input_schema")
+                .ok()
+                .flatten(),
+            row.try_get::<Option<String>, _>("output_schema")
+                .ok()
+                .flatten(),
+            row.try_get::<i64, _>("timeout_seconds").unwrap_or(30),
+        );
+        for definition in definitions {
+            let Some(name) = definition.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let last = sqlx::query(&format!(
+                "SELECT status, error_code, {created} AS created FROM core_agentcapabilityinvocation \
+                 WHERE CAST(installation_id AS TEXT) = ? AND capability = ? \
+                 ORDER BY created_at DESC LIMIT 1"
+            ))
+            .bind(&installation_id)
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            let last_value = last.map(|row| {
+                json!({
+                    "status": row.try_get::<String, _>("status").unwrap_or_default(),
+                    "error_code": row.try_get::<String, _>("error_code").unwrap_or_default(),
+                    "created_at": row.try_get::<Option<String>, _>("created").ok().flatten(),
+                })
+            });
+            entries.push(json!({
+                "name": name,
+                "plugin_key": plugin_key,
+                "plugin_version": plugin_version,
+                "protocol": protocol,
+                "risk_level": definition.get("risk_level").cloned().unwrap_or_else(|| json!("low")),
+                "installation_id": installation_id,
+                "input_schema": definition.get("input_schema").cloned().unwrap_or_else(|| json!({})),
+                "last_invocation": last_value,
+            }));
+        }
+    }
+    entries.sort_by(|left, right| {
+        let left_key = (
+            left.get("name").and_then(Value::as_str).unwrap_or(""),
+            left.get("plugin_key").and_then(Value::as_str).unwrap_or(""),
+            left.get("installation_id")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        );
+        let right_key = (
+            right.get("name").and_then(Value::as_str).unwrap_or(""),
+            right
+                .get("plugin_key")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            right
+                .get("installation_id")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        );
+        left_key.cmp(&right_key)
+    });
+    Json(json!({"capabilities": entries})).into_response()
+}
