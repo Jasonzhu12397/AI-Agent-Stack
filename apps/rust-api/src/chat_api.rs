@@ -387,6 +387,36 @@ pub async fn delete_thread(
     StatusCode::NO_CONTENT.into_response()
 }
 
+pub async fn list_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(thread_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let record = match thread_row(pool, &state, &thread_id).await {
+        Ok(Some(record))
+            if tenant_member(pool, &record.tenant_id, user.id)
+                .await
+                .unwrap_or(false) =>
+        {
+            record
+        }
+        Ok(_) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let _ = record;
+    match messages(pool, &state, &thread_id).await {
+        Ok(items) => Json(json!({"items": items})).into_response(),
+        Err(error) => database_error(error),
+    }
+}
+
 pub async fn chat_context(
     State(state): State<AppState>,
     headers: HeaderMap,

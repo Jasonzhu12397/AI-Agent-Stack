@@ -152,3 +152,54 @@ async fn manages_chat_threads_in_real_storage() {
     assert_eq!(body["project"]["id"], PROJECT);
     assert_eq!(body["models"][0]["model_name"], "demo-echo");
 }
+
+#[tokio::test]
+async fn lists_thread_messages_with_usage_and_context() {
+    let state = state().await;
+    let (status, thread) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/agent-chat/threads/"),
+        Some(json!({"title": "History"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let thread_id = thread["id"].as_str().unwrap().to_string();
+    let pool = state.identity_pool.as_ref().unwrap();
+    for (id, role, content, usage) in [
+        ("m1", "user", "hello", "{}"),
+        (
+            "m2",
+            "assistant",
+            "hi",
+            "{\"input_tokens\": 2, \"output_tokens\": 3}",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
+             usage, tool_calls, error_code, created_at) VALUES (?, ?, ?, ?, 1, '{}', ?, '[]', '', \
+             datetime('now'))",
+        )
+        .bind(id)
+        .bind(&thread_id)
+        .bind(role)
+        .bind(content)
+        .bind(usage)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let (status, body) = call(
+        &state,
+        "GET",
+        &format!("/api/v1/agent-chat/threads/{thread_id}/messages/"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[1]["role"], "assistant");
+    assert_eq!(items[1]["usage"]["output_tokens"], 3);
+    assert_eq!(items[1]["author"], "alice");
+}

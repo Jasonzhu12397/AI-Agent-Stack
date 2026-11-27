@@ -325,6 +325,10 @@ pub fn router(state: AppState) -> Router {
                 get(crate::chat_api::chat_context),
             )
             .route(
+                "/api/v1/agent-chat/threads/{thread_id}/messages/",
+                get(crate::chat_api::list_messages),
+            )
+            .route(
                 "/api/v1/agent-chat/threads/{thread_id}/",
                 get(crate::chat_api::get_thread)
                     .patch(crate::chat_api::update_thread)
