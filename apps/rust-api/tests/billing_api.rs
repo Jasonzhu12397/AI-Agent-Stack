@@ -334,3 +334,45 @@ async fn runs_subscription_trial_cancel_resume_and_settlement() {
     assert_eq!(budget["daily_limit"], 0);
     assert_eq!(budget["monthly_limit"], 0);
 }
+
+#[tokio::test]
+async fn renews_subscription_from_a_paid_order() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query("INSERT INTO core_order (id, tenant_id, plan_id, status, amount_cents, refunded_cents, currency, channel, provider_trade_no, payment_instruction, paid_at, idempotency_key, created_at, updated_at) VALUES ('order-renew', ?, 'plan-1', 'paid', 9900, 0, 'CNY', 'alipay', 'trade-renew', '{}', datetime('now'), 'idem-renew', datetime('now'), datetime('now'))")
+        .bind(TENANT).execute(pool).await.unwrap();
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/subscription/renew/"),
+        Some(json!({"order_id": "order-renew"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["grant"]["tokens"], 4000000);
+    assert_eq!(body["subscription"]["status"], "active");
+    let grant = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_entitlementgrant WHERE order_id = 'order-renew'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(grant, 1);
+    let limits = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT daily_limit, monthly_limit FROM core_tenanttokenbudget WHERE CAST(tenant_id AS TEXT) = ?",
+    )
+    .bind(TENANT)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(limits, (200000, 4000000));
+    let (status, body) = request(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/billing/subscription/renew/"),
+        Some(json!({"order_id": "order-renew"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "SUBSCRIPTION_GRANT_ALREADY_ISSUED");
+}

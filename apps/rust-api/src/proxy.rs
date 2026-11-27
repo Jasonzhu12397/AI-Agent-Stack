@@ -312,6 +312,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::billing_api::resume_subscription),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/billing/subscription/renew/",
+                axum::routing::post(crate::billing_api::renew_subscription),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/billing/subscription/settle/",
                 axum::routing::post(crate::billing_api::settle_subscriptions),
             )

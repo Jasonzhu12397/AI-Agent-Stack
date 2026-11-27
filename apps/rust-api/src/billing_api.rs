@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
-use chrono::Datelike;
+use chrono::{Datelike, TimeZone};
 use serde_json::{json, Value};
 use sha2::Digest;
 use sqlx::{AnyPool, Row};
@@ -1669,4 +1669,285 @@ fn unavailable() -> Response {
 fn database_error(error: String) -> Response {
     tracing::error!(%error, "rust billing api database operation failed");
     unavailable()
+}
+
+pub async fn renew_subscription(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return admin_required();
+    }
+    let order_id = payload
+        .get("order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if order_id.is_empty() {
+        return subscription_error(
+            "SUBSCRIPTION_RENEWAL_ORDER_REQUIRED",
+            "order_id is required.",
+            400,
+            json!({}),
+        );
+    }
+    let now = chrono::Utc::now();
+    let now_text = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let period_start = timestamp(&state, "subscription", "current_period_start");
+    let period_end = timestamp(&state, "subscription", "current_period_end");
+    let sql = format!(
+        "SELECT CAST(subscription.id AS TEXT) AS id, CAST(subscription.plan_id AS TEXT) AS plan_id, \
+         subscription.status, {period_start} AS period_start, {period_end} AS period_end, \
+         plan.code AS plan_code, plan.interval, plan.token_quota_daily, plan.token_quota_monthly, \
+         CAST(subscription.cancel_at_period_end AS INTEGER) AS cancel_int \
+         FROM core_subscription subscription JOIN core_plan plan \
+           ON CAST(plan.id AS TEXT) = CAST(subscription.plan_id AS TEXT) \
+         WHERE CAST(subscription.tenant_id AS TEXT) = ? \
+         ORDER BY subscription.created_at DESC LIMIT 1"
+    );
+    let subscription = match sqlx::query(&sql)
+        .bind(&tenant_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return subscription_error(
+                "SUBSCRIPTION_NOT_FOUND",
+                "No subscription exists for this tenant.",
+                404,
+                json!({}),
+            )
+        }
+        Err(error) => return database_error(error.to_string()),
+    };
+    let subscription_id: String = subscription.try_get("id").unwrap_or_default();
+    let plan_id: String = subscription.try_get("plan_id").unwrap_or_default();
+    let status: String = subscription.try_get("status").unwrap_or_default();
+    if status == "cancelled" || status == "expired" {
+        return subscription_error(
+            "SUBSCRIPTION_INVALID_TRANSITION",
+            &format!("Subscription in status {status} cannot be renewed."),
+            409,
+            json!({"status": status}),
+        );
+    }
+    let order = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(plan_id AS TEXT) AS plan_id, status \
+         FROM core_order WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?",
+    )
+    .bind(&order_id)
+    .bind(&tenant_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let order_plan: String = order.try_get("plan_id").unwrap_or_default();
+    let order_status: String = order.try_get("status").unwrap_or_default();
+    if order_plan != plan_id {
+        return subscription_error(
+            "SUBSCRIPTION_RENEWAL_ORDER_MISMATCH",
+            "The renewal order does not match the subscription plan.",
+            400,
+            json!({}),
+        );
+    }
+    if order_status != "paid" {
+        return subscription_error(
+            "ORDER_STATE_CONFLICT",
+            &format!("Order in status {order_status} cannot renew a subscription."),
+            409,
+            json!({"order_status": order_status}),
+        );
+    }
+    let prior = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_entitlementgrant WHERE CAST(subscription_id AS TEXT) = ? \
+         AND expires_at > ?",
+    )
+    .bind(&subscription_id)
+    .bind(&now_text)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if prior > 0 {
+        return subscription_error(
+            "SUBSCRIPTION_GRANT_ALREADY_ISSUED",
+            "Quota for the current period was already issued; renew after the period lapses.",
+            409,
+            json!({}),
+        );
+    }
+    let plan_code: String = subscription.try_get("plan_code").unwrap_or_default();
+    let interval: String = subscription.try_get("interval").unwrap_or_default();
+    let tokens: i64 = subscription.try_get("token_quota_monthly").unwrap_or(0);
+    let daily_tokens: i64 = subscription.try_get("token_quota_daily").unwrap_or(0);
+    let existing_end: Option<String> = subscription.try_get("period_end").ok();
+    let base = existing_end
+        .as_deref()
+        .and_then(db_time)
+        .filter(|value| *value > now)
+        .unwrap_or(now);
+    let new_end = base + chrono::Duration::days(if interval == "yearly" { 365 } else { 30 });
+    let new_end_text = new_end.format("%Y-%m-%d %H:%M:%S").to_string();
+    let grant_id = uuid::Uuid::new_v4().to_string();
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let update = sqlx::query(
+        "UPDATE core_subscription SET current_period_start = ?, current_period_end = ?, \
+         cancel_at_period_end = ?, status = ?, updated_at = ? WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(&now_text)
+    .bind(&new_end_text)
+    .bind(0_i64)
+    .bind("active")
+    .bind(&now_text)
+    .bind(&subscription_id)
+    .execute(&mut *transaction)
+    .await;
+    if let Err(error) = update {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    let insert_grant = sqlx::query(
+        "INSERT INTO core_entitlementgrant (id, tenant_id, order_id, subscription_id, \
+         period, tokens, expires_at, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&grant_id)
+    .bind(&tenant_id)
+    .bind(&order_id)
+    .bind(&subscription_id)
+    .bind("monthly")
+    .bind(tokens)
+    .bind(&new_end_text)
+    .bind(format!("renewal:{plan_code}"))
+    .bind(&now_text)
+    .execute(&mut *transaction)
+    .await;
+    if let Err(error) = insert_grant {
+        let _ = transaction.rollback().await;
+        return database_error(error.to_string());
+    }
+    let updated = sqlx::query(
+        "UPDATE core_tenanttokenbudget SET daily_limit = ?, monthly_limit = ?, updated_at = ? \
+         WHERE CAST(tenant_id AS TEXT) = ?",
+    )
+    .bind(daily_tokens)
+    .bind(tokens)
+    .bind(&now_text)
+    .bind(&tenant_id)
+    .execute(&mut *transaction)
+    .await;
+    match updated {
+        Ok(result) if result.rows_affected() == 0 => {
+            if let Err(error) = sqlx::query(
+                "INSERT INTO core_tenanttokenbudget (id, tenant_id, daily_limit, monthly_limit, \
+                 created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&tenant_id)
+            .bind(daily_tokens)
+            .bind(tokens)
+            .bind(&now_text)
+            .bind(&now_text)
+            .execute(&mut *transaction)
+            .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(error.to_string());
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            return database_error(error.to_string());
+        }
+    }
+    let resource_id = subscription_id.clone();
+    if let Err(error) = crate::audit::record_event_in_transaction(
+        &mut transaction,
+        is_postgres(&state),
+        &crate::audit::AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: None,
+            event_type: "billing.subscription.renewed",
+            resource_type: "subscription",
+            resource_id: &resource_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(""),
+            remote_addr: None,
+            user_agent: headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or(""),
+            metadata: json!({
+                "order_id": order_id,
+                "grant_id": grant_id,
+                "plan_code": plan_code,
+                "tokens": tokens,
+            }),
+        },
+    )
+    .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(error);
+    }
+    if let Err(error) = transaction.commit().await {
+        return database_error(error.to_string());
+    }
+    Json(json!({
+        "subscription": {
+            "id": subscription_id,
+            "plan": plan_code,
+            "status": "active",
+            "started_at": subscription.try_get::<Option<String>, _>("period_start").ok().flatten().map(|value| normalize_timestamp(&value)),
+            "current_period_start": normalize_timestamp(&now_text),
+            "current_period_end": normalize_timestamp(&new_end_text),
+            "cancel_at_period_end": false,
+            "renewal_mode": "manual",
+            "cancel_effective_at": null,
+        },
+        "grant": {"id": grant_id, "tokens": tokens},
+    }))
+    .into_response()
+}
+
+fn db_time(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(parsed.with_timezone(&chrono::Utc));
+    }
+    for format in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, format) {
+            return Some(chrono::Utc.from_utc_datetime(&parsed));
+        }
+    }
+    None
 }
