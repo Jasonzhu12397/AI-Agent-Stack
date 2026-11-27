@@ -1,8 +1,7 @@
 use std::net::SocketAddr;
-use std::time::Duration;
 
-use ai_agent_stack_api_edge::config::Config;
-use ai_agent_stack_api_edge::proxy::{router, AppState};
+use ai_agent_stack_api::config::Config;
+use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
@@ -56,15 +55,7 @@ async fn state() -> (AppState, String) {
     .unwrap();
     pool.close().await;
 
-    let config = Config::new(
-        "127.0.0.1:0".into(),
-        "http://127.0.0.1:1".into(),
-        Duration::from_secs(2),
-        Duration::from_secs(10),
-    )
-    .unwrap()
-    .with_native_identity(true, Some(url), Some(SECRET.to_string()))
-    .unwrap();
+    let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
     (AppState::new(config).unwrap(), path.display().to_string())
 }
 
