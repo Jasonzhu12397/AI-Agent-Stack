@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
