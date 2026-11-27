@@ -4,7 +4,11 @@ const SESSION_COOKIE: &str = "sessionid";
 const SESSION_AGE_SECONDS: i64 = 1_209_600;
 
 pub fn new_session_key() -> String {
-    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 pub fn session_token_hash(token: &str) -> String {
@@ -16,19 +20,23 @@ pub fn session_age_seconds() -> i64 {
 }
 
 pub fn session_key_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
-    if let Some(token) = headers.get("x-session-token")
+    if let Some(token) = headers
+        .get("x-session-token")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|token| !token.is_empty() && token.len() <= 128)
     {
         return Some(token.to_string());
     }
-    headers.get("cookie")
+    headers
+        .get("cookie")
         .and_then(|value| value.to_str().ok())
-        .and_then(|cookie| cookie.split(';').find_map(|pair| {
-            let (name, value) = pair.trim().split_once('=')?;
-            (name == SESSION_COOKIE).then(|| value.trim().to_string())
-        }))
+        .and_then(|cookie| {
+            cookie.split(';').find_map(|pair| {
+                let (name, value) = pair.trim().split_once('=')?;
+                (name == SESSION_COOKIE).then(|| value.trim().to_string())
+            })
+        })
         .filter(|key| !key.is_empty() && key.len() <= 128)
 }
 
@@ -48,8 +56,16 @@ mod tests {
     #[test]
     fn extracts_the_cookie_after_other_cookies() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert("cookie", "csrftoken=abc; sessionid=session-key; theme=dark".parse().unwrap());
-        assert_eq!(session_key_from_headers(&headers).as_deref(), Some("session-key"));
+        headers.insert(
+            "cookie",
+            "csrftoken=abc; sessionid=session-key; theme=dark"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            session_key_from_headers(&headers).as_deref(),
+            Some("session-key")
+        );
     }
 
     #[test]
@@ -57,6 +73,9 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("cookie", "sessionid=cookie-key".parse().unwrap());
         headers.insert("x-session-token", "header-key".parse().unwrap());
-        assert_eq!(session_key_from_headers(&headers).as_deref(), Some("header-key"));
+        assert_eq!(
+            session_key_from_headers(&headers).as_deref(),
+            Some("header-key")
+        );
     }
 }
