@@ -43,11 +43,10 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    let native_identity = state.config.native_identity;
     let mut router = Router::new()
         .route("/health/ready", get(health))
         .route("/api/v1/edge/info", get(info));
-    if native_identity {
+    {
         router = router
             .route("/api/v1/auth/csrf/", get(crate::auth::csrf))
             .route("/api/v1/auth/register/", post(crate::auth::register))
