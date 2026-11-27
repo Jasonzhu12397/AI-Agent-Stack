@@ -15,6 +15,7 @@ pub mod context;
 pub mod etcd_api;
 pub mod identity;
 pub mod knowledge_api;
+pub mod lab_api;
 pub mod model_api;
 pub mod native;
 pub mod notification_api;

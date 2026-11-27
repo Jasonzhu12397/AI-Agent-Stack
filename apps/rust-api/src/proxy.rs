@@ -152,6 +152,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::cluster_api::list_deployments),
             )
             .route(
+                "/api/v1/metal3/lab-workflow/",
+                axum::routing::get(crate::lab_api::lab_workflow),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/versions/",
                 axum::routing::get(crate::plugin_api::list_plugin_versions),
             )
