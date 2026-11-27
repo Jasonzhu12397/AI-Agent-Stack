@@ -11,6 +11,7 @@ from core.models import (
     ModelConfig,
     ModelProvider,
     Project,
+    ProjectMembership,
     Tenant,
     TenantMembership,
 )
@@ -28,6 +29,12 @@ def two_members():
     TenantMembership.objects.create(tenant=tenant, user=user_b, role="member")
     project = Project.objects.create(
         tenant=tenant, name="Isolation project", slug="isolation-project"
+    )
+    ProjectMembership.objects.create(
+        project=project, user=user_a, role=ProjectMembership.Role.VIEWER
+    )
+    ProjectMembership.objects.create(
+        project=project, user=user_b, role=ProjectMembership.Role.VIEWER
     )
     client_a = APIClient()
     client_a.force_authenticate(user=user_a)

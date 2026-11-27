@@ -4,7 +4,14 @@ from datetime import timedelta
 
 import pytest
 from core.chat_models import AgentChatAttachment, AgentChatThread
-from core.models import ModelConfig, ModelProvider, Project, Tenant, TenantMembership
+from core.models import (
+    ModelConfig,
+    ModelProvider,
+    Project,
+    ProjectMembership,
+    Tenant,
+    TenantMembership,
+)
 from core.scheduled_models import ScheduledChatJob
 from core.scheduled_service import dispatch_due_jobs, next_occurrence
 from django.contrib.auth import get_user_model
@@ -20,6 +27,9 @@ def workspace(db, tmp_path):
     tenant = Tenant.objects.create(name="Workspace tenant", slug="workspace-tenant")
     TenantMembership.objects.create(tenant=tenant, user=user, role="member")
     project = Project.objects.create(tenant=tenant, name="Workspace project", slug="ws-project")
+    ProjectMembership.objects.create(
+        project=project, user=user, role=ProjectMembership.Role.VIEWER
+    )
     provider = ModelProvider.objects.create(
         tenant=tenant,
         created_by=user,

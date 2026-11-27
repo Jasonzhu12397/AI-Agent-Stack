@@ -7,6 +7,7 @@ from core.models import (
     ModelConfig,
     ModelProvider,
     Project,
+    ProjectMembership,
     ProviderAccountLink,
     Tenant,
     TenantMembership,
@@ -122,6 +123,9 @@ def test_authorized_account_model_appears_in_chat_context(workspace):
     tenant, project, provider = workspace
     member = _member("chatter")
     TenantMembership.objects.create(tenant=tenant, user=member, role="member")
+    ProjectMembership.objects.create(
+        project=project, user=member, role=ProjectMembership.Role.VIEWER
+    )
     # A personal platform row belongs to the member who created it; the chat
     # context intentionally hides rows owned by somebody else.
     provider.created_by = member
