@@ -75,5 +75,8 @@ async fn migrates_legacy_accounts_into_rust_owned_identity_tables() {
     .fetch_one(&pool)
     .await
     .expect("insert account using the synchronized identity sequence");
-    assert!(next_id > 101, "identity sequence must advance past imported IDs");
+    assert!(
+        next_id > 101,
+        "identity sequence must advance past imported IDs"
+    );
 }
