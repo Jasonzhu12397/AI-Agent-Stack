@@ -276,7 +276,7 @@ pub async fn create_provider(
             );
         }
         let username =
-            sqlx::query_scalar::<_, String>("SELECT username FROM auth_user WHERE id = ?")
+            sqlx::query_scalar::<_, String>("SELECT username FROM platform_users WHERE id = ?")
                 .bind(user.id)
                 .fetch_optional(pool)
                 .await
