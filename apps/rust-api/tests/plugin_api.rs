@@ -169,3 +169,33 @@ async fn lists_plugins_and_changes_installation_status() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn reads_the_marketplace_catalog() {
+    let state = state().await;
+    let base = format!("/api/v1/tenants/{TENANT}/marketplace/catalog/");
+    let (status, body) = call(&state, "GET", &base, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["entries"][0]["plugin_key"], "weather");
+    assert_eq!(body["entries"][0]["installation_status"], "not_installed");
+    assert_eq!(body["entries"][0]["capabilities"][0]["name"], "weather.lookup");
+
+    let uri = format!("{base}?project_id={PROJECT}&installed=true");
+    let (status, body) = call(&state, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["entries"][0]["installed"], true);
+    assert_eq!(body["entries"][0]["installation_id"], INSTALLATION);
+
+    let uri = format!("{base}?installed=maybe");
+    let (status, body) = call(&state, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"], "installed filter must be true or false.");
+
+    let detail = format!("{base}weather/?project_id={PROJECT}");
+    let (status, body) = call(&state, "GET", &detail, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["manifest"]["capabilities"][0]["name"], "weather.lookup");
+    assert!(body["input_schema"].is_object());
+}

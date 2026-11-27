@@ -352,6 +352,14 @@ pub fn router(state: AppState) -> Router {
                     .delete(crate::chat_api::delete_thread),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/marketplace/catalog/",
+                get(crate::plugin_api::marketplace_catalog),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/marketplace/catalog/{plugin_key}/",
+                get(crate::plugin_api::marketplace_catalog_detail),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/",
                 get(crate::plugin_api::list_plugins),
             )

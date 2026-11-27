@@ -1,13 +1,14 @@
 #![allow(clippy::result_large_err)]
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::{AnyPool, Row};
+use std::collections::HashMap;
 
 use crate::audit::{record_event_in_transaction, AuditEvent};
 use crate::context::{authenticate, AuthError};
@@ -526,4 +527,423 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
         .get(name)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
+}
+
+pub async fn marketplace_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let project_id = query
+        .get("project_id")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(project_id) = project_id.as_deref() {
+        match crate::tenancy::project_access(pool, &tenant_id, project_id, user.id).await {
+            Ok(true) => {}
+            Ok(false) => return not_found(),
+            Err(error) => return database_error(error),
+        }
+    }
+    let filters = match catalog_filters(&query) {
+        Ok(filters) => filters,
+        Err(response) => return response,
+    };
+    let plugins = match latest_plugins(pool, &state, &tenant_id).await {
+        Ok(plugins) => plugins,
+        Err(error) => return database_error(error),
+    };
+    let installations = match installation_map(pool, &tenant_id, project_id.as_deref()).await {
+        Ok(installations) => installations,
+        Err(error) => return database_error(error),
+    };
+    let mut entries = Vec::new();
+    for plugin in plugins {
+        let entry = catalog_entry(
+            &plugin,
+            project_id.as_deref(),
+            installations.get(&plugin.id),
+        );
+        if let Some(protocol) = filters.protocol.as_deref() {
+            if plugin.protocol != protocol {
+                continue;
+            }
+        }
+        if let Some(installed) = filters.installed {
+            if entry["installed"].as_bool().unwrap_or(false) != installed {
+                continue;
+            }
+        }
+        if let Some(capability) = filters.capability.as_deref() {
+            let needle = capability.to_lowercase();
+            let matches_capability = entry["capabilities"]
+                .as_array()
+                .map(|items| {
+                    items.iter().any(|item| {
+                        item["name"]
+                            .as_str()
+                            .map(|name| name.to_lowercase().contains(&needle))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            if !matches_capability
+                && !plugin.name.to_lowercase().contains(&needle)
+                && !plugin.description.to_lowercase().contains(&needle)
+            {
+                continue;
+            }
+        }
+        entries.push(entry);
+    }
+    let count = entries.len();
+    Json(json!({"entries": entries, "count": count})).into_response()
+}
+
+pub async fn marketplace_catalog_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, plugin_key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let project_id = query
+        .get("project_id")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(project_id) = project_id.as_deref() {
+        match crate::tenancy::project_access(pool, &tenant_id, project_id, user.id).await {
+            Ok(true) => {}
+            Ok(false) => return not_found(),
+            Err(error) => return database_error(error),
+        }
+    }
+    let plugins = match latest_plugins(pool, &state, &tenant_id).await {
+        Ok(plugins) => plugins,
+        Err(error) => return database_error(error),
+    };
+    let Some(plugin) = plugins
+        .into_iter()
+        .find(|plugin| plugin.plugin_key == plugin_key)
+    else {
+        return not_found();
+    };
+    let installations = match installation_map(pool, &tenant_id, project_id.as_deref()).await {
+        Ok(installations) => installations,
+        Err(error) => return database_error(error),
+    };
+    let mut entry = catalog_entry(
+        &plugin,
+        project_id.as_deref(),
+        installations.get(&plugin.id),
+    );
+    entry["capabilities"] = json!(capability_detail(&plugin));
+    entry["manifest"] = plugin.manifest.clone();
+    entry["input_schema"] = plugin.input_schema.clone();
+    entry["output_schema"] = plugin.output_schema.clone();
+    Json(entry).into_response()
+}
+
+struct CatalogFilters {
+    capability: Option<String>,
+    protocol: Option<String>,
+    installed: Option<bool>,
+}
+
+fn catalog_filters(query: &HashMap<String, String>) -> Result<CatalogFilters, Response> {
+    let capability = query
+        .get("capability")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let protocol = query
+        .get("protocol")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(protocol) = protocol.as_deref() {
+        if !["http_json", "mcp", "a2a", "openai_compatible", "open_data"].contains(&protocol) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "Unsupported protocol filter."})),
+            )
+                .into_response());
+        }
+    }
+    let installed = match query.get("installed") {
+        Some(value) if value.trim().eq_ignore_ascii_case("true") => Some(true),
+        Some(value) if value.trim().eq_ignore_ascii_case("false") => Some(false),
+        Some(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "installed filter must be true or false."})),
+            )
+                .into_response())
+        }
+        None => None,
+    };
+    Ok(CatalogFilters {
+        capability,
+        protocol,
+        installed,
+    })
+}
+
+struct CatalogPlugin {
+    id: String,
+    plugin_key: String,
+    name: String,
+    description: String,
+    version: String,
+    protocol: String,
+    enabled: bool,
+    auth_required: bool,
+    capabilities: Vec<Value>,
+    manifest: Value,
+    input_schema: Value,
+    output_schema: Value,
+}
+
+async fn latest_plugins(
+    pool: &AnyPool,
+    state: &AppState,
+    tenant_id: &str,
+) -> Result<Vec<CatalogPlugin>, String> {
+    let capabilities_text = json_column(state, "plugin.capabilities");
+    let manifest_text = json_column(state, "plugin.manifest");
+    let input_text = json_column(state, "plugin.input_schema");
+    let output_text = json_column(state, "plugin.output_schema");
+    let sql = format!(
+        "SELECT CAST(plugin.id AS TEXT) AS id, plugin.plugin_key, plugin.name, plugin.description, \
+         plugin.version, plugin.protocol, CAST(plugin.enabled AS INTEGER) AS enabled_int, \
+         CAST(plugin.auth_required AS INTEGER) AS auth_int, {capabilities_text} AS capabilities_text, \
+         {manifest_text} AS manifest_text, {input_text} AS input_text, {output_text} AS output_text \
+         FROM core_agentplugindefinition plugin WHERE CAST(plugin.tenant_id AS TEXT) = ? \
+         ORDER BY plugin.created_at DESC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut latest: HashMap<String, CatalogPlugin> = HashMap::new();
+    for row in rows {
+        let plugin = CatalogPlugin {
+            id: row.try_get("id").unwrap_or_default(),
+            plugin_key: row.try_get("plugin_key").unwrap_or_default(),
+            name: row.try_get("name").unwrap_or_default(),
+            description: row.try_get("description").unwrap_or_default(),
+            version: row.try_get("version").unwrap_or_default(),
+            protocol: row.try_get("protocol").unwrap_or_default(),
+            enabled: row.try_get::<i64, _>("enabled_int").unwrap_or(0) != 0,
+            auth_required: row.try_get::<i64, _>("auth_int").unwrap_or(0) != 0,
+            capabilities: parse_json(
+                row.try_get::<Option<String>, _>("capabilities_text")
+                    .ok()
+                    .flatten(),
+            )
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default(),
+            manifest: parse_json(
+                row.try_get::<Option<String>, _>("manifest_text")
+                    .ok()
+                    .flatten(),
+            )
+            .unwrap_or_else(|| json!({})),
+            input_schema: parse_json(
+                row.try_get::<Option<String>, _>("input_text")
+                    .ok()
+                    .flatten(),
+            )
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+            output_schema: parse_json(
+                row.try_get::<Option<String>, _>("output_text")
+                    .ok()
+                    .flatten(),
+            )
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+        };
+        let replace = latest
+            .get(&plugin.plugin_key)
+            .map(|current| version_key(&plugin.version) > version_key(&current.version))
+            .unwrap_or(true);
+        if replace {
+            latest.insert(plugin.plugin_key.clone(), plugin);
+        }
+    }
+    let mut plugins: Vec<CatalogPlugin> = latest.into_values().collect();
+    plugins.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then(left.plugin_key.cmp(&right.plugin_key))
+    });
+    Ok(plugins)
+}
+
+fn version_key(version: &str) -> Vec<(u8, u64, String)> {
+    version
+        .split('.')
+        .map(|segment| {
+            if let Ok(number) = segment.parse::<u64>() {
+                (0, number, String::new())
+            } else {
+                (1, 0, segment.to_string())
+            }
+        })
+        .collect()
+}
+
+async fn installation_map(
+    pool: &AnyPool,
+    tenant_id: &str,
+    project_id: Option<&str>,
+) -> Result<HashMap<String, (String, String)>, String> {
+    let Some(project_id) = project_id else {
+        return Ok(HashMap::new());
+    };
+    let rows = sqlx::query(
+        "SELECT CAST(installation.id AS TEXT) AS id, CAST(installation.plugin_id AS TEXT) AS plugin_id, \
+         installation.status FROM core_agentplugininstallation installation \
+         WHERE CAST(installation.tenant_id AS TEXT) = ? AND CAST(installation.project_id AS TEXT) = ?",
+    )
+    .bind(tenant_id)
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            (
+                row.try_get::<String, _>("plugin_id").unwrap_or_default(),
+                (
+                    row.try_get::<String, _>("id").unwrap_or_default(),
+                    row.try_get::<String, _>("status").unwrap_or_default(),
+                ),
+            )
+        })
+        .collect())
+}
+
+fn catalog_entry(
+    plugin: &CatalogPlugin,
+    project_id: Option<&str>,
+    installation: Option<&(String, String)>,
+) -> Value {
+    let (status, installation_id) = match installation {
+        Some((id, status)) => (status.clone(), Some(id.clone())),
+        None => ("not_installed".to_string(), None),
+    };
+    let installed = status != "uninstalled" && status != "not_installed";
+    json!({
+        "plugin_key": plugin.plugin_key,
+        "name": plugin.name,
+        "description": plugin.description,
+        "version": plugin.version,
+        "protocol": plugin.protocol,
+        "enabled": plugin.enabled,
+        "auth_required": plugin.auth_required,
+        "capabilities": capability_brief(plugin),
+        "installed": installed,
+        "installation_status": status,
+        "installation_id": installation_id,
+        "project_id": project_id,
+    })
+}
+
+fn declared_capabilities(plugin: &CatalogPlugin) -> Vec<Value> {
+    if let Some(entries) = plugin
+        .manifest
+        .get("capabilities")
+        .and_then(Value::as_array)
+    {
+        if !entries.is_empty() {
+            return entries
+                .iter()
+                .filter(|entry| entry.is_object())
+                .cloned()
+                .collect();
+        }
+    }
+    let mut result = Vec::new();
+    for entry in &plugin.capabilities {
+        if let Some(name) = entry.get("name").and_then(Value::as_str) {
+            let mut declaration = json!({
+                "name": name,
+                "description": "",
+                "risk_level": "low",
+            });
+            if let Some(object) = entry.as_object() {
+                for (key, value) in object {
+                    declaration[key] = value.clone();
+                }
+            }
+            result.push(declaration);
+        }
+    }
+    result
+}
+
+fn capability_brief(plugin: &CatalogPlugin) -> Vec<Value> {
+    declared_capabilities(plugin)
+        .into_iter()
+        .filter_map(|declaration| {
+            let name = declaration.get("name").and_then(Value::as_str)?;
+            Some(json!({
+                "name": name,
+                "description": declaration.get("description").and_then(Value::as_str).unwrap_or(""),
+                "risk_level": declaration.get("risk_level").and_then(Value::as_str).unwrap_or("low"),
+            }))
+        })
+        .collect()
+}
+
+fn capability_detail(plugin: &CatalogPlugin) -> Vec<Value> {
+    declared_capabilities(plugin)
+        .into_iter()
+        .filter_map(|declaration| {
+            let name = declaration.get("name").and_then(Value::as_str)?;
+            Some(json!({
+                "name": name,
+                "description": declaration.get("description").and_then(Value::as_str).unwrap_or(""),
+                "risk_level": declaration.get("risk_level").and_then(Value::as_str).unwrap_or("low"),
+                "timeout_seconds": declaration.get("timeout_seconds").and_then(Value::as_i64).unwrap_or(30),
+                "input_schema": declaration.get("input_schema").cloned().unwrap_or_else(|| json!({})),
+                "output_schema": declaration.get("output_schema").cloned().unwrap_or_else(|| json!({})),
+            }))
+        })
+        .collect()
+}
+
+fn json_column(state: &AppState, column: &str) -> String {
+    if is_postgres(state) {
+        format!("CAST({column} AS TEXT)")
+    } else {
+        column.to_string()
+    }
 }
