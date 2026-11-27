@@ -504,9 +504,7 @@ async fn ensure_profile(
     {
         return Err(database_error(error.to_string()));
     }
-    load_profile(pool, user.id)
-        .await?
-        .ok_or_else(unavailable)
+    load_profile(pool, user.id).await?.ok_or_else(unavailable)
 }
 
 async fn load_profile(pool: &AnyPool, user_id: i64) -> Result<Option<Profile>, Response> {
