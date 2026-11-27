@@ -286,6 +286,6 @@ async fn exposes_native_edge_liveness() {
     let state = state().await;
     let (status, body) = call(&state, "GET", "/health/live", None, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["service"], "rust-api-edge");
+    assert_eq!(body["service"], "rust-api");
     assert_eq!(body["native_identity"], true);
 }

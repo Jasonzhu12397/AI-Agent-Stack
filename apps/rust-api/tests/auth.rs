@@ -23,14 +23,10 @@ async fn state() -> (AppState, String) {
     sqlx::any::install_default_drivers();
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
     for statement in [
-        "CREATE TABLE django_session (\
-         session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, \
-         expire_date DATETIME NOT NULL)",
-        "CREATE TABLE auth_user (\
-         id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, \
-         email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, \
-         is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL, \
-         last_login DATETIME NULL)",
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
+        "CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE platform_session_activity (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
         "CREATE TABLE core_auditevent (\
          id CHAR(32) PRIMARY KEY, tenant_id CHAR(32) NULL, project_id CHAR(32) NULL, \
          actor_id INTEGER NULL, event_type VARCHAR(120) NOT NULL, \
@@ -44,11 +40,16 @@ async fn state() -> (AppState, String) {
     }
     let password = hash_password(PASSWORD, 1000);
     sqlx::query(
-        "INSERT INTO auth_user (id, username, email, password, is_staff, is_active) \
-         VALUES (1, ?, ?, ?, 0, 1)",
+        "INSERT INTO platform_users (id, username, email, is_staff, is_active) VALUES (1, ?, ?, 0, 1)",
     )
     .bind(USERNAME)
     .bind(USERNAME)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_credentials (user_id, credential_type, credential_hash) VALUES (1, 'password', ?)",
+    )
     .bind(password)
     .execute(&pool)
     .await
@@ -215,7 +216,7 @@ async fn rejects_login_without_csrf_and_appends_denied_events() {
 async fn does_not_record_a_successful_login_when_session_persistence_fails() {
     let (state, path) = state().await;
     let pool = state.identity_pool.as_ref().unwrap();
-    sqlx::query("DROP TABLE django_session")
+    sqlx::query("DROP TABLE rust_sessions")
         .execute(pool)
         .await
         .unwrap();

@@ -432,7 +432,7 @@ fn unavailable() -> Response {
 }
 
 fn database_error_message(message: String) -> Response {
-    tracing::error!(%message, "rust workflow read database operation failed");
+    tracing::error!(%message, "workflow database error");
     unavailable()
 }
 

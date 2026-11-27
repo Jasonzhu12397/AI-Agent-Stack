@@ -666,6 +666,7 @@ async fn edge_liveness() -> Response {
     Json(json!({
         "status": "ok",
         "service": "rust-api",
+        "native_identity": true,
     }))
     .into_response()
 }

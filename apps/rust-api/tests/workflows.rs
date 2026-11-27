@@ -85,11 +85,7 @@ async fn state() -> (AppState, String) {
         sqlx::query("INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, datetime('now', '+1 day'), CURRENT_TIMESTAMP)").bind(&data).bind(user).execute(&pool).await.unwrap();
     }
     pool.close().await;
-    let config = Config::for_test(
-        "127.0.0.1:0".into(),
-        "http://127.0.0.1:1".into(),
-        Some(SECRET.to_string()),
-    );
+    let config = Config::for_test("127.0.0.1:0".into(), url, Some(SECRET.to_string()));
     (AppState::new(config).unwrap(), path.display().to_string())
 }
 

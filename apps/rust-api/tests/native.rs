@@ -6,10 +6,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 const SECRET: &str = "local-only-change-before-production";
-// Produced by Django's SessionStore with the same secret; this guards the
-// Rust decoder against drifting from the Python signed-session format.
-const SESSION_DATA: &str = ".eJxVjDkOwjAURO_iGll28EpJzxmsv9g4gBwpTirE3UmkFKDp5r2Zt0iwLjWtPc9pZHERWpx-OwR65rYDfkC7T5Kmtswjyl2RB-3yNnF-XQ_376BCr9taleDJRR-cN5FUtgCQWaGzxEYj0xY0gzM4ABQNgZwhLFqdbQixoPh8AQDzOO0:1xWUj2:x-QmQrHXaBBm46F7Czw8lBe1DgCrvkJ61KQUuuef3Fc";
-const SESSION_KEY: &str = "vqbfwzqggr2tugiw32s0ocwznnqm56db";
+const SESSION_KEY: &str = "native-session";
 
 async fn state() -> (AppState, String) {
     let path = std::env::temp_dir().join(format!(
@@ -21,36 +18,32 @@ async fn state() -> (AppState, String) {
     sqlx::any::install_default_drivers();
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
     sqlx::query(
-        "CREATE TABLE django_session (\
-         session_key VARCHAR(40) PRIMARY KEY, \
-         session_data TEXT NOT NULL, \
-         expire_date DATETIME NOT NULL)",
+        "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, \
+         email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
     )
     .execute(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "CREATE TABLE auth_user (\
-         id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, \
-         email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, \
-         is_active INTEGER NOT NULL)",
+        "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, \
+         expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
     )
     .execute(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO auth_user (id, username, email, is_staff, is_active) \
+        "INSERT INTO platform_users (id, username, email, is_staff, is_active) \
          VALUES (1, 'edge-check@example.com', 'edge-check@example.com', 0, 1)",
     )
     .execute(&pool)
     .await
     .unwrap();
+    let hash = ai_agent_stack_api::identity::session_token_hash(SESSION_KEY);
     sqlx::query(
-        "INSERT INTO django_session (session_key, session_data, expire_date) \
-         VALUES (?, ?, datetime('now', '+1 day'))",
+        "INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) \
+         VALUES (?, 1, datetime('now', '+1 day'), CURRENT_TIMESTAMP)",
     )
-    .bind(SESSION_KEY)
-    .bind(SESSION_DATA)
+    .bind(hash)
     .execute(&pool)
     .await
     .unwrap();
@@ -62,7 +55,7 @@ async fn state() -> (AppState, String) {
 }
 
 #[tokio::test]
-async fn serves_current_user_from_a_django_session_cookie() {
+async fn serves_current_user_from_a_native_session_cookie() {
     let (state, path) = state().await;
     let response = router(state)
         .oneshot(

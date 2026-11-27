@@ -395,7 +395,28 @@ async fn revoke_owned_session(
         Err(error) => return database_error(error.to_string()),
     };
     if updated == 0 {
-        return Json(json!({"revoked": false, "idempotent": true})).into_response();
+        let owned =
+            sqlx::query("SELECT 1 FROM rust_sessions WHERE token_hash = ? AND user_id = ? LIMIT 1")
+                .bind(token_hash)
+                .bind(user.id)
+                .fetch_optional(pool)
+                .await;
+        match owned {
+            Ok(Some(_)) => {
+                return Json(json!({"revoked": false, "idempotent": true})).into_response()
+            }
+            Ok(None) if tenant_id.is_some() => return (
+                StatusCode::NOT_FOUND,
+                Json(
+                    json!({"error": {"code": "NOT_FOUND", "message": "Not found.", "details": {}}}),
+                ),
+            )
+                .into_response(),
+            Ok(None) => {
+                return Json(json!({"revoked": false, "idempotent": false})).into_response()
+            }
+            Err(error) => return database_error(error.to_string()),
+        }
     }
     if let Err(error) = sqlx::query(
         "UPDATE platform_session_activity SET revoked_at = CURRENT_TIMESTAMP \

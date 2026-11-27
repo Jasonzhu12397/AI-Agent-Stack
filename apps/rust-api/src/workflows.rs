@@ -514,7 +514,7 @@ async fn require_user(
             Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": message}))).into_response())
         }
         Err(AuthError::Unavailable(message)) => {
-            tracing::error!(%message, "rust workflow api could not resolve the session");
+            tracing::error!(%message, "workflow authorization error");
             Err(unavailable())
         }
     }
@@ -622,12 +622,12 @@ fn unavailable() -> Response {
 }
 
 fn sqlx_error(error: sqlx::Error) -> Response {
-    tracing::error!(%error, "rust workflow database operation failed");
+    tracing::error!(%error, "workflow database error");
     unavailable()
 }
 
 fn database_error_message(message: String) -> Response {
-    tracing::error!(%message, "rust workflow database operation failed");
+    tracing::error!(%message, "workflow database error");
     unavailable()
 }
 
