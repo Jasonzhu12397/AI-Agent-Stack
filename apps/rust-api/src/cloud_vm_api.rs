@@ -82,6 +82,109 @@ pub async fn list_providers(
 }
 
 /// `GET /api/v1/tenants/{tenant}/projects/{project}/cloud-vms/`
+pub async fn get_instance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vm_id): Path<String>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "UNAVAILABLE",
+            "Database unavailable.",
+        );
+    };
+    let scope = sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id \
+         FROM core_cloudvminstance WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&vm_id)
+    .fetch_optional(pool)
+    .await;
+    let (tenant_id, project_id) = match scope {
+        Ok(Some(row)) => (
+            row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+            row.try_get::<String, _>("project_id").unwrap_or_default(),
+        ),
+        Ok(None) => return error_json(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => {
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_ERROR",
+                &error.to_string(),
+            )
+        }
+    };
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return error_json(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => {
+            return error_json(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error)
+        }
+    }
+    let created = now_column(&state, "vm", "created_at");
+    let updated = now_column(&state, "vm", "updated_at");
+    let network_text = if is_postgres(&state) {
+        "CAST(vm.network_ids AS TEXT)"
+    } else {
+        "vm.network_ids"
+    };
+    let metadata_text = if is_postgres(&state) {
+        "CAST(vm.provider_metadata AS TEXT)"
+    } else {
+        "vm.provider_metadata"
+    };
+    let sql = format!(
+        "SELECT CAST(vm.id AS TEXT) AS id, CAST(vm.tenant_id AS TEXT) AS tenant_id, \
+         CAST(vm.project_id AS TEXT) AS project_id, vm.provider_key, vm.server_id, vm.name, \
+         vm.flavor_ref, vm.image_ref, {network_text} AS network_text, vm.status, vm.ip_address, \
+         {metadata_text} AS metadata_text, {created} AS created, {updated} AS updated \
+         FROM core_cloudvminstance vm WHERE CAST(vm.id AS TEXT) = ? LIMIT 1"
+    );
+    match sqlx::query(&sql).bind(&vm_id).fetch_optional(pool).await {
+        Ok(Some(row)) => {
+            let networks: Value = row
+                .try_get::<String, _>("network_text")
+                .ok()
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_else(|| json!([]));
+            let metadata: Value = row
+                .try_get::<String, _>("metadata_text")
+                .ok()
+                .and_then(|value| serde_json::from_str(&value).ok())
+                .unwrap_or_else(|| json!({}));
+            Json(json!({
+                "id": row.try_get::<String, _>("id").unwrap_or_default(),
+                "tenant_id": row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+                "project_id": row.try_get::<String, _>("project_id").unwrap_or_default(),
+                "provider_key": row.try_get::<String, _>("provider_key").unwrap_or_default(),
+                "server_id": row.try_get::<String, _>("server_id").unwrap_or_default(),
+                "name": row.try_get::<String, _>("name").unwrap_or_default(),
+                "flavor_ref": row.try_get::<String, _>("flavor_ref").unwrap_or_default(),
+                "image_ref": row.try_get::<String, _>("image_ref").unwrap_or_default(),
+                "network_ids": networks,
+                "status": row.try_get::<String, _>("status").unwrap_or_default(),
+                "ip_address": row.try_get::<Option<String>, _>("ip_address").ok().flatten(),
+                "provider_metadata": metadata,
+                "created_at": row.try_get::<Option<String>, _>("created").ok().flatten(),
+                "updated_at": row.try_get::<Option<String>, _>("updated").ok().flatten(),
+                "warnings": [],
+            }))
+            .into_response()
+        }
+        Ok(None) => error_json(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        ),
+    }
+}
+
 pub async fn list_instances(
     State(state): State<AppState>,
     headers: HeaderMap,

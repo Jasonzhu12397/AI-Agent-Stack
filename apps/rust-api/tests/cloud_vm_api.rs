@@ -108,3 +108,13 @@ async fn lists_configured_cloud_providers() {
     assert_eq!(body["count"], 1);
     assert_eq!(body["results"][0]["key"], "lab");
 }
+
+#[tokio::test]
+async fn reads_cloud_vm_detail() {
+    let state = state().await;
+    let (status, body) = call(&state, "GET", "/api/v1/cloud-vms/vm-1/").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["server_id"], "srv-1");
+    assert_eq!(body["status"], "ACTIVE");
+    assert_eq!(body["warnings"], Value::Array(vec![]));
+}
