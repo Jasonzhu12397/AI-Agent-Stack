@@ -270,3 +270,28 @@ async fn creates_user_and_assistant_messages_in_real_storage() {
     .unwrap();
     assert_eq!(remaining, 0);
 }
+
+#[tokio::test]
+async fn tests_model_config_against_the_provider() {
+    let state = state().await;
+    let uri = format!("/api/v1/tenants/{TENANT}/model-configs/bbbbbbbb-1111-1111-1111-111111111111/test/");
+    let (status, body) = call(
+        &state,
+        "POST",
+        &uri,
+        Some(json!({"messages": [{"role": "user", "content": "ping"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["content"], "Echo reply");
+    assert_eq!(body["provider"], "Local echo");
+    assert_eq!(body["model"], "demo-echo");
+
+    let (status, body) = call(&state, "POST", &uri, Some(json!({"messages": []}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "INVALID_MESSAGES");
+
+    let missing = format!("/api/v1/tenants/{TENANT}/model-configs/missing/test/");
+    let (status, _) = call(&state, "POST", &missing, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

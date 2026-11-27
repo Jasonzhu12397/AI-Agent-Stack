@@ -198,6 +198,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::patch(crate::model_api::update_config),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/model-configs/{model_config_id}/test/",
+                axum::routing::post(crate::chat_api::test_model),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agents/",
                 get(crate::agent_api::list_agents).post(crate::agent_api::create_agent),
             )

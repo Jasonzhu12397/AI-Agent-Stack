@@ -1599,3 +1599,165 @@ fn database_error(error: String) -> Response {
         "DATABASE_ERROR",
     )
 }
+
+pub async fn test_model(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, model_id)): Path<(String, String)>,
+    payload: Option<Json<Value>>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let model = match chat_model(pool, &state, &tenant_id, user.id, &model_id).await {
+        Ok(Some(model)) => model,
+        Ok(None) => return not_found(),
+        Err(error) => return database_error(error),
+    };
+    let linked_account = model.auth_mode == "user_account";
+    if linked_account {
+        if model.auth_mode == "user_account"
+            && sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM core_provideraccountlink WHERE user_id = ? \
+                 AND CAST(provider_id AS TEXT) = ? AND status = 'linked'",
+            )
+            .bind(user.id)
+            .bind(&model.provider_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0)
+                == 0
+        {
+            return legacy_error(
+                "Link your own account on this platform before testing its models.",
+                StatusCode::FORBIDDEN,
+                "PROVIDER_ACCOUNT_NOT_LINKED",
+            );
+        }
+    } else if !crate::tenancy::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return legacy_error(
+            "Tenant administrator permission required.",
+            StatusCode::FORBIDDEN,
+            "TENANT_ADMIN_REQUIRED",
+        );
+    }
+    let credential = match resolve_credential(pool, &state, &model, user.id).await {
+        Ok(credential) => credential,
+        Err(response) => return response,
+    };
+    let messages = match payload
+        .as_ref()
+        .and_then(|Json(value)| value.get("messages"))
+    {
+        Some(Value::Array(messages)) if !messages.is_empty() => messages.clone(),
+        Some(Value::Array(_)) => {
+            return legacy_error(
+                "messages must contain at least one message",
+                StatusCode::BAD_REQUEST,
+                "INVALID_MESSAGES",
+            )
+        }
+        Some(_) => {
+            return legacy_error(
+                "messages must be a list",
+                StatusCode::BAD_REQUEST,
+                "INVALID_MESSAGES",
+            )
+        }
+        None => vec![json!({
+            "role": "user",
+            "content": "Reply with a short connection test.",
+        })],
+    };
+    let (content, usage) = match complete_model(
+        &state,
+        &model,
+        &credential,
+        "You are a model connectivity probe. Reply briefly.",
+        &messages,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => {
+            model_test_audit(
+                &state,
+                pool,
+                &tenant_id,
+                &headers,
+                &model.id,
+                "failure",
+                json!({"error": "MODEL_PROVIDER_ERROR"}),
+            )
+            .await;
+            return response;
+        }
+    };
+    model_test_audit(
+        &state,
+        pool,
+        &tenant_id,
+        &headers,
+        &model.id,
+        "success",
+        json!({"provider_id": model.provider_id, "model_name": model.model_name}),
+    )
+    .await;
+    let mut result = usage;
+    if linked_account {
+        result["billing"] = json!("linked_account_free_quota");
+    }
+    result["content"] = json!(content);
+    (StatusCode::OK, Json(result)).into_response()
+}
+
+async fn model_test_audit(
+    state: &AppState,
+    pool: &sqlx::AnyPool,
+    tenant_id: &str,
+    headers: &HeaderMap,
+    model_id: &str,
+    outcome: &str,
+    metadata: Value,
+) {
+    let Some(database_url) = state.config.database_url.as_deref() else {
+        return;
+    };
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let event = crate::audit::AuditEvent {
+        tenant_id: Some(tenant_id),
+        project_id: None,
+        event_type: "model.config.tested",
+        resource_type: "model_config",
+        resource_id: model_id,
+        outcome,
+        actor_id: None,
+        request_id,
+        remote_addr: None,
+        user_agent,
+        metadata,
+    };
+    if let Err(error) = crate::audit::record_event(pool, database_url, event).await {
+        tracing::error!(%error, "rust model test could not append the audit event");
+    }
+}
