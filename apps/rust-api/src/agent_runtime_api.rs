@@ -292,6 +292,7 @@ pub async fn command_result(
 
 struct Node {
     id: String,
+    node_type: String,
     capabilities: Value,
     agent_version: String,
     cluster_name: String,
@@ -319,7 +320,7 @@ async fn authenticate_node(
             "Invalid or revoked node credential.",
         ));
     };
-    let sql = "SELECT CAST(id AS TEXT) AS id, CAST(capabilities AS TEXT) AS capabilities, agent_version, cluster_name, credential_hash, status, CASE WHEN client_certificate_revoked_at IS NULL THEN 0 ELSE 1 END AS certificate_revoked FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1";
+    let sql = "SELECT CAST(id AS TEXT) AS id, node_type, CAST(capabilities AS TEXT) AS capabilities, agent_version, cluster_name, credential_hash, status, CASE WHEN client_certificate_revoked_at IS NULL THEN 0 ELSE 1 END AS certificate_revoked FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1";
     let row = match sqlx::query(sql).bind(node_id).fetch_optional(pool).await {
         Ok(Some(row)) => row,
         Ok(None) => {
@@ -342,6 +343,7 @@ async fn authenticate_node(
     }
     Ok(Node {
         id: row.try_get("id").unwrap_or_default(),
+        node_type: row.try_get("node_type").unwrap_or_default(),
         capabilities: row
             .try_get::<Option<String>, _>("capabilities")
             .ok()
@@ -430,4 +432,278 @@ fn database_error(value: String) -> Response {
 
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"detail": message}))).into_response()
+}
+
+const EPH_COMMANDS: &[&str] = &[
+    "host.network.observe",
+    "node.health",
+    "host.preflight",
+    "cluster.plan",
+    "cluster.health",
+    "cluster.network.inspect",
+    "cluster.observe",
+    "cluster.diagnose",
+    "cluster.postflight",
+    "k8s.resource.read",
+    "capi.cluster.observe",
+    "metal3.host.inspect",
+    "cluster.manifest.validate",
+    "eph.preflight",
+    "eph.network.configure",
+    "eph.source.observe",
+    "eph.bootstrap.render",
+    "eph.controlstack.apply",
+    "eph.metal3.bmh.apply",
+    "eph.metal3.bmh.observe",
+    "eph.metal3.bmh.wait_ready",
+    "eph.capi.cluster.apply",
+    "eph.capi.cluster.observe",
+    "eph.capi.cluster.wait_ready",
+    "eph.target.agent.bootstrap",
+];
+const TARGET_COMMANDS: &[&str] = &[
+    "host.network.observe",
+    "node.health",
+    "host.preflight",
+    "cluster.health",
+    "cluster.network.inspect",
+    "cluster.observe",
+    "cluster.diagnose",
+    "cluster.postflight",
+    "cluster.manifest.validate",
+    "cluster.kubernetes.version.upgrade",
+    "cluster.scale",
+    "cluster.kubernetes.version.rollback",
+    "cluster.kubernetes.upgrade.readiness",
+    "cluster.kubernetes.recovery.report",
+    "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
+    "target.network.revisions",
+    "cluster.kubernetes.backup.run",
+    "cluster.kubernetes.backup.status",
+    "k8s.resource.read",
+    "target.cluster.observe",
+    "target.capi.observe",
+    "target.capi.pivot.dry_run",
+    "target.capi.pivot",
+    "target.metal3.observe",
+    "target.metal3.verify_ownership",
+    "target.worker.ntp.validate",
+    "target.ntp.control_plane.render",
+    "target.ntp.control_plane.verify_bootstrap",
+    "target.ntp.internal.probe",
+    "target.handoff.evaluate",
+    "target.eph.cleanup",
+    "target.worker.provision",
+    "target.network.apply",
+    "cluster.scale",
+    "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
+    "target.network.revisions",
+];
+const LOCAL_COMMANDS: &[&str] = &["local.system_info", "local.disk_usage"];
+const MUTATING_COMMANDS: &[&str] = &[
+    "target.capi.pivot",
+    "target.worker.provision",
+    "target.eph.cleanup",
+    "cluster.scale",
+    "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
+    "cluster.kubernetes.version.upgrade",
+    "cluster.kubernetes.version.rollback",
+    "cluster.kubernetes.backup.run",
+];
+const APPROVAL_REQUIRED_COMMANDS: &[&str] = &[
+    "cluster.kubernetes.version.upgrade",
+    "cluster.kubernetes.version.rollback",
+    "cluster.scale",
+    "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
+];
+
+pub async fn poll_commands(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response {
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let node = match authenticate_node(pool, &headers, payload.get("node_id")).await {
+        Ok(node) => node,
+        Err(response) => return response,
+    };
+    let node_type = match node.node_type.as_str() {
+        "eph_node" => "eph_node",
+        "local_runner" => "local_runner",
+        _ => "target_cluster",
+    };
+    let allowed: &[&str] = match node_type {
+        "eph_node" => EPH_COMMANDS,
+        "local_runner" => LOCAL_COMMANDS,
+        _ => TARGET_COMMANDS,
+    };
+    let now = timestamp();
+    let postgres = is_postgres(&state);
+    let lease_time = if postgres {
+        "to_char(lease_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+    } else {
+        "strftime('%Y-%m-%d %H:%M:%S', lease_expires_at)"
+    };
+    let approval_time = if postgres {
+        "to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+    } else {
+        "strftime('%Y-%m-%d %H:%M:%S', approved_at)"
+    };
+    let select = format!(
+        "SELECT CAST(id AS TEXT) AS id, command_type, CAST(payload AS TEXT) AS payload_text, \
+         CAST(attempts AS INTEGER) AS attempts, CAST(max_attempts AS INTEGER) AS max_attempts, \
+         status, approved_plan_hash, {approval_time} AS approved_text, {lease_time} AS lease_text \
+         FROM core_agentcommand WHERE CAST(node_id AS TEXT) = ? \
+         AND (status = 'queued' OR (status = 'running' AND lease_expires_at < ?)) \
+         ORDER BY created_at, CAST(id AS TEXT) LIMIT 20"
+    );
+    let rows = match sqlx::query(&select)
+        .bind(&node.id)
+        .bind(&now)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(value) => return database_error(value.to_string()),
+    };
+    let mut chosen: Option<sqlx::any::AnyRow> = None;
+    for row in &rows {
+        let command_type: String = row.try_get("command_type").unwrap_or_default();
+        if !allowed.contains(&command_type.as_str()) {
+            let _ = fail_command(
+                pool,
+                row,
+                "COMMAND_NOT_ALLOWED_FOR_AGENT_ROLE",
+                &now,
+                &state,
+            )
+            .await;
+            continue;
+        }
+        let status: String = row.try_get("status").unwrap_or_default();
+        let attempts: i64 = row.try_get("attempts").unwrap_or(0);
+        let max_attempts: i64 = row.try_get("max_attempts").unwrap_or(3);
+        let expired_running = status == "running";
+        if attempts >= max_attempts
+            || (expired_running && MUTATING_COMMANDS.contains(&command_type.as_str()))
+        {
+            let _ = fail_command(pool, row, "LEASE_EXPIRED", &now, &state).await;
+            continue;
+        }
+        if APPROVAL_REQUIRED_COMMANDS.contains(&command_type.as_str()) {
+            let approved: Option<String> = row.try_get("approved_text").ok().flatten();
+            let approved_hash: String = row.try_get("approved_plan_hash").unwrap_or_default();
+            let cutoff_text = cutoff(15);
+            if approved.is_none()
+                || approved
+                    .as_deref()
+                    .is_some_and(|value| value < cutoff_text.as_str())
+            {
+                let _ = fail_command(pool, row, "APPROVAL_EXPIRED", &now, &state).await;
+                continue;
+            }
+            let payload_text: String = row
+                .try_get("payload_text")
+                .unwrap_or_else(|_| "{}".to_string());
+            let payload_value: Value =
+                serde_json::from_str(&payload_text).unwrap_or_else(|_| json!({}));
+            if approved_hash.is_empty()
+                || approved_hash != payload_hash(&command_type, &payload_value)
+            {
+                let _ = fail_command(pool, row, "APPROVAL_HASH_MISMATCH", &now, &state).await;
+                continue;
+            }
+        }
+        chosen = Some(row.clone());
+        break;
+    }
+    let Some(row) = chosen else {
+        return Json(json!({"command": null})).into_response();
+    };
+    let command_id: String = row.try_get("id").unwrap_or_default();
+    let command_type: String = row.try_get("command_type").unwrap_or_default();
+    let payload_text: String = row
+        .try_get("payload_text")
+        .unwrap_or_else(|_| "{}".to_string());
+    let attempts: i64 = row.try_get("attempts").unwrap_or(0);
+    let lease = uuid::Uuid::new_v4().simple().to_string();
+    let expires_expr = sql_expression_after(&state, 90);
+    let started_expr = if postgres {
+        "COALESCE(started_at, NOW())".to_string()
+    } else {
+        format!("COALESCE(started_at, '{now}')")
+    };
+    let update = format!(
+        "UPDATE core_agentcommand SET status = 'running', attempts = ?, lease_token = ?, \
+         lease_expires_at = {expires_expr}, started_at = {started_expr}, updated_at = {now_expr} \
+         WHERE CAST(id AS TEXT) = ? AND (status = 'queued' OR status = 'running')",
+        now_expr = if postgres {
+            "NOW()".to_string()
+        } else {
+            format!("'{now}'")
+        }
+    );
+    if let Err(value) = sqlx::query(&update)
+        .bind(attempts + 1)
+        .bind(&lease)
+        .bind(&command_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(value.to_string());
+    }
+    Json(json!({"command": {
+        "id": command_id,
+        "command_type": command_type,
+        "payload": serde_json::from_str::<Value>(&payload_text).unwrap_or_else(|_| json!({})),
+        "attempt": attempts + 1,
+        "lease_token": lease,
+        "lease_expires_at": expires_text(&state, &now),
+        "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
+    }}))
+    .into_response()
+}
+
+async fn fail_command(
+    pool: &sqlx::AnyPool,
+    row: &sqlx::any::AnyRow,
+    code: &str,
+    now: &str,
+    state: &AppState,
+) -> Result<(), sqlx::Error> {
+    let id: String = row.try_get("id").unwrap_or_default();
+    let error = json!({"code": code, "retryable": false}).to_string();
+    let now_expr = if is_postgres(state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let sql = format!(
+        "UPDATE core_agentcommand SET status = 'failed', error = ?, finished_at = {now_expr}, \
+         lease_token = NULL, lease_expires_at = NULL, updated_at = {now_expr} WHERE CAST(id AS TEXT) = ?"
+    );
+    sqlx::query(&sql).bind(error).bind(id).execute(pool).await?;
+    Ok(())
+}
+
+fn cutoff(minutes: i64) -> String {
+    (Utc::now() - Duration::minutes(minutes))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+fn payload_hash(command_type: &str, payload: &Value) -> String {
+    let document = json!({"command_type": command_type, "payload": payload});
+    let canonical = serde_json::to_string(&document).unwrap_or_else(|_| "{}".to_string());
+    hex::encode(Sha256::digest(canonical.as_bytes()))
 }
