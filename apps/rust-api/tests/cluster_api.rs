@@ -27,6 +27,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, inventory_revision INTEGER NOT NULL, observed_at DATETIME)",
         "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, eph_node_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, cluster_name VARCHAR(120) NOT NULL, kubernetes_version VARCHAR(40) NOT NULL, spec TEXT NOT NULL, plan_result TEXT NOT NULL, preflight_result TEXT NOT NULL, status VARCHAR(32) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, error TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, started_at DATETIME, finished_at DATETIME)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -88,4 +89,14 @@ async fn lists_cluster_deployments() {
         "deploy-1"
     );
     assert_eq!(body["results"][0]["network_spec_status"]["version"], 2);
+}
+
+#[tokio::test]
+async fn reads_cluster_deployment_detail() {
+    let state = state().await;
+    let (status, body) = call(&state, "GET", "/api/v1/cluster-deployments/deploy-1/").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], "deploy-1");
+    assert_eq!(body["status"], "provisioning");
+    assert_eq!(body["network_evidence_status"], "missing");
 }
