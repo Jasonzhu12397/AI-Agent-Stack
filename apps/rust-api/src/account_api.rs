@@ -424,22 +424,6 @@ fn mask_session_key(key: &str) -> String {
     }
 }
 
-fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
-        return Some(parsed.with_timezone(&chrono::Utc));
-    }
-    for format in ["%Y-%m-%dT%H:%M:%S%.fZ", "%Y-%m-%d %H:%M:%S%.f"] {
-        if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, format) {
-            return Some(parsed.and_utc());
-        }
-    }
-    None
-}
-
-fn timestamp_text(value: &chrono::DateTime<chrono::Utc>) -> String {
-    value.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
-}
-
 async fn tenant_member(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM core_tenantmembership \
