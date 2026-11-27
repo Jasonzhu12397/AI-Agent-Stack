@@ -15,11 +15,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ---------------- Rust edge API ----------------
-  rust-edge:
-    name: Rust edge API
+  # ---------------- Rust platform API ----------------
+  rust-api:
+    name: Rust platform API
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agent_stack
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent_dev_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent -d agent_stack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/agent_stack
     defaults:
       run:
         working-directory: apps/rust-api
@@ -34,8 +50,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/rust-api/target
-          key: rust-edge-${{ hashFiles('apps/rust-api/Cargo.lock') }}
-          restore-keys: rust-edge-
+          key: rust-api-${{ hashFiles('apps/rust-api/Cargo.lock') }}
+          restore-keys: rust-api-
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -46,7 +62,7 @@ jobs:
         run: cargo build --release --locked
       - name: Container build
         working-directory: .
-        run: docker build -f apps/rust-api/Dockerfile -t ai-agent-stack-api-edge:ci .
+        run: docker build -f apps/rust-api/Dockerfile -t ai-agent-stack-api:ci .
 
   # ---------------- Stage 1: static quality bars ----------------
   static:
