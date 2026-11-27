@@ -210,10 +210,12 @@ Rust-native identity/bootstrap workflow; there is no Django Admin or
 
 **Deployment migration warning:** the existing Compose files still contain
 legacy Django/Daphne API and backup-scheduler commands, and the optional
-`rust-edge` profile still proxies to that legacy service. Those manifests are
-not a valid Rust-only deployment and must not be used as proof of cutover.
-The production Compose/Kubernetes profiles must start the Rust binary
-directly; Django is not an approved fallback or rollback target.
+`rust-edge` profile is obsolete. There must be no proxy or Django upstream:
+remove the edge/bridge implementation and run the Rust API directly. These
+legacy manifests are not a valid Rust-only deployment. Django is not an
+approved fallback or rollback target. The independent Agent migration work
+must remove the remaining Django code, dependencies, schema tooling and
+deployment references before the Rust-only cutover is declared complete.
 
 ## Three-Agent deployment
 
