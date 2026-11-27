@@ -960,3 +960,289 @@ fn timestamp_value(row: &sqlx::any::AnyRow, column: &str) -> Value {
     let text: Option<String> = row.try_get(column).ok().flatten();
     text.map(|value| json!(value)).unwrap_or(Value::Null)
 }
+
+pub async fn list_agent_nodes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if let Err(response) = tenant_project_scope(pool, &tenant_id, &project_id, user.id).await {
+        return response;
+    }
+    let cutoff = (Utc::now() - Duration::seconds(60))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let update = format!(
+        "UPDATE core_agentnode SET status = 'offline' WHERE CAST(tenant_id AS TEXT) = ? \
+         AND CAST(project_id AS TEXT) = ? AND status = 'online' AND last_seen_at < '{cutoff}'"
+    );
+    if let Err(error) = sqlx::query(&update)
+        .bind(&tenant_id)
+        .bind(&project_id)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    match load_nodes(&state, pool, &tenant_id, &project_id).await {
+        Ok(results) => Json(json!({"count": results.len(), "results": results})).into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn create_agent_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    let admin = match crate::billing_api::tenant_admin(pool, &tenant_id, user.id).await {
+        Ok(value) => value,
+        Err(error) => return database_error(error),
+    };
+    if let Err(response) = tenant_project_scope(pool, &tenant_id, &project_id, user.id).await {
+        return response;
+    }
+    if !admin {
+        return approval_error(
+            "Tenant owner or admin role is required to enroll node agents.",
+            403,
+        );
+    }
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if name.is_empty() || name.chars().count() > 120 {
+        return approval_error("name is required and must be at most 120 characters.", 400);
+    }
+    let node_type = payload
+        .get("node_type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !matches!(node_type, "eph_node" | "target_cluster" | "local_runner") {
+        return approval_error(
+            "node_type must be eph_node, target_cluster or local_runner.",
+            400,
+        );
+    }
+    let cluster_name = payload
+        .get("cluster_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let capabilities = match payload.get("capabilities") {
+        None => Vec::<String>::new(),
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(_) => return approval_error("capabilities must be a list of strings.", 400),
+    };
+    let labels = match payload.get("labels") {
+        None => json!({}),
+        Some(value @ Value::Object(_)) => value.clone(),
+        Some(_) => return approval_error("labels must be a JSON object.", 400),
+    };
+    let token = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let credential_hash = hex::encode(Sha256::digest(token.as_bytes()));
+    let node_id = uuid::Uuid::new_v4().simple().to_string();
+    let now = timestamp();
+    let now_expr = if is_postgres(&state) {
+        "NOW()".to_string()
+    } else {
+        format!("'{now}'")
+    };
+    let sql = format!(
+        "INSERT INTO core_agentnode (id, name, node_type, cluster_name, agent_version, capabilities, \
+         labels, credential_hash, status, created_at, updated_at, created_by_id, tenant_id, project_id) \
+         VALUES (?, ?, ?, ?, '', ?, ?, ?, 'offline', {now_expr}, {now_expr}, ?, ?, ?)"
+    );
+    let result = sqlx::query(&sql)
+        .bind(&node_id)
+        .bind(&name)
+        .bind(node_type)
+        .bind(&cluster_name)
+        .bind(json!(capabilities).to_string())
+        .bind(labels.to_string())
+        .bind(&credential_hash)
+        .bind(user.id)
+        .bind(&tenant_id)
+        .bind(&project_id)
+        .execute(pool)
+        .await;
+    if let Err(error) = result {
+        let message = error.to_string();
+        if message.contains("UNIQUE") || message.contains("unique") {
+            return approval_error("A node with this name already exists in the project.", 409);
+        }
+        return database_error(message);
+    }
+    let metadata = json!({"node_type": node_type, "node_name": name});
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: Some(project_id.as_str()),
+            event_type: "agent.node.enrolled",
+            resource_type: "agent_node",
+            resource_id: node_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata,
+        },
+    )
+    .await;
+    let mut data = match load_nodes(&state, pool, &tenant_id, &project_id).await {
+        Ok(results) => results
+            .into_iter()
+            .find(|value| value["id"] == node_id)
+            .unwrap_or_else(|| json!({"id": node_id})),
+        Err(_) => json!({"id": node_id}),
+    };
+    data["enrollment_token"] = json!(token);
+    data["token_warning"] =
+        json!("Store this token securely; it is shown only once. Use TLS for agent communication.");
+    (StatusCode::CREATED, Json(data)).into_response()
+}
+
+async fn tenant_project_scope(
+    pool: &sqlx::AnyPool,
+    tenant_id: &str,
+    project_id: &str,
+    user_id: i64,
+) -> Result<(), Response> {
+    if !crate::billing_api::tenant_member(pool, tenant_id, user_id)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(approval_error("Not found.", 404));
+    }
+    let project_in_tenant = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_project WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?",
+    )
+    .bind(project_id)
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|error| database_error(error.to_string()))?;
+    if project_in_tenant == 0 {
+        return Err(approval_error("Not found.", 404));
+    }
+    let admin = crate::billing_api::tenant_admin(pool, tenant_id, user_id)
+        .await
+        .unwrap_or(false);
+    if !admin {
+        let member = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM core_projectmembership WHERE CAST(project_id AS TEXT) = ? AND user_id = ?",
+        )
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+        if member == 0 {
+            return Err(approval_error("Not found.", 404));
+        }
+    }
+    Ok(())
+}
+
+async fn load_nodes(
+    state: &AppState,
+    pool: &sqlx::AnyPool,
+    tenant_id: &str,
+    project_id: &str,
+) -> Result<Vec<Value>, Response> {
+    let ts = |column: &str| {
+        if is_postgres(state) {
+            format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS {column}")
+        } else {
+            format!("strftime('%Y-%m-%d %H:%M:%S', {column}) AS {column}")
+        }
+    };
+    let columns = [
+        ts("last_seen_at"),
+        ts("created_at"),
+        ts("client_certificate_bound_at"),
+        ts("client_certificate_revoked_at"),
+    ]
+    .join(", ");
+    let select = format!(
+        "SELECT CAST(id AS TEXT) AS id, CAST(tenant_id AS TEXT) AS tenant_id, \
+         CAST(project_id AS TEXT) AS project_id, name, node_type, cluster_name, agent_version, \
+         CAST(capabilities AS TEXT) AS capabilities_text, CAST(labels AS TEXT) AS labels_text, status, \
+         client_certificate_fingerprint, last_seen_ip, {columns} \
+         FROM core_agentnode WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? \
+         ORDER BY created_at DESC"
+    );
+    let rows = sqlx::query(&select)
+        .bind(tenant_id)
+        .bind(project_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| database_error(error.to_string()))?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let fingerprint: Option<String> =
+                row.try_get("client_certificate_fingerprint").ok().flatten();
+            let revoked: Option<String> =
+                row.try_get("client_certificate_revoked_at").ok().flatten();
+            let certificate_status = if revoked.is_some() {
+                "revoked"
+            } else if fingerprint.is_some() {
+                "active"
+            } else {
+                "unbound"
+            };
+            json!({
+                "id": row.try_get::<String, _>("id").unwrap_or_default(),
+                "tenant_id": row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+                "project_id": row.try_get::<String, _>("project_id").unwrap_or_default(),
+                "name": row.try_get::<String, _>("name").unwrap_or_default(),
+                "node_type": row.try_get::<String, _>("node_type").unwrap_or_default(),
+                "cluster_name": row.try_get::<String, _>("cluster_name").unwrap_or_default(),
+                "agent_version": row.try_get::<String, _>("agent_version").unwrap_or_default(),
+                "capabilities": parse_optional_json(row, "capabilities_text"),
+                "labels": parse_optional_json(row, "labels_text"),
+                "status": row.try_get::<String, _>("status").unwrap_or_default(),
+                "client_certificate": {
+                    "fingerprint_sha256": fingerprint,
+                    "bound_at": timestamp_value(row, "client_certificate_bound_at"),
+                    "revoked_at": timestamp_value(row, "client_certificate_revoked_at"),
+                    "status": certificate_status,
+                },
+                "last_seen_at": timestamp_value(row, "last_seen_at"),
+                "last_seen_ip": row.try_get::<Option<String>, _>("last_seen_ip").ok().flatten(),
+                "created_at": timestamp_value(row, "created_at"),
+            })
+        })
+        .collect())
+}

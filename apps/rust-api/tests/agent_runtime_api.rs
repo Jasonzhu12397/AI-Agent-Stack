@@ -23,7 +23,8 @@ async fn state() -> AppState {
     for statement in [
         "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
-        "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, node_type VARCHAR(24) NOT NULL, cluster_name VARCHAR(120) NOT NULL, agent_version VARCHAR(40) NOT NULL, capabilities TEXT NOT NULL, credential_hash VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, last_seen_at DATETIME, last_seen_ip VARCHAR(39), revoked_at DATETIME, client_certificate_revoked_at DATETIME, tenant_id TEXT, project_id TEXT, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, name VARCHAR(120) NOT NULL, node_type VARCHAR(24) NOT NULL, cluster_name VARCHAR(120) NOT NULL, agent_version VARCHAR(40) NOT NULL, capabilities TEXT NOT NULL, labels TEXT, credential_hash VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, last_seen_at DATETIME, last_seen_ip VARCHAR(39), revoked_at DATETIME, client_certificate_fingerprint TEXT, client_certificate_bound_at DATETIME, client_certificate_revoked_at DATETIME, tenant_id TEXT, project_id TEXT, created_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
@@ -42,6 +43,10 @@ async fn state() -> AppState {
         .bind(NODE).execute(&pool).await.unwrap();
     sqlx::query(r#"INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, plan_hash, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('55555555555555555555555555555555', 'cluster.scale', '{"replicas":3}', 'waiting_approval', 'key-3', '70a2d11a46c7f689657269bbad9587111b8f38c00cddca74b550a2d0b803a0c9', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 2)"#)
         .bind(NODE).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_project (id, tenant_id) VALUES ('project', 'tenant')")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO core_tenantmembership (id, tenant_id, user_id, role, created_at) VALUES ('m1', 'tenant', 1, 'owner', datetime('now'))").execute(&pool).await.unwrap();
     let session = encode_session_data(1, "password-hash", "secret").unwrap();
     sqlx::query("INSERT INTO django_session (session_key, session_data, expire_date) VALUES ('approver-session', ?, datetime('now', '+1 day'))")
@@ -221,4 +226,51 @@ async fn lists_commands_for_tenant_admin() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["count"], 3);
     assert_eq!(body["results"][0]["node_id"], NODE);
+}
+
+#[tokio::test]
+async fn lists_and_enrolls_agent_nodes() {
+    let state = state().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/tenants/tenant/projects/project/agent-nodes/")
+        .header("cookie", "sessionid=approver-session")
+        .body(Body::empty())
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["results"][0]["status"], "online");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/tenants/tenant/projects/project/agent-nodes/")
+        .header(
+            "cookie",
+            "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"name": "node-b", "node_type": "eph_node", "cluster_name": "lab", "capabilities": ["exec"]})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["name"], "node-b");
+    assert_eq!(body["enrollment_token"].as_str().unwrap().len(), 64);
 }
