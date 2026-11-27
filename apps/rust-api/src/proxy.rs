@@ -147,6 +147,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::any(crate::infra_api::profile),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/ironic-template/",
+                axum::routing::post(crate::cluster_sync_api::ironic_template),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/",
                 axum::routing::get(crate::cluster_api::list_deployments),
             )

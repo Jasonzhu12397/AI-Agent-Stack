@@ -3,7 +3,7 @@ use ai_agent_stack_api::identity::encode_session_data;
 use ai_agent_stack_api::proxy::{router, AppState};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 async fn state() -> AppState {
@@ -18,6 +18,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, preflight_result TEXT, updated_at DATETIME)",
+        "CREATE TABLE core_infrastructurenetworkprofile (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, profile TEXT NOT NULL, created_at DATETIME, updated_at DATETIME)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
@@ -97,4 +98,45 @@ async fn bmh_sync_is_unavailable_without_cloud_control() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn renders_ironic_template_from_profile() {
+    let state = state().await;
+    let bucket = json!({"infra_network_profile": {"dns_servers": ["10.10.0.2"], "networks": [
+        {"name": "control", "role": "control", "vlan": 70, "cidr": "10.10.0.0/24", "gateway_ipv4": "10.10.0.1", "ip_pools": [{"start": "10.10.0.10", "end": "10.10.0.20"}], "interface": "eno1", "host_roles": ["control_plane", "worker"], "default_route": true},
+        {"name": "provisioning", "role": "provisioning", "vlan": 70, "cidr": "10.30.0.0/24", "ip_pools": [{"start": "10.30.0.10", "end": "10.30.0.30"}], "interface": "eno1", "host_roles": ["control_plane", "worker"]},
+        {"name": "data", "role": "data", "vlan": 71, "cidr": "10.20.0.0/24", "gateway_ipv4": "10.20.0.1", "ip_pools": [{"start": "10.20.0.10", "end": "10.20.0.30"}], "bond": {"name": "bond_data", "interfaces": ["eno2", "eno3"], "mode": "802.3ad"}, "host_roles": ["worker", "storage"]}
+    ]}});
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/tenants/tenant/projects/project/cluster-deployments/ironic-template/")
+                .header(
+                    "cookie",
+                    "sessionid=session-1; csrftoken=0123456789abcdef0123456789abcdef",
+                )
+                .header(
+                    "x-csrftoken",
+                    format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(bucket.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["provisioning_network"], "provisioning");
+    assert_eq!(body["configuration"]["networking"]["interface"], "eno1.70");
+    assert_eq!(
+        body["configuration"]["networking"]["ip_address"],
+        "10.30.0.2"
+    );
+    assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
 }

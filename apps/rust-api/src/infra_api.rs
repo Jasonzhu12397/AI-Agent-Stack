@@ -443,7 +443,7 @@ fn parse_pools(value: Option<&Value>, network: (Ipv4Addr, u8)) -> Result<Vec<Val
     Ok(pools)
 }
 
-fn plan(value: &Value) -> Result<Value, String> {
+pub(crate) fn plan(value: &Value) -> Result<Value, String> {
     let Some(object) = value.as_object() else {
         return Err("INFRA_NETWORK_PROFILE_INVALID".into());
     };
@@ -610,7 +610,7 @@ fn vlan_base(plan: &Value, network: &Value) -> Result<String, String> {
     Err("INFRA_NETWORK_BASE_INTERFACE_REQUIRED".into())
 }
 
-fn link_id(plan: &Value, network: &Value) -> Result<String, String> {
+pub(crate) fn link_id(plan: &Value, network: &Value) -> Result<String, String> {
     if let Some(vlan) = network.get("vlan").and_then(Value::as_i64) {
         let base = if let Some(name) = network
             .get("bond")

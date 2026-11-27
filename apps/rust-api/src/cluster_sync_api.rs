@@ -437,3 +437,205 @@ pub async fn sync_bmh_inventory(
         Err(code) => fail(StatusCode::INTERNAL_SERVER_ERROR, &code, "DATABASE_ERROR"),
     }
 }
+
+fn first_free_host(network: &Value) -> String {
+    if network
+        .get("dhcp")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return String::new();
+    }
+    let cidr = network
+        .get("cidr")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let Some((address, prefix)) = cidr.split_once('/') else {
+        return String::new();
+    };
+    let Ok(address) = address.parse::<std::net::Ipv4Addr>() else {
+        return String::new();
+    };
+    let Ok(prefix) = prefix.parse::<u32>() else {
+        return String::new();
+    };
+    if prefix > 32 {
+        return String::new();
+    }
+    let gateway = network
+        .get("gateway_ipv4")
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok());
+    let pools: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = network
+        .get("ip_pools")
+        .and_then(Value::as_array)
+        .map(|pools| {
+            pools
+                .iter()
+                .filter_map(|pool| {
+                    let start = pool.get("start")?.as_str()?.parse().ok()?;
+                    let end = pool.get("end")?.as_str()?.parse().ok()?;
+                    Some((start, end))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let size = 1u64 << (32 - prefix);
+    let base = u32::from(address) & (!0u32 << (32 - prefix));
+    for offset in if prefix <= 30 { 2 } else { 1 }..size.min(4096) {
+        let candidate = std::net::Ipv4Addr::from(base + offset as u32);
+        if gateway == Some(candidate) {
+            continue;
+        }
+        if pools
+            .iter()
+            .any(|(start, end)| candidate >= *start && candidate <= *end)
+        {
+            continue;
+        }
+        return format!("{candidate}/{prefix}");
+    }
+    String::new()
+}
+
+pub async fn ironic_template(
+    State(state): State<AppState>,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return fail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Database unavailable.",
+            "DATABASE_UNAVAILABLE",
+        );
+    };
+    if !crate::tasks::project_editor(pool, &project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "Project editor permission required.",
+            "PERMISSION_DENIED",
+        );
+    }
+    let profile_value = match body
+        .get("infra_network_profile")
+        .filter(|value| !value.is_null())
+    {
+        Some(value) => value.clone(),
+        None => {
+            let stored: Option<String> = sqlx::query_scalar(
+                "SELECT profile FROM core_infrastructurenetworkprofile WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? LIMIT 1",
+            )
+            .bind(&tenant_id).bind(&project_id).fetch_optional(pool).await.unwrap_or(None);
+            match stored.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) {
+                Some(value) => value,
+                None => {
+                    return fail(
+                        StatusCode::BAD_REQUEST,
+                        "infra_network_profile is required.",
+                        "IRONIC_TEMPLATE_PROFILE_INVALID",
+                    )
+                }
+            }
+        }
+    };
+    let plan = match crate::infra_api::plan(&profile_value) {
+        Ok(plan) => plan,
+        Err(code) => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                &code,
+                "IRONIC_TEMPLATE_PROFILE_INVALID",
+            )
+        }
+    };
+    let provisioning = plan
+        .get("networks")
+        .and_then(Value::as_array)
+        .and_then(|networks| {
+            networks.iter().find(|network| {
+                network.get("role").and_then(Value::as_str) == Some("provisioning")
+                    && network
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true)
+            })
+        })
+        .cloned();
+    let eph_address = body
+        .get("eph_network_addresses")
+        .and_then(Value::as_object)
+        .and_then(|addresses| {
+            addresses
+                .get("provisioning")
+                .or_else(|| addresses.get("control"))
+        })
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let mut networking = serde_json::Map::new();
+    let mut sources = Vec::new();
+    let mut warnings: Vec<Value> = Vec::new();
+    let mut network_name = Value::Null;
+    if let Some(network) = provisioning {
+        network_name = network.get("name").cloned().unwrap_or(Value::Null);
+        match crate::infra_api::link_id(&plan, &network) {
+            Ok(interface) if !interface.is_empty() => {
+                networking.insert("interface".into(), json!(interface));
+                sources.push(json!("interface"));
+            }
+            _ => warnings.push(json!("IRONIC_TEMPLATE_INTERFACE_UNAVAILABLE")),
+        }
+        let address = eph_address
+            .as_deref()
+            .map(|value| value.split('/').next().unwrap_or(value).trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(address) = address {
+            networking.insert("ip_address".into(), json!(address));
+            sources.push(json!("ip_address"));
+        } else {
+            let derived = first_free_host(&network);
+            if !derived.is_empty() {
+                let bare = derived.split('/').next().unwrap_or(&derived).to_string();
+                networking.insert("ip_address".into(), json!(bare));
+                sources.push(json!("ip_address_subnet"));
+            } else if network
+                .get("dhcp")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                networking.insert("dhcp".into(), json!(true));
+            } else {
+                warnings.push(json!("IRONIC_TEMPLATE_ADDRESS_UNAVAILABLE"));
+            }
+        }
+    } else {
+        warnings.push(json!("IRONIC_TEMPLATE_PROVISIONING_NETWORK_MISSING"));
+    }
+    let configuration = json!({
+        "namespace": "baremetal-operator-system",
+        "api_credentials_name": "",
+        "version": "",
+        "images": {"ironic": "", "deploy_ramdisk_downloader": "", "keepalived": ""},
+        "networking": Value::Object(networking),
+    });
+    (
+        StatusCode::OK,
+        Json(json!({
+            "configuration": configuration,
+            "provisioning_network": network_name,
+            "defaults_sources": sources,
+            "manual_fields": ["api_credentials_name", "version", "images.ironic", "images.deploy_ramdisk_downloader", "images.keepalived"],
+            "warnings": warnings,
+        })),
+    ).into_response()
+}
