@@ -333,3 +333,351 @@ fn valid_key(value: &str) -> bool {
             .chars()
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
 }
+
+fn provider_entry(key: &str) -> Result<Value, Response> {
+    let providers = parse_providers().map_err(|message| {
+        error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CLOUD_VM_PROVIDER_CONFIG_INVALID",
+            &message,
+        )
+    })?;
+    providers
+        .into_iter()
+        .find(|entry| entry.get("key").and_then(Value::as_str) == Some(key))
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::NOT_FOUND,
+                "CLOUD_VM_PROVIDER_UNKNOWN",
+                &format!("Cloud provider {key:?} is not configured."),
+            )
+        })
+}
+
+fn required_provider_text(entry: &Value, field: &str) -> Result<String, Response> {
+    entry
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            error_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CLOUD_VM_PROVIDER_CONFIG_INVALID",
+                &format!("{field} is required."),
+            )
+        })
+}
+
+async fn provider_action(entry: &Value, server_id: &str, action: &str) -> Result<(), Response> {
+    let auth_url = required_provider_text(entry, "auth_url")?;
+    let username = required_provider_text(entry, "username")?;
+    let password = required_provider_text(entry, "password")?;
+    let project_name = required_provider_text(entry, "project_name")?;
+    let domain_name = entry
+        .get("domain_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Default")
+        .to_string();
+    let region = entry
+        .get("region")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let verify_tls = entry
+        .get("verify_tls")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let timeout = entry.get("timeout").and_then(Value::as_u64).unwrap_or(20);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(!verify_tls)
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build()
+        .map_err(|error| {
+            error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CLOUD_VM_PROVIDER_CONFIG_INVALID",
+                &error.to_string(),
+            )
+        })?;
+    let auth = json!({
+        "auth": {
+            "identity": {
+                "methods": ["password"],
+                "password": {"user": {
+                    "name": username,
+                    "domain": {"name": domain_name},
+                    "password": password,
+                }},
+            },
+            "scope": {"project": {
+                "name": project_name,
+                "domain": {"name": domain_name},
+            }},
+        }
+    });
+    let response = client
+        .post(format!("{auth_url}/auth/tokens"))
+        .json(&auth)
+        .send()
+        .await
+        .map_err(|error| {
+            error_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CLOUD_VM_PROVIDER_UNAVAILABLE",
+                &format!("Cloud provider is unreachable ({error})."),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(error_json(
+            StatusCode::BAD_GATEWAY,
+            "CLOUD_VM_PROVIDER_UNAUTHORIZED",
+            &format!("Keystone returned HTTP {}.", response.status()),
+        ));
+    }
+    let token = response
+        .headers()
+        .get("X-Subject-Token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    if token.is_empty() {
+        return Err(error_json(
+            StatusCode::BAD_GATEWAY,
+            "CLOUD_VM_PROVIDER_RESPONSE_INVALID",
+            "Keystone did not return a subject token.",
+        ));
+    }
+    let body: Value = response.json().await.unwrap_or(json!({}));
+    let configured = entry
+        .get("compute_url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut compute_url = configured;
+    if compute_url.is_none() {
+        if let Some(catalog) = body
+            .get("token")
+            .and_then(|token| token.get("catalog"))
+            .and_then(Value::as_array)
+        {
+            for service in catalog {
+                if service.get("type").and_then(Value::as_str) != Some("compute") {
+                    continue;
+                }
+                let Some(endpoints) = service.get("endpoints").and_then(Value::as_array) else {
+                    continue;
+                };
+                for endpoint in endpoints {
+                    if endpoint.get("interface").and_then(Value::as_str) != Some("public") {
+                        continue;
+                    }
+                    let endpoint_region = endpoint
+                        .get("region_id")
+                        .or_else(|| endpoint.get("region"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if !region.is_empty() && endpoint_region != region {
+                        continue;
+                    }
+                    if let Some(url) = endpoint.get("url").and_then(Value::as_str) {
+                        compute_url = Some(url.trim_end_matches('/').to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let mut base = compute_url.ok_or_else(|| {
+        error_json(
+            StatusCode::BAD_GATEWAY,
+            "CLOUD_VM_PROVIDER_RESPONSE_INVALID",
+            "Provider catalog has no public compute endpoint.",
+        )
+    })?;
+    if !base.rsplit('/').next().is_some_and(|segment| {
+        segment.starts_with('v') && segment[1..].chars().all(|c| c.is_ascii_digit() || c == '.')
+    }) {
+        base = format!("{base}/v2.1");
+    }
+    let body = match action {
+        "start" => json!({"os-start": null}),
+        "stop" => json!({"os-stop": null}),
+        "reboot" => json!({"reboot": {"type": "SOFT"}}),
+        "hard-reboot" => json!({"reboot": {"type": "HARD"}}),
+        _ => unreachable!(),
+    };
+    let response = client
+        .post(format!("{base}/servers/{server_id}/action"))
+        .header("X-Auth-Token", token)
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| {
+            error_json(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CLOUD_VM_PROVIDER_UNAVAILABLE",
+                &format!("Cloud provider is unreachable ({error})."),
+            )
+        })?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let status = response.status();
+    let message = response.text().await.unwrap_or_default();
+    let code = match status.as_u16() {
+        404 => "CLOUD_VM_RESOURCE_NOT_FOUND",
+        409 => "CLOUD_VM_CONFLICT",
+        401 | 403 => "CLOUD_VM_PROVIDER_UNAUTHORIZED",
+        _ => "CLOUD_VM_PROVIDER_ERROR",
+    };
+    let http = match code {
+        "CLOUD_VM_RESOURCE_NOT_FOUND" => StatusCode::NOT_FOUND,
+        "CLOUD_VM_CONFLICT" => StatusCode::CONFLICT,
+        _ => StatusCode::BAD_GATEWAY,
+    };
+    Err(error_json(
+        http,
+        code,
+        &format!("Cloud provider returned HTTP {status}: {message}"),
+    ))
+}
+
+/// `POST /api/v1/cloud-vms/{vm_id}/actions/`
+pub async fn power_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vm_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return error_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "UNAVAILABLE",
+            "Database unavailable.",
+        );
+    };
+    let scope = sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, \
+         provider_key, server_id FROM core_cloudvminstance WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&vm_id)
+    .fetch_optional(pool)
+    .await;
+    let scope = match scope {
+        Ok(Some(row)) => row,
+        Ok(None) => return error_json(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => {
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_ERROR",
+                &error.to_string(),
+            )
+        }
+    };
+    let tenant_id: String = scope.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = scope.try_get("project_id").unwrap_or_default();
+    if !crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return error_json(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found.");
+    }
+    let editable = sqlx::query(
+        "SELECT 1 FROM core_tenantmembership \
+         WHERE CAST(tenant_id AS TEXT) = ? AND user_id = ? AND role IN ('owner', 'admin') \
+         UNION SELECT 1 FROM core_projectmembership \
+         WHERE CAST(project_id AS TEXT) = ? AND user_id = ? AND role IN ('admin', 'editor') \
+         LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(user.id)
+    .bind(&project_id)
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await;
+    match editable {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return error_json(
+                StatusCode::FORBIDDEN,
+                "PERMISSION_DENIED",
+                "Project editor permission required.",
+            )
+        }
+        Err(error) => {
+            return error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_ERROR",
+                &error.to_string(),
+            )
+        }
+    }
+    let action = body.get("action").and_then(Value::as_str).unwrap_or("");
+    if !matches!(action, "start" | "stop" | "reboot" | "hard-reboot") {
+        return error_json(
+            StatusCode::BAD_REQUEST,
+            "CLOUD_VM_ACTION_INVALID",
+            "action must be one of start, stop, reboot, hard-reboot.",
+        );
+    }
+    let provider_key: String = scope.try_get("provider_key").unwrap_or_default();
+    let server_id: String = scope.try_get("server_id").unwrap_or_default();
+    let entry = match provider_entry(&provider_key) {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    if let Err(response) = provider_action(&entry, &server_id, action).await {
+        return response;
+    }
+    let status = match action {
+        "start" => "STARTING",
+        "stop" => "STOPPING",
+        _ => "REBOOTING",
+    };
+    if let Err(error) = sqlx::query(
+        "UPDATE core_cloudvminstance SET status = ?, updated_at = CURRENT_TIMESTAMP \
+         WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(status)
+    .bind(&vm_id)
+    .execute(pool)
+    .await
+    {
+        return error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        );
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or_default(),
+        crate::audit::AuditEvent {
+            tenant_id: Some(&tenant_id),
+            project_id: Some(&project_id),
+            event_type: "cloud_vm.action",
+            resource_type: "cloud_vm",
+            resource_id: &vm_id,
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default(),
+            remote_addr: None,
+            user_agent: headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default(),
+            metadata: json!({"provider": provider_key, "action": action}),
+        },
+    )
+    .await;
+    get_instance(State(state), headers, Path(vm_id)).await
+}

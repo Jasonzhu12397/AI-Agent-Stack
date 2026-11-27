@@ -118,3 +118,48 @@ async fn reads_cloud_vm_detail() {
     assert_eq!(body["status"], "ACTIVE");
     assert_eq!(body["warnings"], Value::Array(vec![]));
 }
+
+async fn post_action(state: &AppState, uri: &str, body: Value) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("x-session-token", SESSION)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn rejects_unknown_cloud_vm_action() {
+    let state = state().await;
+    let (status, body) = post_action(
+        &state,
+        "/api/v1/cloud-vms/vm-1/actions/",
+        serde_json::json!({"action": "delete"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "CLOUD_VM_ACTION_INVALID");
+}
+
+#[tokio::test]
+async fn reports_incomplete_cloud_vm_provider_config() {
+    let state = state().await;
+    let (status, body) = post_action(
+        &state,
+        "/api/v1/cloud-vms/vm-1/actions/",
+        serde_json::json!({"action": "start"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["code"], "CLOUD_VM_PROVIDER_CONFIG_INVALID");
+}
