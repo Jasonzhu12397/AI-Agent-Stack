@@ -12,7 +12,6 @@ pub struct Config {
     pub request_timeout: Duration,
     pub native_identity: bool,
     pub database_url: Option<String>,
-    pub django_secret_key: Option<String>,
     pub secure_cookies: bool,
     pub external_scheme: String,
     pub media_root: String,
@@ -33,7 +32,6 @@ impl Config {
             config.with_native_identity(
                 parse_bool("RUST_API_NATIVE_IDENTITY", false)?,
                 env::var("DATABASE_URL").ok(),
-                env::var("DJANGO_SECRET_KEY").ok(),
             )
         })
     }
@@ -79,7 +77,6 @@ impl Config {
             request_timeout,
             native_identity: false,
             database_url: None,
-            django_secret_key: None,
             secure_cookies: false,
             external_scheme: "http".into(),
             media_root: env::var("MEDIA_ROOT").unwrap_or_else(|_| ".devdata/media".into()),
@@ -90,19 +87,12 @@ impl Config {
         mut self,
         enabled: bool,
         database_url: Option<String>,
-        django_secret_key: Option<String>,
     ) -> Result<Self, String> {
         if enabled && database_url.is_none() {
             return Err("DATABASE_URL is required when RUST_API_NATIVE_IDENTITY is enabled".into());
         }
-        if enabled && django_secret_key.is_none() {
-            return Err(
-                "DJANGO_SECRET_KEY is required when RUST_API_NATIVE_IDENTITY is enabled".into(),
-            );
-        }
         self.native_identity = enabled;
         self.database_url = database_url;
-        self.django_secret_key = django_secret_key;
         let production = env::var("APP_ENV")
             .map(|value| value.eq_ignore_ascii_case("production"))
             .unwrap_or(false);
