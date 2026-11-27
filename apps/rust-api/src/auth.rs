@@ -12,9 +12,7 @@ use serde_json::json;
 use sha2::Sha256;
 
 use crate::audit::{record_auth_event, AuthAudit};
-use crate::identity::{
-    decode_session_data, encode_session_data, new_session_key, session_age_seconds,
-};
+use crate::identity::{new_session_key, session_age_seconds, session_token_hash};
 use crate::proxy::AppState;
 
 const CSRF_COOKIE: &str = "csrftoken";
@@ -68,10 +66,7 @@ pub async fn login(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable("DJANGO_SECRET_KEY is not configured.");
-    };
-    if let Err(response) = enforce_csrf(&headers) {
+if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
 
@@ -108,14 +103,7 @@ pub async fn login(
     }
 
     let session_key = new_session_key();
-    let session_data = match encode_session_data(user_id, &encoded_password, secret_key) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(%error, "rust auth could not encode the session");
-            return unavailable("The session could not be created.");
-        }
-    };
-    let request_id = header_string(&headers, "x-request-id");
+let request_id = header_string(&headers, "x-request-id");
     let remote = peer.ip().to_string();
     let user_agent = header_string(&headers, "user-agent");
     let audit = AuthAudit {
@@ -127,7 +115,7 @@ pub async fn login(
         remote_addr: Some(&remote),
         user_agent: &user_agent,
     };
-    if let Err(error) = persist_session(&state, pool, &session_key, &session_data).await {
+    if let Err(error) = persist_session(&state, pool, user_id, &session_key).await {
         tracing::error!(%error, "rust auth could not persist the session");
         return unavailable("The session could not be created.");
     }
@@ -141,8 +129,8 @@ pub async fn login(
 
     if let Err(error) = record_auth_event(pool, database_url(&state), audit).await {
         tracing::error!(%error, "rust auth could not append the login audit event");
-        if let Err(cleanup_error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-            .bind(&session_key)
+        if let Err(cleanup_error) = sqlx::query("DELETE FROM rust_sessions WHERE token_hash = ?")
+            .bind(session_token_hash(&session_key))
             .execute(pool)
             .await
         {
@@ -213,46 +201,33 @@ pub async fn logout(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable("DJANGO_SECRET_KEY is not configured.");
-    };
-    if let Err(response) = enforce_csrf(&headers) {
+if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
     let Some(session_key) = crate::identity::session_key_from_headers(&headers) else {
         return unauthenticated("Authentication credentials were not provided.");
     };
-    let stored = match sqlx::query_scalar::<_, String>(
-        "SELECT session_data FROM django_session \
-         WHERE session_key = ? AND expire_date > CURRENT_TIMESTAMP",
+    let token_hash = session_token_hash(&session_key);
+    let actor_id = match sqlx::query_scalar::<_, i64>(
+        "SELECT user_id FROM rust_sessions WHERE token_hash = ? \
+         AND expires_at > CURRENT_TIMESTAMP AND revoked_at IS NULL",
     )
-    .bind(&session_key)
+    .bind(&token_hash)
     .fetch_optional(pool)
-    .await
-    {
-        Ok(Some(stored)) => stored,
-        Ok(None) => {
-            return unauthenticated("This session has expired. Sign in again.");
-        }
+    .await {
+        Ok(Some(user_id)) => Some(user_id),
+        Ok(None) => return unauthenticated("This session has expired. Sign in again."),
         Err(error) => {
             tracing::error!(%error, "rust auth could not read the logout session");
             return unavailable("The session store could not be read.");
         }
     };
-    let actor_id = decode_session_data(&stored, secret_key)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("_auth_user_id")
-                .and_then(|id| id.as_str())
-                .and_then(|id| id.parse::<i64>().ok())
-        });
 
     let request_id = header_string(&headers, "x-request-id");
     let remote = peer.ip().to_string();
     let user_agent = header_string(&headers, "user-agent");
-    if let Err(error) = sqlx::query("DELETE FROM django_session WHERE session_key = ?")
-        .bind(&session_key)
+    if let Err(error) = sqlx::query("UPDATE rust_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL")
+        .bind(&token_hash)
         .execute(pool)
         .await
     {
@@ -320,21 +295,21 @@ async fn audit_denied(
 async fn persist_session(
     state: &AppState,
     pool: &sqlx::AnyPool,
+    user_id: i64,
     session_key: &str,
-    session_data: &str,
 ) -> Result<(), String> {
     let postgres = database_url(state).starts_with("postgres://")
         || database_url(state).starts_with("postgresql://");
     let sql = if postgres {
-        "INSERT INTO django_session (session_key, session_data, expire_date) \
-         VALUES (?, ?, NOW() + INTERVAL '1209600 seconds')"
+        "INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) \
+         VALUES (?, ?, NOW() + INTERVAL '1209600 seconds', NOW())"
     } else {
-        "INSERT INTO django_session (session_key, session_data, expire_date) \
-         VALUES (?, ?, datetime('now', '+1209600 seconds'))"
+        "INSERT INTO rust_sessions (token_hash, user_id, expires_at, created_at) \
+         VALUES (?, ?, datetime('now', '+1209600 seconds'), datetime('now'))"
     };
     sqlx::query(sql)
-        .bind(session_key)
-        .bind(session_data)
+        .bind(session_token_hash(session_key))
+        .bind(user_id)
         .execute(pool)
         .await
         .map(|_| ())
@@ -583,10 +558,7 @@ pub async fn register(
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable("The Rust identity pool is not configured.");
     };
-    let Some(secret_key) = state.config.django_secret_key.as_deref() else {
-        return unavailable("DJANGO_SECRET_KEY is not configured.");
-    };
-    if let Err(response) = enforce_csrf(&headers) {
+if let Err(response) = enforce_csrf(&headers) {
         return *response;
     }
     if std::env::var("PLATFORM_ALLOW_SELF_REGISTRATION")
@@ -725,14 +697,7 @@ pub async fn register(
         return unavailable("The project membership could not be created.");
     }
     let session_key = new_session_key();
-    let session_data = match encode_session_data(user_id, &encoded_password, secret_key) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::error!(%error, "rust auth could not encode the session");
-            return unavailable("The session could not be created.");
-        }
-    };
-    if let Err(error) = persist_session(&state, pool, &session_key, &session_data).await {
+if let Err(error) = persist_session(&state, pool, user_id, &session_key).await {
         tracing::error!(%error, "rust auth could not persist the session");
         return unavailable("The session could not be created.");
     }
