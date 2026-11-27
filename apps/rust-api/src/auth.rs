@@ -104,7 +104,7 @@ if let Err(response) = enforce_csrf(&headers) {
     }
 
     let session_key = new_session_key();
-let request_id = header_string(&headers, "x-request-id");
+    let request_id = header_string(&headers, "x-request-id");
     let remote = peer.ip().to_string();
     let user_agent = header_string(&headers, "user-agent");
     let audit = AuthAudit {
@@ -709,7 +709,7 @@ if let Err(response) = enforce_csrf(&headers) {
         return unavailable("The project membership could not be created.");
     }
     let session_key = new_session_key();
-if let Err(error) = persist_session(&state, pool, user_id, &session_key).await {
+    if let Err(error) = persist_session(&state, pool, user_id, &session_key).await {
         tracing::error!(%error, "rust auth could not persist the session");
         return unavailable("The session could not be created.");
     }
