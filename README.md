@@ -34,7 +34,7 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 
 ### 1. Application multi-Agent runtime
 
-- **Platform API** (`apps/platform-api`): Django and Django REST Framework API for authentication, tenants, projects, Agents, Workflows, models, knowledge, connectors, deployments, approvals and audit.
+- **Platform API** (`apps/rust-api`): the sole SaaS HTTP/API runtime, implemented in Rust with Axum. It owns authentication, tenant/project authorization, Agents, Workflows, models, knowledge, connectors, deployments, approvals, token budgets and audit. Django/Django REST Framework are retired and are not supported as runtime or fallback.
 - **Web Studio** (`apps/web-studio`): Vue 3 operator workspace with a persistent
   left rail and a full-surface Control Agent chat column — thread-level
   execution target, reasoning effort, goal and plan-first settings, file and
@@ -76,7 +76,7 @@ There is no per-Worker Agent and no Network Inventory Agent DaemonSet. Worker fa
 Users / Operators
        |
        v
-Vue Web Studio  --->  Platform API (tenants, Agents, Workflows, models, tools, audit)
+Vue Web Studio  --->  Rust Platform API (Axum: tenants, Agents, Workflows, models, tools, audit)
                               |
                               +--> PostgreSQL
                               |
@@ -198,17 +198,11 @@ cp .env.example .env
 docker compose --env-file .env -f deploy/docker-compose.yml up --build
 ```
 
-- Vue Studio: http://localhost:5173
-- Django API: http://localhost:8000/api/v1/
-- Django Admin: http://localhost:8000/admin/
-- Liveness: http://localhost:8000/health/live
-- Readiness: http://localhost:8000/health/ready
+- Rust API: http://localhost:8080/api/v1/
+- Liveness: http://localhost:8080/health/live
+- Readiness: http://localhost:8080/health/ready
 
-Create the first administrator after the stack is running:
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml exec api python apps/platform-api/manage.py createsuperuser
-```
+The Rust API is the only supported API runtime. Provision the initial administrator through the Rust-native identity/bootstrap workflow; there is no Django Admin or `manage.py` bootstrap path.
 
 ## Three-Agent deployment
 
@@ -249,7 +243,9 @@ The authoritative code-backed checklist is [Architecture Inventory (English)](do
 python -m pip install -e ".[dev]"
 ruff check .
 pytest
-python apps/platform-api/manage.py check
+cargo fmt --manifest-path apps/rust-api/Cargo.toml -- --check
+cargo clippy --manifest-path apps/rust-api/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/rust-api/Cargo.toml
 ```
 
 Frontend:
@@ -262,7 +258,7 @@ npm run build
 
 ## Repository layout
 
-- `apps/platform-api`: Django SaaS API, tenancy, Agents, Workflows, audit and deployment records.
+- `apps/rust-api`: Rust/Axum SaaS API, authentication, tenancy, Agents, Workflows, audit and deployment APIs.
 - `apps/worker`: asynchronous Agent, Agent Team and Workflow executor.
 - `apps/cloud_control_agent`: cloud-side infrastructure control plane.
 - `apps/eph_agent`: temporary EPH bootstrap Agent.
@@ -277,7 +273,7 @@ npm run build
 
 ## Security baseline
 
-Production rejects DEBUG mode and the development SECRET_KEY. DRF defaults to authenticated access; public endpoints must explicitly opt in. Tenant and project authorization is enforced server-side, never by model intent or client-supplied tenant identifiers. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted.
+The Rust API enforces authenticated-by-default access, explicit public-route opt-in, server-derived tenant/project scope and role checks. Client-supplied tenant identifiers are untrusted. Model output, retrieved content, Skills, MCP responses and plugin data are untrusted.
 
 No production CAPI Pivot, BMH mutation, EPH cleanup or Worker provisioning is enabled until its adapter, approval boundary, compatibility matrix and physical acceptance evidence are complete.
 
