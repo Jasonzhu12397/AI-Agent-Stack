@@ -14,10 +14,7 @@ pub async fn roadmap(State(state): State<AppState>, headers: HeaderMap) -> Respo
     let Some(pool) = state.identity_pool.as_ref() else {
         return unavailable();
     };
-    let Some(secret_key) = state.config.platform_secret_key.as_deref() else {
-        return unavailable();
-    };
-    if let Err(response) = match authenticate(pool, secret_key, &headers).await {
+    if let Err(response) = match authenticate(pool, &headers).await {
         Ok(_) => Ok(()),
         Err(AuthError::Unauthenticated(detail)) => {
             Err((StatusCode::UNAUTHORIZED, Json(json!({"detail": detail}))).into_response())
