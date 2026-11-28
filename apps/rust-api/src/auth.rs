@@ -712,6 +712,19 @@ pub async fn register(
         tracing::error!(%error, "rust auth could not create the project membership");
         return unavailable("The project membership could not be created.");
     }
+    // A new workspace sees the same connector registry as an old one: the
+    // catalogue is registered and built-in connectors are installed while the
+    // owner is still onboarding.
+    if let Err(error) =
+        crate::plugin_catalog::sync_tenant_catalog(&state, None, Some(tenant_slug.clone())).await
+    {
+        tracing::warn!(%error, %tenant_slug, "connector catalogue sync failed at registration");
+    }
+    if let Err(error) =
+        crate::plugin_catalog::install_builtin_connectors(&state, Some(tenant_slug.clone())).await
+    {
+        tracing::warn!(%error, %tenant_slug, "builtin connector install failed at registration");
+    }
     let session_key = new_session_key();
     if let Err(error) = persist_session(&state, pool, user_id, &session_key).await {
         tracing::error!(%error, "rust auth could not persist the session");
