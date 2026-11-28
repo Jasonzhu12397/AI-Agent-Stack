@@ -968,6 +968,300 @@ fn timestamp_value(row: &sqlx::any::AnyRow, column: &str) -> Value {
     text.map(|value| json!(value)).unwrap_or(Value::Null)
 }
 
+const FORBIDDEN_PAYLOAD_KEYS: &[&str] = &[
+    "shell",
+    "command",
+    "script",
+    "raw_manifest",
+    "manifest",
+    "kubeconfig",
+    "password",
+    "secret",
+    "token",
+    "private_key",
+];
+
+const TARGET_ONLY_COMMANDS: &[&str] = &[
+    "cluster.kubernetes.version.upgrade",
+    "cluster.scale",
+    "cluster.kubernetes.version.rollback",
+    "cluster.worker.repair",
+    "target.network.upgrade",
+    "target.network.rollback",
+    "target.network.revisions",
+];
+
+fn payload_has_forbidden_key(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, child)| {
+            FORBIDDEN_PAYLOAD_KEYS.contains(&key.to_lowercase().as_str())
+                || payload_has_forbidden_key(child)
+        }),
+        Value::Array(items) => items.iter().any(payload_has_forbidden_key),
+        _ => false,
+    }
+}
+
+fn validate_command_payload(payload: &Value) -> Option<&'static str> {
+    if !payload.is_object() {
+        return Some("payload must be a JSON object.");
+    }
+    if serde_json::to_vec(payload)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+        > 65536
+    {
+        return Some("payload must not exceed 64 KiB.");
+    }
+    if payload_has_forbidden_key(payload) {
+        return Some("Payload contains a forbidden executable or credential field.");
+    }
+    None
+}
+
+pub async fn create_node_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !payload.is_object() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Request body must be a JSON object.",
+        );
+    }
+    let node = match sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, \
+         node_type, cluster_name, status FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&node_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "Agent node not found."),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let tenant_id: String = node.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = node.try_get("project_id").unwrap_or_default();
+    let node_type: String = node.try_get("node_type").unwrap_or_default();
+    let cluster_name: String = node.try_get("cluster_name").unwrap_or_default();
+    let status: String = node.try_get("status").unwrap_or_default();
+    if !crate::billing_api::tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return error(StatusCode::NOT_FOUND, "Agent node not found.");
+    }
+    if status == "revoked" {
+        return error(StatusCode::CONFLICT, "Agent node has been revoked.");
+    }
+    let project_editor = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_projectmembership WHERE CAST(project_id AS TEXT) = ? \
+         AND user_id = ? AND role IN ('admin', 'editor')",
+    )
+    .bind(&project_id)
+    .bind(user.id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0;
+    let tenant_admin = crate::billing_api::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false);
+    if !project_editor && !tenant_admin {
+        return error(StatusCode::FORBIDDEN, "Project editor permission required.");
+    }
+    let command_type = payload
+        .get("command_type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let allowed: &[&str] = if node_type == "eph_node" {
+        EPH_COMMANDS
+    } else {
+        TARGET_COMMANDS
+    };
+    if !allowed.contains(&command_type.as_str()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Command is not allowed for this agent type.",
+        );
+    }
+    if TARGET_ONLY_COMMANDS.contains(&command_type.as_str()) && node_type != "target_cluster" {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "This command requires a Target Cluster Agent.",
+        );
+    }
+    let command_payload = payload.get("payload").cloned().unwrap_or_else(|| json!({}));
+    if let Some(message) = validate_command_payload(&command_payload) {
+        return error(StatusCode::BAD_REQUEST, message);
+    }
+    let idempotency_key = headers
+        .get("Idempotency-Key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "A valid Idempotency-Key header is required.",
+        );
+    }
+    let plan_hash = payload_hash(&command_type, &command_payload);
+    let initial_status = if APPROVAL_REQUIRED_COMMANDS.contains(&command_type.as_str()) {
+        "waiting_approval"
+    } else {
+        "queued"
+    };
+    let deployment_id: Option<String> = if node_type == "target_cluster" && !cluster_name.is_empty()
+    {
+        sqlx::query_scalar::<_, String>(
+            "SELECT CAST(id AS TEXT) FROM core_clusterdeployment WHERE CAST(project_id AS TEXT) = ? \
+             AND cluster_name = ? AND status = 'succeeded' ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(&project_id)
+        .bind(&cluster_name)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    let existing = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, command_type, \
+         CAST(payload AS TEXT) AS payload_text FROM core_agentcommand \
+         WHERE CAST(tenant_id AS TEXT) = ? AND idempotency_key = ? LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(&idempotency_key)
+    .fetch_optional(pool)
+    .await;
+    let existing = match existing {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let had_existing = existing.is_some();
+    let command_id = if let Some(row) = existing {
+        let stored_node: String = row.try_get("node_id").unwrap_or_default();
+        let stored_type: String = row.try_get("command_type").unwrap_or_default();
+        let stored_payload: Value = row
+            .try_get::<String, _>("payload_text")
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| json!({}));
+        if stored_node != node_id
+            || stored_type != command_type
+            || stored_payload != command_payload
+        {
+            return error(
+                StatusCode::CONFLICT,
+                "Idempotency-Key was used for a different command.",
+            );
+        }
+        row.try_get::<String, _>("id").unwrap_or_default()
+    } else {
+        let command_id = uuid::Uuid::new_v4().simple().to_string();
+        let insert = "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, \
+                      plan_hash, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, \
+                      project_id, requested_by_id, deployment_id) \
+                      VALUES (?, ?, ?, ?, ?, ?, 0, 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)";
+        if let Err(error) = sqlx::query(insert)
+            .bind(&command_id)
+            .bind(&command_type)
+            .bind(serde_json::to_string(&command_payload).unwrap_or_else(|_| "{}".into()))
+            .bind(initial_status)
+            .bind(&idempotency_key)
+            .bind(&plan_hash)
+            .bind(&node_id)
+            .bind(&tenant_id)
+            .bind(&project_id)
+            .bind(user.id)
+            .bind(&deployment_id)
+            .execute(pool)
+            .await
+        {
+            return database_error(error.to_string());
+        }
+        if let Err(error) = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: if initial_status == "waiting_approval" {
+                    "agent.command.approval_requested"
+                } else {
+                    "agent.command.queued"
+                },
+                resource_type: "agent_command",
+                resource_id: command_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({
+                    "command_type": command_type,
+                    "status": initial_status,
+                    "plan_hash": plan_hash,
+                }),
+            },
+        )
+        .await
+        {
+            return database_error(error);
+        }
+        command_id
+    };
+    let created = !had_existing;
+    let ts = |column: &str| {
+        if is_postgres(&state) {
+            format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS {column}")
+        } else {
+            format!("strftime('%Y-%m-%d %H:%M:%S', {column}) AS {column}")
+        }
+    };
+    let columns = [
+        ts("created_at"),
+        ts("started_at"),
+        ts("finished_at"),
+        ts("approved_at"),
+    ]
+    .join(", ");
+    let select = format!(
+        "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, \
+         CAST(deployment_id AS TEXT) AS deployment_id, command_type, CAST(payload AS TEXT) AS payload_text, \
+         status, plan_hash, CAST(attempts AS INTEGER) AS attempts, CAST(result AS TEXT) AS result_text, \
+         CAST(error AS TEXT) AS error_text, {columns} FROM core_agentcommand WHERE CAST(id AS TEXT) = ? \
+         LIMIT 1"
+    );
+    let row = match sqlx::query(&select).bind(&command_id).fetch_one(pool).await {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    (
+        if created {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(command_json(&row)),
+    )
+        .into_response()
+}
+
 pub async fn list_agent_nodes(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -464,3 +464,52 @@ async fn studio_builds_an_oauth_authorize_url() {
     assert!(url.contains("response_type=code"));
     assert!(!body["state"].as_str().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn registers_plugin_definitions_and_installations() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/"),
+        Some(json!({
+            "plugin_key": "calendar",
+            "name": "Calendar",
+            "version": "1.0.0",
+            "protocol": "http_json",
+            "endpoint_url": "https://calendar.example.com",
+            "capabilities": ["calendar.read"],
+            "auth_required": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["plugin_key"], "calendar");
+    assert_eq!(body["version"], "1.0.0");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/"),
+        Some(json!({
+            "plugin_key": "Bad Key",
+            "name": "Bad",
+            "version": "1.0.0",
+            "protocol": "http_json",
+            "endpoint_url": "http://insecure.example.com"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/agent-plugin-installations/"),
+        Some(json!({"plugin_key": "weather", "granted_capabilities": []})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["plugin"]["plugin_key"], "weather");
+    assert_eq!(body["status"], "installed");
+}

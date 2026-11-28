@@ -290,7 +290,8 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/agent-nodes/{node_id}/commands/",
-                axum::routing::get(crate::agent_runtime_api::list_node_commands),
+                axum::routing::get(crate::agent_runtime_api::list_node_commands)
+                    .post(crate::agent_runtime_api::create_node_command),
             )
             .route(
                 "/api/v1/agent-commands/{command_id}/approve/",
@@ -699,11 +700,13 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/",
-                get(crate::plugin_api::list_plugins),
+                get(crate::plugin_api::list_plugins)
+                    .post(crate::plugin_api::create_plugin),
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/agent-plugin-installations/",
-                get(crate::plugin_api::list_installations),
+                get(crate::plugin_api::list_installations)
+                    .post(crate::plugin_api::create_installation),
             )
             .route(
                 "/api/v1/agent-plugin-installations/{installation_id}/status/",

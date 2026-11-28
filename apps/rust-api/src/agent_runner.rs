@@ -194,8 +194,31 @@ pub async fn execute(
     let mut input_tokens = run.input_tokens;
     let mut output_tokens = run.output_tokens;
     let mut latency_ms = run.latency_ms;
-    let mut total_tool_calls = 0_i64;
-    for iteration in 0..max_iterations {
+    let mut total_tool_calls = run
+        .execution_state
+        .get("total_tool_calls")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let mut start_iteration = run
+        .execution_state
+        .get("next_iteration")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .clamp(0, max_iterations);
+    if let Some(previous) = run
+        .execution_state
+        .get("messages")
+        .and_then(Value::as_array)
+    {
+        if !previous.is_empty() {
+            messages = previous.clone();
+            start_iteration = start_iteration.max(1);
+        }
+    }
+    if start_iteration >= max_iterations {
+        return Err("Agent reached max_iterations before producing a final answer.".into());
+    }
+    for iteration in start_iteration..max_iterations {
         let allowed_output = (max_tokens)
             .min(model.max_output_tokens)
             .min(200_000 - input_tokens - output_tokens)

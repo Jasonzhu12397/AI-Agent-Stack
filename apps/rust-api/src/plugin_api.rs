@@ -15,6 +15,10 @@ use crate::context::{authenticate, AuthError};
 use crate::proxy::AppState;
 use crate::tenancy::{is_postgres, normalize_timestamp};
 
+fn error(status: StatusCode, message: &str) -> Response {
+    legacy_error(message, status, "VALIDATION_ERROR")
+}
+
 pub async fn list_plugins(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -49,6 +53,304 @@ pub async fn list_plugins(
         Err(error) => return database_error(error.to_string()),
     };
     Json(rows.iter().map(plugin_json).collect::<Vec<Value>>()).into_response()
+}
+
+pub async fn create_plugin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    if !crate::tenancy::tenant_admin(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            "Tenant administrator permission required.",
+        );
+    }
+    if !payload.is_object() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Request body must be a JSON object.",
+        );
+    }
+    let required = ["plugin_key", "name", "version", "protocol", "endpoint_url"];
+    for field in required {
+        match payload.get(field).and_then(Value::as_str) {
+            Some(value) if !value.trim().is_empty() => {}
+            _ => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "plugin_key, name, version, protocol and endpoint_url are required strings.",
+                )
+            }
+        }
+    }
+    let plugin_key = payload["plugin_key"].as_str().unwrap_or("").trim();
+    let name = payload["name"].as_str().unwrap_or("").trim();
+    let version = payload["version"].as_str().unwrap_or("").trim();
+    let protocol = payload["protocol"].as_str().unwrap_or("").trim();
+    let endpoint_url = payload["endpoint_url"].as_str().unwrap_or("").trim();
+    if name.len() > 120 || version.len() > 40 || plugin_key.len() > 100 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Agent plugin identity fields exceed their maximum lengths.",
+        );
+    }
+    let valid_key = plugin_key.len() <= 100
+        && !plugin_key.starts_with('-')
+        && !plugin_key.ends_with('-')
+        && plugin_key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !valid_key {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "plugin_key must be a lowercase hyphenated identifier.",
+        );
+    }
+    let description = payload
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if description.len() > 4000 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "description must be a string no longer than 4,000 characters.",
+        );
+    }
+    if !matches!(
+        protocol,
+        "http_json" | "mcp" | "a2a" | "openai_compatible" | "open_data"
+    ) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Unsupported agent plugin protocol.",
+        );
+    }
+    let parsed = match url::Url::parse(endpoint_url) {
+        Ok(value) => value,
+        Err(_) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "endpoint_url must be a valid HTTPS URL.",
+            )
+        }
+    };
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.port(), None | Some(443))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "endpoint_url must be a valid HTTPS URL.",
+        );
+    }
+    let manifest = payload
+        .get("manifest")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !manifest.is_object() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "manifest must be a JSON object no larger than 32 KiB.",
+        );
+    }
+    if serde_json::to_vec(&manifest)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+        > 32768
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "manifest must be a JSON object no larger than 32 KiB.",
+        );
+    }
+    let capabilities = payload
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !capabilities.iter().all(|value| {
+        value
+            .as_str()
+            .map(|name| {
+                let mut chars = name.chars();
+                name.len() <= 64
+                    && chars
+                        .next()
+                        .map(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                        .unwrap_or(false)
+                    && chars.all(|c| {
+                        c.is_ascii_lowercase()
+                            || c.is_ascii_digit()
+                            || matches!(c, '.' | '_' | ':' | '-')
+                    })
+            })
+            .unwrap_or(false)
+    }) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "capabilities must be a list of lowercase capability identifiers.",
+        );
+    }
+    for field in ["input_schema", "output_schema"] {
+        if let Some(schema) = payload.get(field) {
+            if !schema.is_object() {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "input_schema and output_schema must be JSON objects.",
+                );
+            }
+        }
+    }
+    let auth_required = match payload.get("auth_required") {
+        None => true,
+        Some(value) => match value.as_bool() {
+            Some(value) => value,
+            None => return error(StatusCode::BAD_REQUEST, "auth_required must be a boolean."),
+        },
+    };
+    let timeout_seconds = payload
+        .get("timeout_seconds")
+        .and_then(Value::as_i64)
+        .unwrap_or(60);
+    if !(1..=300).contains(&timeout_seconds) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "timeout_seconds must be an integer between 1 and 300.",
+        );
+    }
+    let max_concurrency = payload
+        .get("max_concurrency")
+        .and_then(Value::as_i64)
+        .unwrap_or(4);
+    if !(1..=64).contains(&max_concurrency) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "max_concurrency must be an integer between 1 and 64.",
+        );
+    }
+    let plugin_id = uuid::Uuid::new_v4().simple().to_string();
+    let now = if is_postgres(&state) {
+        "NOW()"
+    } else {
+        "CURRENT_TIMESTAMP"
+    };
+    let insert = format!(
+        "INSERT INTO core_agentplugindefinition (id, tenant_id, created_by_id, plugin_key, name, \
+         description, version, protocol, endpoint_url, auth_required, credential_ref, capabilities, \
+         manifest, input_schema, output_schema, timeout_seconds, max_concurrency, enabled, \
+         created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, 1, {now}, {now})"
+    );
+    let duplicate = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM core_agentplugindefinition WHERE CAST(tenant_id AS TEXT) = ? \
+         AND plugin_key = ? AND version = ?",
+    )
+    .bind(&tenant_id)
+    .bind(plugin_key)
+    .bind(version)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if duplicate > 0 {
+        return error(
+            StatusCode::CONFLICT,
+            "An agent plugin with this key and version already exists.",
+        );
+    }
+    let input_schema = serde_json::to_string(
+        &payload
+            .get("input_schema")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    )
+    .unwrap_or_else(|_| "{}".into());
+    let output_schema = serde_json::to_string(
+        &payload
+            .get("output_schema")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    )
+    .unwrap_or_else(|_| "{}".into());
+    if let Err(error) = sqlx::query(&insert)
+        .bind(&plugin_id)
+        .bind(&tenant_id)
+        .bind(user.id)
+        .bind(plugin_key)
+        .bind(name)
+        .bind(description)
+        .bind(version)
+        .bind(protocol)
+        .bind(endpoint_url)
+        .bind(if auth_required { 1 } else { 0 })
+        .bind(serde_json::to_string(&capabilities).unwrap_or_else(|_| "[]".into()))
+        .bind(serde_json::to_string(&manifest).unwrap_or_else(|_| "{}".into()))
+        .bind(&input_schema)
+        .bind(&output_schema)
+        .bind(timeout_seconds)
+        .bind(max_concurrency)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: None,
+            event_type: "agent_plugin.registered",
+            resource_type: "agent_plugin_definition",
+            resource_id: plugin_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({
+                "plugin_key": plugin_key,
+                "version": version,
+                "protocol": protocol,
+            }),
+        },
+    )
+    .await;
+    let created = timestamp(&state, "plugin", "created_at");
+    let updated = timestamp(&state, "plugin", "updated_at");
+    let sql = format!(
+        "SELECT CAST(plugin.id AS TEXT) AS id, CAST(plugin.tenant_id AS TEXT) AS tenant_id, \
+         plugin.plugin_key, plugin.name, plugin.description, plugin.version, plugin.protocol, \
+         plugin.endpoint_url, CAST(plugin.auth_required AS INTEGER) AS auth_required_int, plugin.credential_ref, plugin.capabilities, \
+         plugin.manifest, plugin.input_schema, plugin.output_schema, plugin.timeout_seconds, \
+         plugin.max_concurrency, CAST(plugin.enabled AS INTEGER) AS enabled_int, \
+         {created} AS created, {updated} AS updated FROM core_agentplugindefinition plugin \
+         WHERE CAST(plugin.id AS TEXT) = ? LIMIT 1"
+    );
+    match sqlx::query(&sql).bind(&plugin_id).fetch_one(pool).await {
+        Ok(row) => (StatusCode::CREATED, Json(plugin_json(&row))).into_response(),
+        Err(error) => database_error(error.to_string()),
+    }
 }
 
 pub async fn list_installations(
@@ -127,6 +429,295 @@ pub async fn list_installations(
         Err(error) => return database_error(error.to_string()),
     };
     Json(rows.iter().map(installation_json).collect::<Vec<Value>>()).into_response()
+}
+
+pub async fn create_installation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    match crate::tenancy::project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(true) => {}
+        Ok(false) => return not_found(),
+        Err(error) => return database_error(error),
+    }
+    if !can_edit(pool, &tenant_id, &project_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return error(StatusCode::FORBIDDEN, "Project editor permission required.");
+    }
+    if !payload.is_object() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Request body must be a JSON object.",
+        );
+    }
+    let plugin_id = payload.get("plugin_id").and_then(Value::as_str);
+    let plugin_key = payload.get("plugin_key").and_then(Value::as_str);
+    if plugin_id.is_none() && plugin_key.is_none() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "plugin_id or plugin_key is required.",
+        );
+    }
+    let plugin = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, plugin_key, version, CAST(auth_required AS INTEGER) AS auth_required_int, credential_ref, \
+         capabilities, manifest FROM core_agentplugindefinition \
+         WHERE CAST(tenant_id AS TEXT) = ? AND enabled = 1 AND (id = ? OR (? IS NULL AND plugin_key = ?)) \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(plugin_id.unwrap_or(""))
+    .bind(plugin_id)
+    .bind(plugin_key.unwrap_or(""))
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "Agent plugin definition does not exist."),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let selected_plugin_id: String = plugin.try_get("id").unwrap_or_default();
+    let selected_plugin_key: String = plugin.try_get("plugin_key").unwrap_or_default();
+    let plugin_version: String = plugin.try_get("version").unwrap_or_default();
+    let auth_required = plugin.try_get::<i64, _>("auth_required_int").unwrap_or(0) != 0;
+    let plugin_credential: String = plugin.try_get("credential_ref").unwrap_or_default();
+    let declared_capabilities: Vec<String> = plugin
+        .try_get::<Option<String>, _>("capabilities")
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+    let granted: Vec<String> = payload
+        .get("granted_capabilities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+    if !granted
+        .iter()
+        .all(|capability| declared_capabilities.contains(capability))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Granted capabilities must be declared by the agent plugin.",
+        );
+    }
+    let mut credential_ref = payload
+        .get("credential_ref")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if credential_ref.is_empty() {
+        credential_ref = plugin_credential;
+    }
+    if auth_required && credential_ref.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "credential_ref is required for this agent plugin; provide a secret reference, not a credential value.",
+        );
+    }
+    if !auth_required && !credential_ref.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "This agent plugin does not accept a credential reference.",
+        );
+    }
+    if !credential_ref.is_empty() {
+        let valid = credential_ref.len() <= 200
+            && !credential_ref.chars().any(char::is_whitespace)
+            && credential_ref
+                .split_once("://")
+                .map(|(scheme, rest)| {
+                    !rest.is_empty()
+                        && !scheme.is_empty()
+                        && scheme
+                            .chars()
+                            .next()
+                            .is_some_and(|first| first.is_ascii_lowercase())
+                })
+                .unwrap_or(false);
+        if !valid {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "Connector credential reference is invalid.",
+            );
+        }
+    }
+    let existing = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, status FROM core_agentplugininstallation \
+         WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? \
+         AND CAST(plugin_id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(&project_id)
+    .bind(&selected_plugin_id)
+    .fetch_optional(pool)
+    .await;
+    let existing = match existing {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let mut created = false;
+    let mut revived = false;
+    let installation_id = if let Some(row) = existing {
+        let id: String = row.try_get("id").unwrap_or_default();
+        let status: String = row.try_get("status").unwrap_or_default();
+        if status == "uninstalled" {
+            let now = if is_postgres(&state) {
+                "NOW()"
+            } else {
+                "CURRENT_TIMESTAMP"
+            };
+            let update = format!(
+                "UPDATE core_agentplugininstallation SET status = 'installed', plugin_version = ?, \
+                 granted_capabilities = ?, credential_ref = ?, installed_by_id = ?, \
+                 updated_at = {now} WHERE CAST(id AS TEXT) = ?"
+            );
+            if let Err(error) = sqlx::query(&update)
+                .bind(&plugin_version)
+                .bind(serde_json::to_string(&granted).unwrap_or_else(|_| "[]".into()))
+                .bind(&credential_ref)
+                .bind(user.id)
+                .bind(&id)
+                .execute(pool)
+                .await
+            {
+                return database_error(error.to_string());
+            }
+            revived = true;
+        }
+        id
+    } else {
+        created = true;
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let now = if is_postgres(&state) {
+            "NOW()"
+        } else {
+            "CURRENT_TIMESTAMP"
+        };
+        let insert = format!(
+            "INSERT INTO core_agentplugininstallation (id, tenant_id, project_id, plugin_id, \
+             plugin_version, status, granted_capabilities, credential_ref, installed_by_id, \
+             revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'installed', ?, ?, ?, 0, {now}, {now})"
+        );
+        if let Err(error) = sqlx::query(&insert)
+            .bind(&id)
+            .bind(&tenant_id)
+            .bind(&project_id)
+            .bind(&selected_plugin_id)
+            .bind(&plugin_version)
+            .bind(serde_json::to_string(&granted).unwrap_or_else(|_| "[]".into()))
+            .bind(&credential_ref)
+            .bind(user.id)
+            .execute(pool)
+            .await
+        {
+            return database_error(error.to_string());
+        }
+        id
+    };
+    if created || revived {
+        let _ = crate::audit::record_event(
+            pool,
+            state.config.database_url.as_deref().unwrap_or(""),
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: "agent_plugin.installed",
+                resource_type: "agent_plugin_installation",
+                resource_id: installation_id.as_str(),
+                outcome: "success",
+                actor_id: Some(user.id),
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({
+                    "plugin_key": selected_plugin_key,
+                    "granted_capabilities": granted,
+                }),
+            },
+        )
+        .await;
+    }
+    let manifest_text = if is_postgres(&state) {
+        "CAST(plugin.manifest AS TEXT)"
+    } else {
+        "plugin.manifest"
+    };
+    let capabilities_text = if is_postgres(&state) {
+        "CAST(plugin.capabilities AS TEXT)"
+    } else {
+        "plugin.capabilities"
+    };
+    let input_text = if is_postgres(&state) {
+        "CAST(plugin.input_schema AS TEXT)"
+    } else {
+        "plugin.input_schema"
+    };
+    let output_text = if is_postgres(&state) {
+        "CAST(plugin.output_schema AS TEXT)"
+    } else {
+        "plugin.output_schema"
+    };
+    let granted_text = if is_postgres(&state) {
+        "CAST(installation.granted_capabilities AS TEXT)"
+    } else {
+        "installation.granted_capabilities"
+    };
+    let sql = format!(
+        "SELECT CAST(installation.id AS TEXT) AS id, \
+         CAST(installation.tenant_id AS TEXT) AS tenant_id, \
+         CAST(installation.project_id AS TEXT) AS project_id, \
+         installation.plugin_version, installation.status, {granted_text} AS granted, \
+         installation.credential_ref AS installation_credential, \
+         {} AS created, {} AS updated, \
+         CAST(plugin.id AS TEXT) AS plugin_id, CAST(plugin.tenant_id AS TEXT) AS plugin_tenant_id, \
+         plugin.plugin_key, plugin.name, plugin.description, plugin.version, plugin.protocol, \
+         plugin.endpoint_url, CAST(plugin.auth_required AS INTEGER) AS auth_required_int, plugin.credential_ref AS plugin_credential, \
+         {capabilities_text} AS plugin_capabilities, {manifest_text} AS plugin_manifest, \
+         {input_text} AS plugin_input, {output_text} AS plugin_output, plugin.timeout_seconds, \
+         plugin.max_concurrency, CAST(plugin.enabled AS INTEGER) AS enabled_int, \
+         {} AS plugin_created, {} AS plugin_updated \
+         FROM core_agentplugininstallation installation \
+         JOIN core_agentplugindefinition plugin ON CAST(plugin.id AS TEXT) = CAST(installation.plugin_id AS TEXT) \
+         WHERE CAST(installation.id AS TEXT) = ? LIMIT 1",
+        timestamp(&state, "installation", "created_at"),
+        timestamp(&state, "installation", "updated_at"),
+        timestamp(&state, "plugin", "created_at"),
+        timestamp(&state, "plugin", "updated_at"),
+    );
+    match sqlx::query(&sql)
+        .bind(&installation_id)
+        .fetch_one(pool)
+        .await
+    {
+        Ok(row) => (
+            if created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(installation_json(&row)),
+        )
+            .into_response(),
+        Err(error) => database_error(error.to_string()),
+    }
 }
 
 pub async fn update_installation_status(

@@ -548,3 +548,81 @@ async fn rejects_inventory_larger_than_256_kib() {
     .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
 }
+
+#[tokio::test]
+async fn creates_node_commands_idempotently_and_rejects_forbidden_payloads() {
+    let state = state().await;
+    let create = |key: &str, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/agent-nodes/{NODE}/commands/"))
+            .header(
+                "cookie",
+                "sessionid=approver-session; csrftoken=0123456789abcdef0123456789abcdef",
+            )
+            .header(
+                "x-csrftoken",
+                format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+            )
+            .header("content-type", "application/json")
+            .header("Idempotency-Key", key)
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    let response = router(state.clone())
+        .oneshot(create(
+            "command-create-1",
+            json!({"command_type": "cluster.observe", "payload": {"scope": "all"}}),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["status"], "queued");
+    assert_eq!(body["command_type"], "cluster.observe");
+    let created_id = body["id"].as_str().unwrap().to_string();
+
+    let response = router(state.clone())
+        .oneshot(create(
+            "command-create-1",
+            json!({"command_type": "cluster.observe", "payload": {"scope": "all"}}),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"].as_str().unwrap(), created_id);
+
+    let response = router(state.clone())
+        .oneshot(create(
+            "command-create-2",
+            json!({"command_type": "cluster.observe", "payload": {"shell": "rm -rf /"}}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = router(state.clone())
+        .oneshot(create(
+            "command-create-3",
+            json!({"command_type": "cluster.kubernetes.version.upgrade", "payload": {"version": "1.30"}}),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["status"], "waiting_approval");
+}

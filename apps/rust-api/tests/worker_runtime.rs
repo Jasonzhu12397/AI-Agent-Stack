@@ -148,3 +148,50 @@ async fn task_worker_route_remains_authenticated() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn agent_run_resumes_from_persisted_state() {
+    let (state, path) = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query("INSERT INTO core_agentdefinition (id, tenant_id, project_id, name, slug, description, draft_config, current_version, is_archived, created_by_id, created_at, updated_at) VALUES ('agent-resume', ?, ?, 'Resume', 'resume', '', '{}', 1, 0, 1, datetime('now'), datetime('now'))")
+        .bind(TENANT).bind(PROJECT).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentversion (id, agent_id, version, config_snapshot, created_by_id, published_at) VALUES ('version-resume', 'agent-resume', 1, ?, 1, datetime('now'))")
+        .bind(json!({"model_config_id":"33333333-3333-3333-3333-333333333333","system_prompt":"Resume.","max_tokens":128,"max_iterations":2,"timeout_seconds":30,"knowledge_base_ids":[],"capability_allowlist":[]}).to_string())
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO core_task (id, tenant_id, project_id, created_by_id, task_type, payload, status, idempotency_key, attempts, max_attempts, available_at, created_at, updated_at) VALUES ('task-resume', ?, ?, 1, 'agent.run', '{}', 'queued', 'key-resume', 0, 3, datetime('now'), datetime('now'), datetime('now'))")
+        .bind(TENANT).bind(PROJECT).execute(pool).await.unwrap();
+    let previous = json!({
+        "version": 1,
+        "messages": [
+            {"role": "user", "content": "PRIOR-MARKER"},
+            {"role": "assistant", "content": null, "tool_calls": [{"id": "call-1", "function": {"name": "x", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "{\"ok\":true}"}
+        ],
+        "next_iteration": 1,
+        "input_tokens": 10,
+        "output_tokens": 2,
+        "latency_ms": 7,
+        "total_tool_calls": 1
+    });
+    sqlx::query("INSERT INTO core_agentrun (id, task_id, agent_version_id, input_text, output_text, input_tokens, output_tokens, provider_name, model_name, latency_ms, execution_state, created_at) VALUES ('run-resume', 'task-resume', 'version-resume', 'hello', '', 10, 2, '', '', 7, ?, datetime('now'))")
+        .bind(previous.to_string()).execute(pool).await.unwrap();
+    assert!(ai_agent_stack_api::worker::run_once(&state, "test-worker")
+        .await
+        .unwrap());
+    let state_text: String = sqlx::query_scalar(
+        "SELECT execution_state FROM core_agentrun WHERE CAST(id AS TEXT) = 'run-resume'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let state_json: Value = serde_json::from_str(&state_text).unwrap();
+    assert_eq!(state_json["completed"], true);
+    assert_eq!(state_json["next_iteration"], 2);
+    assert!(state_json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|message| message["content"] == "PRIOR-MARKER"));
+    assert!(state_json["total_tool_calls"].as_i64().unwrap() >= 1);
+    let _ = path;
+}

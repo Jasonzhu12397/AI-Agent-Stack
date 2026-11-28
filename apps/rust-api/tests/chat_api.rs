@@ -462,3 +462,53 @@ async fn runs_scheduled_job_now() {
     assert!(body["items"][0]["last_run_at"].is_string());
     assert!(body["items"][0]["thread_id"].is_string());
 }
+
+#[tokio::test]
+async fn dispatches_due_scheduled_jobs_once() {
+    let state = state().await;
+    let pool = state.identity_pool.clone().expect("identity pool");
+    sqlx::query(
+        "INSERT INTO core_scheduledchatjob (id, tenant_id, project_id, created_by_id, name, prompt, \
+         cadence, hour, weekday, execution_target, effort, status, next_run_at, last_error_code, \
+         created_at, updated_at, model_config_id) VALUES \
+         ('due-job', ?, ?, 1, 'Due digest', 'Summarize the fleet', 'daily', 0, 0, 'cloud', 'auto', \
+         'active', datetime('now', '-5 minutes'), '', datetime('now'), datetime('now'), \
+         'bbbbbbbb-1111-1111-1111-111111111111')",
+    )
+    .bind(TENANT)
+    .bind(PROJECT)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let ran = ai_agent_stack_api::scheduled_api::dispatch_due_jobs(&state, 3)
+        .await
+        .unwrap();
+    assert_eq!(ran, 1);
+    let (thread_id, last_error): (Option<String>, String) = sqlx::query_as(
+        "SELECT CAST(thread_id AS TEXT), last_error_code FROM core_scheduledchatjob WHERE id = 'due-job'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(thread_id.is_some());
+    assert_eq!(last_error, "");
+    let messages: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_agentchatmessage WHERE CAST(thread_id AS TEXT) = ?",
+    )
+    .bind(thread_id.unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(messages, 2);
+    let due: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_scheduledchatjob WHERE id = 'due-job' AND next_run_at <= datetime('now')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(due, 0);
+    let second = ai_agent_stack_api::scheduled_api::dispatch_due_jobs(&state, 3)
+        .await
+        .unwrap();
+    assert_eq!(second, 0);
+}
