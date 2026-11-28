@@ -213,6 +213,62 @@ async fn renews_lease_and_records_terminal_result() {
 }
 
 #[tokio::test]
+async fn expires_approved_rollbacks_past_their_protection_horizon() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query(
+        "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, \
+         lease_token, attempts, max_attempts, approved_at, created_at, updated_at, \
+         node_id, tenant_id, project_id, requested_by_id, deployment_id) \
+         VALUES ('77777777777777777777777777777777', 'cluster.kubernetes.version.rollback', \
+         '{\"snapshot_path\": \"/var/lib/etcd/backups/lab-20260101T010101Z.db\"}', \
+         'queued', 'rb-key', NULL, 0, 3, datetime('now', '-2 days'), datetime('now'), \
+         datetime('now'), ?, 'tenant', 'project', 1, '66666666666666666666666666666666')",
+    )
+    .bind(NODE)
+    .execute(pool)
+    .await
+    .unwrap();
+    let database_url = state.config.database_url.clone().unwrap_or_default();
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    assert_eq!(
+        ai_agent_stack_api::backup_queue::release_expired_rollback_protection(
+            pool,
+            &database_url,
+            &now
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM core_agentcommand WHERE id = '77777777777777777777777777777777'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "expired");
+    let released: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_auditevent \
+         WHERE event_type = 'cluster.kubernetes.rollback.protection.released'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(released, 1);
+    assert_eq!(
+        ai_agent_stack_api::backup_queue::release_expired_rollback_protection(
+            pool,
+            &database_url,
+            &now
+        )
+        .await
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn fences_eph_results_after_the_target_agent_took_ownership() {
     let state = state().await;
     let pool = state.identity_pool.as_ref().unwrap();

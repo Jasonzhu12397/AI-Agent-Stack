@@ -18,6 +18,8 @@ pub const STATUS_ACTION: &str = "cluster.kubernetes.backup.status";
 const ROLLBACK_ACTION: &str = "cluster.kubernetes.version.rollback";
 const UPGRADE_ACTION: &str = "cluster.kubernetes.version.upgrade";
 const POLICY_AUDIT_EVENT: &str = "cluster.etcd_backup.policy.updated";
+const ROLLBACK_PROTECTION_RELEASED_EVENT: &str = "cluster.kubernetes.rollback.protection.released";
+const DEFAULT_ROLLBACK_PROTECTION_HORIZON_MINUTES: i64 = 24 * 60;
 const SCHEDULER_EVENT: &str = "cluster.etcd_backup.scheduler.run";
 const SCHEDULER_RESOURCE: &str = "etcd_backup_scheduler";
 const DEPLOYMENT_RESOURCE: &str = "cluster_deployment";
@@ -851,6 +853,150 @@ async fn record_heartbeat(
         },
     )
     .await
+}
+
+fn rollback_protection_horizon_minutes(spec: &Value) -> i64 {
+    let kubernetes = spec_kubernetes(spec);
+    let raw = kubernetes.get("etcd_backup_rollback_protection_minutes");
+    match raw {
+        Some(Value::Number(number)) => match number.as_i64() {
+            Some(value) if value > 0 => value,
+            _ => DEFAULT_ROLLBACK_PROTECTION_HORIZON_MINUTES,
+        },
+        Some(Value::String(text)) => match text.trim().parse::<i64>() {
+            Ok(value) if value > 0 => value,
+            _ => DEFAULT_ROLLBACK_PROTECTION_HORIZON_MINUTES,
+        },
+        _ => DEFAULT_ROLLBACK_PROTECTION_HORIZON_MINUTES,
+    }
+}
+
+/// Parse the timestamp shapes both dialects hand back: `YYYY-MM-DD HH:MM:SS`
+/// with optional fractional seconds and an optional UTC suffix.
+fn parse_timestamp(text: &str) -> Option<NaiveDateTime> {
+    let trimmed = text.trim().trim_end_matches('Z');
+    let trimmed = trimmed
+        .strip_suffix("+00")
+        .or_else(|| trimmed.strip_suffix("+00:00"))
+        .unwrap_or(trimmed)
+        .trim();
+    let head = trimmed.get(..19).unwrap_or(trimmed);
+    if let Ok(value) = NaiveDateTime::parse_from_str(head, "%Y-%m-%d %H:%M:%S") {
+        return Some(value);
+    }
+    NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f").ok()
+}
+
+/// Move approved-but-unclaimed rollbacks past their horizon to `expired`.
+///
+/// A rollback whose agent is permanently offline can never run, so it must not
+/// hold its snapshot forever. The pass is idempotent: the status is re-checked
+/// in the UPDATE itself and only a real transition writes the audit event.
+pub async fn release_expired_rollback_protection(
+    pool: &AnyPool,
+    database_url: &str,
+    now: &str,
+) -> Result<usize, String> {
+    let Some(now_at) = parse_timestamp(now) else {
+        return Err("invalid now for rollback protection sweep".into());
+    };
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(payload AS TEXT) AS payload_text, \
+         CAST(approved_at AS TEXT) AS approved_text, CAST(deployment_id AS TEXT) AS deployment_id, \
+         CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id \
+         FROM core_agentcommand WHERE command_type = ? AND status = 'queued' \
+         AND approved_at IS NOT NULL AND lease_token IS NULL AND deployment_id IS NOT NULL \
+         ORDER BY approved_at, CAST(id AS TEXT)",
+    )
+    .bind(ROLLBACK_ACTION)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut released = 0;
+    for row in rows {
+        let command_id: String = row.try_get("id").unwrap_or_default();
+        let deployment_id: String = row.try_get("deployment_id").unwrap_or_default();
+        let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+        let project_id: String = row.try_get("project_id").unwrap_or_default();
+        let approved_text: String = row.try_get("approved_text").unwrap_or_default();
+        let Some(approved_at) = parse_timestamp(&approved_text) else {
+            continue;
+        };
+        let spec: Value = sqlx::query_scalar::<_, String>(
+            "SELECT CAST(spec AS TEXT) FROM core_clusterdeployment WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&deployment_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}));
+        let horizon = rollback_protection_horizon_minutes(&spec);
+        let deadline = approved_at + chrono::Duration::minutes(horizon);
+        if deadline > now_at {
+            continue;
+        }
+        let error = json!({"code": "ROLLBACK_PROTECTION_LEASE_EXPIRED", "retryable": false});
+        let now_expr = if database_url.starts_with("postgres") {
+            "NOW()".to_string()
+        } else {
+            format!("'{now}'")
+        };
+        let updated = sqlx::query(&format!(
+            "UPDATE core_agentcommand SET status = 'expired', finished_at = {now_expr}, \
+             lease_token = NULL, lease_expires_at = NULL, error = ?, updated_at = {now_expr} \
+             WHERE CAST(id AS TEXT) = ? AND status = 'queued' AND lease_token IS NULL"
+        ))
+        .bind(error.to_string())
+        .bind(&command_id)
+        .execute(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        if updated.rows_affected() == 0 {
+            continue;
+        }
+        released += 1;
+        let payload: Value = row
+            .try_get::<Option<String>, _>("payload_text")
+            .ok()
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| json!({}));
+        let snapshot_path = payload
+            .get("snapshot_path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Err(error) = crate::audit::record_event(
+            pool,
+            database_url,
+            crate::audit::AuditEvent {
+                tenant_id: Some(tenant_id.as_str()),
+                project_id: Some(project_id.as_str()),
+                event_type: ROLLBACK_PROTECTION_RELEASED_EVENT,
+                resource_type: "agent_command",
+                resource_id: command_id.as_str(),
+                outcome: "success",
+                actor_id: None,
+                request_id: "",
+                remote_addr: None,
+                user_agent: "",
+                metadata: json!({
+                    "deployment_id": deployment_id,
+                    "command_type": ROLLBACK_ACTION,
+                    "snapshot_path": snapshot_path,
+                    "approved_at": approved_text,
+                    "protection_horizon_minutes": horizon,
+                }),
+            },
+        )
+        .await
+        {
+            tracing::warn!(%error, %command_id, "rollback protection audit event failed");
+        }
+    }
+    Ok(released)
 }
 
 /// Queue the hourly backup for every installed Target cluster and record one

@@ -38,6 +38,21 @@ pub fn spawn(state: AppState) {
                 if let Some(pool) = state.identity_pool.as_ref() {
                     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
                     let database_url = state.config.database_url.clone().unwrap_or_default();
+                    match crate::backup_queue::release_expired_rollback_protection(
+                        pool,
+                        &database_url,
+                        &now,
+                    )
+                    .await
+                    {
+                        Ok(0) => {}
+                        Ok(released) => {
+                            tracing::info!(released, "expired unclaimed rollback protection")
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "rollback protection sweep failed")
+                        }
+                    }
                     match crate::backup_queue::dispatch_hourly_backups(pool, &database_url, &now)
                         .await
                     {
