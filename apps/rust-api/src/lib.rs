@@ -32,6 +32,7 @@ pub mod mcp_api;
 pub mod model_api;
 pub mod native;
 pub mod notification_api;
+pub mod open_data;
 pub mod ops_cli;
 pub mod platform_api;
 pub mod plugin_api;

@@ -369,7 +369,40 @@ pub(crate) async fn invoke(
             json!({"code": "CAPABILITY_AUTH_REQUIRED"}),
         ));
     }
-    if row.try_get::<String, _>("protocol").unwrap_or_default() != "http_json" {
+    let protocol: String = row.try_get("protocol").unwrap_or_default();
+    let installation_id: String = row.try_get("installation_id").unwrap_or_default();
+    if protocol == "open_data" {
+        // Built-in map and weather capabilities run in this process; there is
+        // no endpoint or credential to reach.
+        let started = std::time::Instant::now();
+        let outcome = crate::open_data::invoke(capability, &invocation_args).await;
+        let latency = started.elapsed().as_millis() as i64;
+        let (status, code) = match &outcome {
+            Ok(_) => ("succeeded", ""),
+            Err(error) => ("failed", error.code),
+        };
+        let _ = sqlx::query(
+            "INSERT INTO core_agentcapabilityinvocation (id, installation_id, capability, protocol, status, error_code, latency_ms, created_at) \
+             VALUES (?, ?, ?, 'open_data', ?, ?, ?, CURRENT_TIMESTAMP)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&installation_id)
+        .bind(capability)
+        .bind(status)
+        .bind(code)
+        .bind(latency)
+        .execute(pool)
+        .await;
+        return match outcome {
+            Ok(result) => Ok(result),
+            Err(error) => Err(rpc_data(
+                -32602,
+                &error.message,
+                json!({"code": error.code, "status": error.status}),
+            )),
+        };
+    }
+    if protocol != "http_json" {
         return Err(rpc_data(
             -32602,
             "Protocol has no invocation adapter.",
@@ -384,7 +417,6 @@ pub(crate) async fn invoke(
     let started = std::time::Instant::now();
     let response = client.post(&endpoint).json(&json!({"capability": capability, "arguments": invocation_args, "plugin_key": row.try_get::<String, _>("plugin_key").unwrap_or_default()})).send().await;
     let latency = started.elapsed().as_millis() as i64;
-    let installation_id: String = row.try_get("installation_id").unwrap_or_default();
     let response = match response {
         Ok(response) if response.status().is_success() => response,
         _ => {
@@ -397,7 +429,26 @@ pub(crate) async fn invoke(
             ));
         }
     };
-    let result: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    let mut result: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    // Studio plugins declare a single free-form ``text`` output: the platform
+    // handed the model the JSON body as text so the schema stayed honest.
+    let studio = row
+        .try_get::<String, _>("manifest")
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|manifest| manifest.get("studio").cloned())
+        .map(|studio| !studio.is_null())
+        .unwrap_or(false);
+    let text_only = definition
+        .get("output_schema")
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .map(|properties| properties.len() == 1 && properties.contains_key("text"))
+        .unwrap_or(false);
+    if studio && text_only {
+        let text: String = serde_json::to_string(&result).unwrap_or_default();
+        result = json!({"text": text.chars().take(65_536).collect::<String>()});
+    }
     let _ = sqlx::query("INSERT INTO core_agentcapabilityinvocation (id, installation_id, capability, protocol, status, error_code, latency_ms, created_at) VALUES (?, ?, ?, 'http_json', 'succeeded', '', ?, CURRENT_TIMESTAMP)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&installation_id).bind(capability).bind(latency).execute(pool).await;
     let _ = crate::audit::record_event(
