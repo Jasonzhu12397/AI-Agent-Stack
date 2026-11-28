@@ -1,0 +1,869 @@
+#![allow(clippy::result_large_err)]
+//! Native Plugin Studio discovery, publish and connection test endpoints.
+
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::{json, Map, Value};
+use sqlx::Row;
+
+use crate::billing_api::{require_user, tenant_admin, tenant_member};
+use crate::proxy::AppState;
+
+const MAX_TOOLS: usize = 32;
+
+fn studio_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        Json(json!({"error": {"code": code, "message": message, "details": {}}})),
+    )
+        .into_response()
+}
+
+fn database_error(message: String) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error": {"code": "DATABASE_UNAVAILABLE", "message": message}})),
+    )
+        .into_response()
+}
+
+fn safe_name(raw: &str) -> Option<String> {
+    let mut cleaned = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            cleaned.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '_' | '-') {
+            cleaned.push('_');
+        }
+    }
+    let trimmed = cleaned.trim_matches('_');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(64).collect())
+    }
+}
+
+fn text_output_schema() -> Value {
+    json!({"type": "object", "properties": {"text": {"type": "string", "maxLength": 65536}}, "required": ["text"], "additionalProperties": false})
+}
+
+fn parameter_schema(raw: &Value, location: &str) -> Value {
+    let mut schema = raw
+        .get("schema")
+        .cloned()
+        .unwrap_or_else(|| json!({"type": "string"}));
+    let kind = schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("string");
+    if matches!(location, "path" | "query") && !matches!(kind, "string" | "integer") {
+        schema = json!({"type": "string", "maxLength": 65536});
+    }
+    schema
+}
+
+struct Discovered {
+    protocol: &'static str,
+    endpoint_url: String,
+    manifest: Value,
+    capabilities: Vec<Value>,
+    skipped: Vec<Value>,
+    connection: Value,
+}
+
+fn build_openapi_manifest(
+    base_url: &str,
+    document_url: &str,
+    document: &Value,
+) -> Result<Discovered, Response> {
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            studio_error(
+                StatusCode::BAD_REQUEST,
+                "PLUGIN_DOCUMENT_INVALID",
+                "The document is not an OpenAPI document with paths.",
+            )
+        })?;
+    if document.get("openapi").is_none() && document.get("swagger").is_none() {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_DOCUMENT_INVALID",
+            "The document is not an OpenAPI document.",
+        ));
+    }
+    let mut capabilities = Vec::new();
+    let mut operations = Map::new();
+    let mut skipped = Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    for (raw_path, path_item) in paths {
+        if !raw_path.starts_with('/') {
+            continue;
+        }
+        let Some(path_item) = path_item.as_object() else {
+            continue;
+        };
+        for (method, operation) in path_item {
+            let method = method.to_ascii_lowercase();
+            if !matches!(method.as_str(), "get" | "post") {
+                if matches!(
+                    method.as_str(),
+                    "put" | "patch" | "delete" | "head" | "options" | "trace"
+                ) {
+                    skipped.push(json!({"method": method.to_uppercase(), "path": raw_path, "reason": "Method is not executable by the safe HTTP connector."}));
+                }
+                continue;
+            }
+            let Some(operation) = operation.as_object() else {
+                continue;
+            };
+            if capabilities.len() >= MAX_TOOLS {
+                skipped.push(json!({"method": method.to_uppercase(), "path": raw_path, "reason": "The 32 capability limit was reached."}));
+                continue;
+            }
+            let default_name = format!("{method}_{raw_path}");
+            let raw_name = operation
+                .get("operationId")
+                .and_then(Value::as_str)
+                .unwrap_or(&default_name);
+            let base_name = safe_name(raw_name)
+                .unwrap_or_else(|| safe_name(&default_name).unwrap_or_else(|| "operation".into()));
+            let mut name = base_name.clone();
+            let mut suffix = 2;
+            while names.contains(&name) {
+                name = format!("{base_name}_{suffix}");
+                suffix += 1;
+            }
+            names.insert(name.clone());
+            let mut properties = Map::new();
+            let mut required = Vec::new();
+            let mut path_params = Map::new();
+            let mut query_params = Map::new();
+            for source in [path_item.get("parameters"), operation.get("parameters")]
+                .into_iter()
+                .flatten()
+            {
+                let Some(list) = source.as_array() else {
+                    continue;
+                };
+                for parameter in list {
+                    let Some(parameter) = parameter.as_object() else {
+                        continue;
+                    };
+                    let Some(field) = parameter.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let location = parameter.get("in").and_then(Value::as_str).unwrap_or("");
+                    if !matches!(location, "path" | "query") {
+                        continue;
+                    }
+                    let Some(argument) = safe_name(field) else {
+                        continue;
+                    };
+                    if properties.contains_key(&argument) {
+                        continue;
+                    }
+                    properties.insert(
+                        argument.clone(),
+                        parameter_schema(&Value::Object(parameter.clone()), location),
+                    );
+                    if parameter
+                        .get("required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        || location == "path"
+                    {
+                        required.push(Value::String(argument.clone()));
+                    }
+                    if location == "path" {
+                        path_params.insert(argument.clone(), Value::String(argument));
+                    } else {
+                        query_params.insert(field.to_string(), Value::String(argument));
+                    }
+                }
+            }
+            let body_schema = operation
+                .get("requestBody")
+                .and_then(|body| body.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| {
+                    content
+                        .iter()
+                        .find(|(media, _)| *media == "application/json" || media.ends_with("+json"))
+                        .map(|(_, media)| media)
+                })
+                .and_then(|media| media.get("schema"))
+                .cloned();
+            let body_required = operation
+                .get("requestBody")
+                .and_then(|body| body.get("required"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if let Some(schema) = body_schema {
+                let normalized = if schema.get("type").and_then(Value::as_str) == Some("object") {
+                    schema
+                } else {
+                    json!({"type": "object", "properties": {"value": schema}, "required": ["value"], "additionalProperties": false})
+                };
+                properties.insert("body".into(), normalized);
+                if body_required {
+                    required.push(Value::String("body".into()));
+                }
+            }
+            let input_schema = json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            });
+            let read_only = method == "get";
+            capabilities.push(json!({
+                "name": name,
+                "description": operation.get("summary").or_else(|| operation.get("description")).and_then(Value::as_str).unwrap_or("").chars().take(1000).collect::<String>(),
+                "input_schema": input_schema,
+                "output_schema": text_output_schema(),
+                "risk_level": if read_only { "low" } else { "high" },
+                "timeout_seconds": 30,
+                "source": "declared",
+                "remote_operation": format!("{} {raw_path}", method.to_uppercase()),
+            }));
+            let mut entry = Map::new();
+            entry.insert("method".into(), Value::String(method.to_uppercase()));
+            entry.insert("path".into(), Value::String(raw_path.clone()));
+            entry.insert("path_params".into(), Value::Object(path_params));
+            entry.insert("query_params".into(), Value::Object(query_params));
+            entry.insert("body_param".into(), Value::String("body".into()));
+            entry.insert("read_only".into(), Value::Bool(read_only));
+            if !read_only {
+                entry.insert("requires_approval".into(), Value::Bool(true));
+            }
+            operations.insert(name, Value::Object(entry));
+        }
+    }
+    if capabilities.is_empty() {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_NO_CAPABILITIES",
+            "No safe GET or POST operations were found in the OpenAPI document.",
+        ));
+    }
+    let approval: Vec<Value> = capabilities
+        .iter()
+        .filter(|entry| entry.get("risk_level").and_then(Value::as_str) == Some("high"))
+        .filter_map(|entry| entry.get("name").cloned())
+        .collect();
+    let manifest = json!({
+        "version": 1,
+        "capabilities": capabilities,
+        "http": {"base_url": base_url, "operations": operations},
+        "permission_policy": {
+            "default": "read_only",
+            "approval_required": approval,
+            "blocked_methods": ["DELETE", "HEAD", "OPTIONS", "PATCH", "PUT", "TRACE"],
+            "max_risk": "high",
+        },
+        "studio": {
+            "plugin_type": "openapi",
+            "document_url": document_url,
+            "document_status": 200,
+            "auth_mode": "none",
+            "discovered_at": chrono::Utc::now().to_rfc3339(),
+        },
+    });
+    Ok(Discovered {
+        protocol: "http_json",
+        endpoint_url: base_url.to_string(),
+        manifest,
+        capabilities,
+        skipped,
+        connection: json!({
+            "status": "success",
+            "http_status": 200,
+            "authenticated": false,
+            "message": "OpenAPI document fetched and validated.",
+        }),
+    })
+}
+
+async fn fetch_document(url: &str, document: Option<&Value>) -> Result<(Value, String), Response> {
+    if let Some(document) = document {
+        if !document.is_object() {
+            return Err(studio_error(
+                StatusCode::BAD_REQUEST,
+                "PLUGIN_DOCUMENT_INVALID",
+                "The pasted OpenAPI document must be an object.",
+            ));
+        }
+        return Ok((document.clone(), "inline://openapi.json".into()));
+    }
+    if let Some(url) = url.trim().strip_prefix("inline://") {
+        let _ = url;
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_DOCUMENT_REQUIRED",
+            "An inline document must be supplied.",
+        ));
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|error| database_error(error.to_string()))?;
+    let response = client.get(url).send().await.map_err(|error| {
+        studio_error(
+            StatusCode::BAD_GATEWAY,
+            "PLUGIN_DISCOVERY_FAILED",
+            &format!("The document could not be fetched: {error}"),
+        )
+    })?;
+    if !response.status().is_success() {
+        return Err(studio_error(
+            StatusCode::BAD_GATEWAY,
+            "PLUGIN_DISCOVERY_FAILED",
+            &format!("The document endpoint returned HTTP {}.", response.status()),
+        ));
+    }
+    let text = response.text().await.map_err(|error| {
+        studio_error(
+            StatusCode::BAD_GATEWAY,
+            "PLUGIN_DISCOVERY_FAILED",
+            &format!("The document body could not be read: {error}"),
+        )
+    })?;
+    let document: Value = serde_json::from_str(&text).map_err(|error| {
+        studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_DOCUMENT_INVALID",
+            &format!("The document is not valid JSON: {error}"),
+        )
+    })?;
+    Ok((document, url.to_string()))
+}
+
+async fn discover(payload: &Value) -> Result<Discovered, Response> {
+    let plugin_type = payload
+        .get("plugin_type")
+        .and_then(Value::as_str)
+        .unwrap_or("openapi");
+    let base_url = payload
+        .get("base_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if base_url.is_empty() {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "base_url is required.",
+        ));
+    }
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "base_url must be an absolute HTTP(S) URL.",
+        ));
+    }
+    if plugin_type == "mcp" {
+        return Err(studio_error(
+            StatusCode::NOT_IMPLEMENTED,
+            "PLUGIN_TYPE_UNSUPPORTED",
+            "MCP discovery is not available in this native build yet.",
+        ));
+    }
+    if plugin_type != "openapi" {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_TYPE_UNSUPPORTED",
+            "Unsupported plugin type.",
+        ));
+    }
+    let pasted = payload.get("document").filter(|value| !value.is_null());
+    let document_url = payload
+        .get("document_url")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let (document, actual_url) = if let Some(pasted) = pasted {
+        fetch_document("", Some(pasted)).await?
+    } else if !document_url.trim().is_empty() {
+        fetch_document(document_url, None).await?
+    } else {
+        let mut last_error = None;
+        for candidate in [
+            format!("{}/openapi.json", base_url.trim_end_matches('/')),
+            format!("{}/swagger.json", base_url.trim_end_matches('/')),
+            format!("{}/docs/openapi.json", base_url.trim_end_matches('/')),
+        ] {
+            match fetch_document(&candidate, None).await {
+                Ok(result) => return build_openapi_manifest(base_url, &result.1, &result.0),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        return Err(last_error.unwrap_or_else(|| {
+            studio_error(
+                StatusCode::BAD_REQUEST,
+                "PLUGIN_DOCUMENT_REQUIRED",
+                "No OpenAPI document was supplied and common discovery paths were not found.",
+            )
+        }));
+    };
+    build_openapi_manifest(base_url, &actual_url, &document)
+}
+
+fn fingerprint(manifest: &Value) -> String {
+    use sha2::Digest;
+    let stable = manifest
+        .as_object()
+        .map(|map| {
+            let mut clone = map.clone();
+            clone.remove("studio");
+            Value::Object(clone)
+        })
+        .unwrap_or_else(|| manifest.clone());
+    let encoded = serde_json::to_string(&stable).unwrap_or_default();
+    format!("{:x}", sha2::Sha256::digest(encoded.as_bytes()))
+}
+
+fn discover_response(discovered: Discovered) -> Response {
+    let schema_fingerprint = fingerprint(&discovered.manifest);
+    Json(json!({
+        "protocol": discovered.protocol,
+        "endpoint_url": discovered.endpoint_url,
+        "manifest": discovered.manifest,
+        "capabilities": discovered.capabilities,
+        "skipped": discovered.skipped,
+        "connection": discovered.connection,
+        "schema_fingerprint": schema_fingerprint,
+        "auth_mode": "none",
+        "credential_configured": false,
+        "credential_kind": "none",
+        "generated": {
+            "manifest": true,
+            "input_schema": true,
+            "output_schema": true,
+            "auth_schema": true,
+            "tool_definitions": discovered.capabilities.len(),
+            "dynamic_form": true,
+            "permission_policy": true,
+        },
+    }))
+    .into_response()
+}
+
+async fn authorize(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_id: &str,
+    admin_only: bool,
+) -> Result<i64, Response> {
+    let user = require_user(state, headers).await?;
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return Err(database_error("Identity pool is not configured.".into()));
+    };
+    if !tenant_member(pool, tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return Err(studio_error(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Not found.",
+        ));
+    }
+    if admin_only {
+        match tenant_admin(pool, tenant_id, user.id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(studio_error(
+                    StatusCode::FORBIDDEN,
+                    "TENANT_ADMIN_REQUIRED",
+                    "Tenant administrator permission required.",
+                ))
+            }
+            Err(error) => return Err(database_error(error)),
+        }
+    }
+    Ok(user.id)
+}
+
+pub async fn studio_discover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers, &tenant_id, true).await {
+        return response;
+    }
+    match discover(&payload).await {
+        Ok(discovered) => discover_response(discovered),
+        Err(response) => response,
+    }
+}
+
+pub async fn studio_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    if let Err(response) = authorize(&state, &headers, &tenant_id, true).await {
+        return response;
+    }
+    match discover(&payload).await {
+        Ok(discovered) => Json(json!({
+            "status": "success",
+            "connection": discovered.connection,
+            "tool_count": discovered.capabilities.len(),
+            "protocol": discovered.protocol,
+        }))
+        .into_response(),
+        Err(response) => response,
+    }
+}
+
+fn valid_plugin_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+}
+
+fn next_version(previous: &str) -> String {
+    let parts: Vec<&str> = previous.split('.').collect();
+    if parts.len() == 3 {
+        if let (Ok(major), Ok(minor), Ok(patch)) = (
+            parts[0].parse::<u64>(),
+            parts[1].parse::<u64>(),
+            parts[2].parse::<u64>(),
+        ) {
+            return format!("{major}.{minor}.{}", patch + 1);
+        }
+    }
+    if previous.is_empty() {
+        "1.0.0".into()
+    } else {
+        format!("{previous}.1")
+    }
+}
+
+pub async fn studio_publish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user_id = match authorize(&state, &headers, &tenant_id, true).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let plugin_key = payload
+        .get("plugin_key")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !valid_plugin_key(plugin_key) {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_KEY_INVALID",
+            "plugin_key must be a lowercase hyphenated identifier.",
+        );
+    }
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() || name.chars().count() > 120 {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_NAME_INVALID",
+            "name is required and must be at most 120 characters.",
+        );
+    }
+    let description = payload
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if description.chars().count() > 4000 {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_DESCRIPTION_INVALID",
+            "description must be at most 4,000 characters.",
+        );
+    }
+    let project_id = payload.get("project_id").and_then(Value::as_str);
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return database_error("Identity pool is not configured.".into());
+    };
+    if let Some(project_id) = project_id {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM core_project WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?",
+        )
+        .bind(project_id)
+        .bind(&tenant_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if exists == 0 {
+            return studio_error(
+                StatusCode::BAD_REQUEST,
+                "PROJECT_INVALID",
+                "project_id is invalid.",
+            );
+        }
+    }
+    let discovered = match discover(&payload).await {
+        Ok(discovered) => discovered,
+        Err(response) => return response,
+    };
+    let all_names: Vec<String> = discovered
+        .capabilities
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    let selected: Vec<String> = match payload.get("selected_capabilities") {
+        None | Some(Value::Null) => all_names.clone(),
+        Some(Value::Array(items)) => {
+            let list: Vec<String> = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            if list.is_empty()
+                || list.len() > MAX_TOOLS
+                || list.iter().any(|item| !all_names.contains(item))
+            {
+                return studio_error(
+                    StatusCode::BAD_REQUEST,
+                    "PLUGIN_CAPABILITIES_INVALID",
+                    "selected_capabilities must be a non-empty subset of discovered tools.",
+                );
+            }
+            let mut unique = Vec::new();
+            for item in list {
+                if !unique.contains(&item) {
+                    unique.push(item);
+                }
+            }
+            unique
+        }
+        Some(_) => {
+            return studio_error(
+                StatusCode::BAD_REQUEST,
+                "PLUGIN_CAPABILITIES_INVALID",
+                "selected_capabilities must be a list.",
+            )
+        }
+    };
+    let mut manifest = discovered.manifest.clone();
+    if let Some(object) = manifest.as_object_mut() {
+        if let Some(capabilities) = object.get_mut("capabilities").and_then(Value::as_array_mut) {
+            capabilities.retain(|entry| {
+                entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|name| selected.iter().any(|item| item == name))
+                    .unwrap_or(false)
+            });
+        }
+    }
+    let schema_fingerprint = fingerprint(&manifest);
+    if let Some(object) = manifest.as_object_mut() {
+        if let Some(studio) = object.get_mut("studio").and_then(Value::as_object_mut) {
+            studio.insert(
+                "schema_fingerprint".into(),
+                Value::String(schema_fingerprint.clone()),
+            );
+        }
+    }
+    let latest = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, version, manifest FROM core_agentplugindefinition \
+         WHERE CAST(tenant_id AS TEXT) = ? AND plugin_key = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(plugin_key)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let unchanged = latest
+        .as_ref()
+        .map(|row| {
+            row.try_get::<String, _>("manifest")
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .map(|value| fingerprint(&value) == schema_fingerprint)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let plugin_id = if let (true, Some(row)) = (unchanged, latest.as_ref()) {
+        row.try_get::<String, _>("id").unwrap_or_default()
+    } else {
+        let previous_version = latest
+            .as_ref()
+            .and_then(|row| row.try_get::<String, _>("version").ok())
+            .unwrap_or_default();
+        let version = payload
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| next_version(&previous_version));
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let now = if state
+            .config
+            .database_url
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("postgres")
+        {
+            "NOW()"
+        } else {
+            "datetime('now')"
+        };
+        let insert = format!(
+            "INSERT INTO core_agentplugindefinition (id, tenant_id, created_by_id, plugin_key, name, \
+             description, version, protocol, endpoint_url, auth_required, credential_ref, capabilities, \
+             manifest, input_schema, output_schema, timeout_seconds, max_concurrency, enabled, \
+             created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '{{}}', '{{}}', 30, 4, 1, {now}, {now})"
+        );
+        if let Err(error) = sqlx::query(&insert)
+            .bind(&id)
+            .bind(&tenant_id)
+            .bind(user_id)
+            .bind(plugin_key)
+            .bind(name)
+            .bind(description)
+            .bind(&version)
+            .bind(discovered.protocol)
+            .bind(&discovered.endpoint_url)
+            .bind(serde_json::to_string(&selected).unwrap_or_else(|_| "[]".into()))
+            .bind(serde_json::to_string(&manifest).unwrap_or_default())
+            .execute(pool)
+            .await
+        {
+            return database_error(error.to_string());
+        }
+        id_after_insert(&id, &version)
+            .map(|_| id)
+            .unwrap_or_default()
+    };
+    let installation = if let Some(project_id) = project_id {
+        let installation_id = uuid::Uuid::new_v4().simple().to_string();
+        let now = if state
+            .config
+            .database_url
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("postgres")
+        {
+            "NOW()"
+        } else {
+            "datetime('now')"
+        };
+        let version: String = sqlx::query_scalar(
+            "SELECT version FROM core_agentplugindefinition WHERE CAST(id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(&plugin_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default();
+        let update = format!(
+            "UPDATE core_agentplugininstallation SET plugin_id = ?, plugin_version = ?, status = 'installed', \
+             granted_capabilities = ?, updated_at = {now} WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? \
+             AND CAST(plugin_id AS TEXT) IN (SELECT CAST(id AS TEXT) FROM core_agentplugindefinition WHERE plugin_key = ?)"
+        );
+        let existing: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM core_agentplugininstallation WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? AND CAST(plugin_id AS TEXT) = ?",
+        )
+        .bind(&tenant_id)
+        .bind(project_id)
+        .bind(&plugin_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if existing == 0 {
+            let _ = sqlx::query(
+                "INSERT INTO core_agentplugininstallation (id, tenant_id, project_id, plugin_id, plugin_version, status, granted_capabilities, credential_ref, installed_by_id, revision, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, 'installed', ?, '', ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .bind(&installation_id)
+            .bind(&tenant_id)
+            .bind(project_id)
+            .bind(&plugin_id)
+            .bind(&version)
+            .bind(serde_json::to_string(&selected).unwrap_or_else(|_| "[]".into()))
+            .bind(user_id)
+            .execute(pool)
+            .await;
+        } else {
+            let _ = sqlx::query(&update)
+                .bind(&plugin_id)
+                .bind(&version)
+                .bind(serde_json::to_string(&selected).unwrap_or_else(|_| "[]".into()))
+                .bind(&tenant_id)
+                .bind(project_id)
+                .bind(plugin_key)
+                .execute(pool)
+                .await;
+        }
+        Some(json!({
+            "id": installation_id,
+            "project": project_id,
+            "plugin": plugin_id,
+            "plugin_version": version,
+            "status": "installed",
+            "granted_capabilities": selected,
+        }))
+    } else {
+        None
+    };
+    let version: String = sqlx::query_scalar(
+        "SELECT version FROM core_agentplugindefinition WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&plugin_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_default();
+    (
+        if unchanged {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(json!({
+            "definition": {
+                "id": plugin_id,
+                "plugin_key": plugin_key,
+                "name": name,
+                "version": version,
+                "protocol": discovered.protocol,
+                "endpoint_url": discovered.endpoint_url,
+                "capabilities": selected,
+            },
+            "installation": installation,
+            "schema_fingerprint": schema_fingerprint,
+            "changed": !unchanged,
+            "version": version,
+        })),
+    )
+        .into_response()
+}
+
+fn id_after_insert(_id: &str, _version: &str) -> Option<()> {
+    Some(())
+}

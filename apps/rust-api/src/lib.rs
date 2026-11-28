@@ -28,6 +28,7 @@ pub mod native;
 pub mod notification_api;
 pub mod platform_api;
 pub mod plugin_api;
+pub mod plugin_studio_api;
 pub mod preferences_api;
 pub mod privacy_api;
 pub mod proxy;

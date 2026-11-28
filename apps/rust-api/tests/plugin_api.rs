@@ -373,3 +373,71 @@ async fn rejects_unknown_capability_when_binding_agents() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "BINDING_CAPABILITY_NOT_DECLARED");
 }
+
+fn openapi_document() -> Value {
+    json!({
+        "openapi": "3.0.0",
+        "paths": {
+            "/weather": {
+                "get": {
+                    "operationId": "weather_lookup",
+                    "summary": "Lookup weather",
+                    "parameters": [
+                        {"name": "city", "in": "query", "required": true, "schema": {"type": "string"}}
+                    ],
+                    "responses": {"200": {"content": {"application/json": {"schema": {"type": "object"}}}}}
+                }
+            },
+            "/echo": {
+                "post": {
+                    "operationId": "echo",
+                    "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string"}}}}}},
+                    "responses": {"200": {"content": {"application/json": {"schema": {"type": "object"}}}}}
+                }
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn studio_discovers_an_inline_openapi_document() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/studio/discover/"),
+        Some(json!({
+            "plugin_type": "openapi",
+            "base_url": "https://example.com",
+            "document": openapi_document(),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["protocol"], "http_json");
+    assert_eq!(body["capabilities"].as_array().unwrap().len(), 2);
+    assert_eq!(body["auth_mode"], "none");
+}
+
+#[tokio::test]
+async fn studio_publishes_a_definition_and_installation() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/studio/publish/"),
+        Some(json!({
+            "plugin_type": "openapi",
+            "base_url": "https://example.com",
+            "document": openapi_document(),
+            "plugin_key": "openapi-demo",
+            "name": "OpenAPI Demo",
+            "project_id": PROJECT,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["changed"], true);
+    assert_eq!(body["definition"]["plugin_key"], "openapi-demo");
+    assert_eq!(body["installation"]["status"], "installed");
+}

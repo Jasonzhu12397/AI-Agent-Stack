@@ -471,6 +471,18 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::billing_ext_api::payment_callback),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/studio/discover/",
+                axum::routing::post(crate::plugin_studio_api::studio_discover),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/studio/test/",
+                axum::routing::post(crate::plugin_studio_api::studio_test),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/studio/publish/",
+                axum::routing::post(crate::plugin_studio_api::studio_publish),
+            )
+            .route(
                 "/api/v1/users/me/",
                 get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
             )
