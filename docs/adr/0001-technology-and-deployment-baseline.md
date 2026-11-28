@@ -1,6 +1,6 @@
 # ADR-0001: Technology and deployment baseline
 
-- Status: Accepted; supersedes the original FastAPI/React decision.
+- Status: Superseded by the Rust-only cutover; retained as historical context.
 - Date: 2026-11-02
 
 ## Context

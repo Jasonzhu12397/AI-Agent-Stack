@@ -92,51 +92,6 @@ jobs:
         run: |
           python -m compileall -q deploy/agents deploy/cloud-control-plane tests/integration
 
-  python-schema:
-    name: Django schema and migrations
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: agent_stack
-          POSTGRES_USER: agent
-          POSTGRES_PASSWORD: agent_dev_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U agent -d agent_stack"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/agent_stack
-      APP_ENV: test
-      SECRET_KEY: ci-test-secret-key
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Django system checks
-        run: python apps/platform-api/manage.py check
-      - name: Check migration model drift
-        run: python apps/platform-api/manage.py makemigrations --check --dry-run
-      - name: Apply Django migrations
-        run: python apps/platform-api/manage.py migrate --noinput
-      - name: Dev agent CLI smoke
-        run: |
-          python -m apps.dev_agent capabilities
-          python -m apps.dev_agent scan --module apps.dev_agent.scanner
-          python -m apps.dev_agent.worker --help
-          python tools/dev_agent_pr_review.py --base HEAD --head HEAD
-
   web:
     name: Web unit tests and build
     runs-on: ubuntu-latest
@@ -187,117 +142,6 @@ jobs:
         run: python3 tests/integration/test_agent_mtls_proxy.py
 
   # ---------------- Stage 2: unit and integration tests ----------------
-  unit-tests:
-    name: Unit tests shard ${{ matrix.shard }}/4
-    needs: [static, python-schema]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: agent_stack
-          POSTGRES_USER: agent
-          POSTGRES_PASSWORD: agent_dev_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U agent -d agent_stack"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/agent_stack
-      APP_ENV: test
-      SECRET_KEY: ci-test-secret-key
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Select shard files
-        id: shard
-        run: |
-          files=$(find tests -maxdepth 1 -name 'test_*.py' -print | sort)
-          index=0
-          selected=""
-          for file in $files; do
-            if [ $((index % 4)) -eq $((${{ matrix.shard }} - 1)) ]; then
-              selected="$selected $file"
-            fi
-            index=$((index + 1))
-          done
-          echo "files=$selected" >> "$GITHUB_OUTPUT"
-          echo "Shard ${{ matrix.shard }} runs: $selected"
-      - name: Test shard ${{ matrix.shard }}
-        run: |
-          mkdir -p reports
-          pytest -o addopts="" -q ${{ steps.shard.outputs.files }} \
-            --junitxml=reports/pytest-shard-${{ matrix.shard }}.xml
-      - name: Upload shard report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-shard-${{ matrix.shard }}
-          path: reports/pytest-shard-${{ matrix.shard }}.xml
-          retention-days: 7
-
-  control-postgres:
-    name: Cloud Control PostgreSQL and mTLS integration
-    needs: [static, python-schema]
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: cloud_control_test
-          POSTGRES_USER: agent
-          POSTGRES_PASSWORD: agent_dev_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U agent -d cloud_control_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      CLOUD_CONTROL_TEST_DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/cloud_control_test
-      DATABASE_URL: postgresql://agent:agent_dev_password@localhost:5432/cloud_control_test
-      APP_ENV: test
-      SECRET_KEY: ci-test-secret-key
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Control workspace integration tests over mTLS
-        run: |
-          mkdir -p reports
-          pytest -o addopts="" -q tests/integration/test_cloud_control_postgres.py \
-            --junitxml=reports/control-postgres.xml
-      - name: Upload integration report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: control-postgres-report
-          path: reports/control-postgres.xml
-          retention-days: 7
-
   metal3-crds:
     name: Metal3 and SR-IOV CRD integration
     needs: [static]
@@ -349,8 +193,6 @@ jobs:
             dockerfile: Dockerfile.target-agent
           - image: cloud-control-agent
             dockerfile: Dockerfile.cloud-control-agent
-          - image: cloud-agent
-            dockerfile: Dockerfile.cloud-agent
     steps:
       - uses: actions/checkout@v4
       - name: Build ${{ matrix.image }}
@@ -378,73 +220,23 @@ jobs:
           cp .env.example .env
       - name: Build and start the complete local stack
         run: docker compose --env-file .env -f deploy/docker-compose.yml up --build -d
-      - name: Smoke test Django API and Vue Studio
+      - name: Smoke test Rust API and Vue Studio
         run: |
           curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/live
           curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:8000/health/ready
           curl --retry 30 --retry-all-errors --retry-delay 2 --max-time 5 --fail http://localhost:5173/
-          test "$(docker compose --env-file .env -f deploy/docker-compose.yml ps --status running --services worker)" = "worker"
       - name: Show stack diagnostics
         if: always()
         run: |
           docker compose --env-file .env -f deploy/docker-compose.yml ps --all
-          docker compose --env-file .env -f deploy/docker-compose.yml logs --no-color api worker web || true
+          docker compose --env-file .env -f deploy/docker-compose.yml logs --no-color api web || true
       - name: Stop local stack
         if: always()
         run: docker compose --env-file .env -f deploy/docker-compose.yml down -v
 
-  qdrant-live:
-    name: Real Qdrant collection and RAG integration
-    needs: [static, python-schema]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      qdrant:
-        image: qdrant/qdrant:v1.20.2
-        ports:
-          - 6333:6333
-    env:
-      QDRANT_LIVE_URL: http://127.0.0.1:6333
-      DATABASE_URL: sqlite:////tmp/qdrant-live.sqlite3
-      APP_ENV: test
-      SECRET_KEY: ci-test-secret-key
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Wait for Qdrant readiness
-        run: |
-          for attempt in $(seq 1 30); do
-            if curl -fsS "$QDRANT_LIVE_URL/readyz" | grep -q "all shards are ready"; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Qdrant did not become ready after $attempt attempts"
-          exit 1
-      - name: Live collection lifecycle and RAG chain
-        run: |
-          mkdir -p reports
-          pytest -o addopts="" -q tests/integration/test_qdrant_live.py \
-            --junitxml=reports/qdrant-live.xml
-      - name: Upload Qdrant live report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qdrant-live-report
-          path: reports/qdrant-live.xml
-          retention-days: 7
-
-  # ---------------- Stage 3: required quality gate ----------------
   quality-gate:
     name: Required quality gate
-    needs: [static, python-schema, web, compose-config, unit-tests, control-postgres, qdrant-live, metal3-crds, agent-images, compose-e2e]
+    needs: [rust-api, static, web, compose-config, metal3-crds, agent-images, compose-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -461,12 +253,8 @@ jobs:
             fi
           }
           check static "${{ needs['static'].result }}"
-          check python-schema "${{ needs['python-schema'].result }}"
           check web "${{ needs['web'].result }}"
           check compose-config "${{ needs['compose-config'].result }}"
-          check unit-tests "${{ needs['unit-tests'].result }}"
-          check control-postgres "${{ needs['control-postgres'].result }}"
-          check qdrant-live "${{ needs['qdrant-live'].result }}"
           check metal3-crds "${{ needs['metal3-crds'].result }}"
           check agent-images "${{ needs['agent-images'].result }}"
           check compose-e2e "${{ needs['compose-e2e'].result }}"

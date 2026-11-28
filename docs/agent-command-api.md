@@ -463,7 +463,7 @@ once by a data migration, resolved from the same chain; the lookup itself never
 guesses at read time.
 
 A backup that nobody checks is not a control. `python
-apps/platform-api/manage.py check_etcd_backups` walks every `succeeded` deployment,
+`POST /api/v1/cluster-deployments/{id}/etcd-backup/check/` walks every `succeeded` deployment,
 asks each one the same question the read-only view asks, writes an
 `cluster.etcd_backup.problem` audit event for every cluster that has no usable
 recent backup (with the contract code, the newest file and its age), prints the

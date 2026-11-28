@@ -1,6 +1,6 @@
 # ADR-0002: Tenant and project authorization baseline
 
-- Status: Accepted for the first P1-1 vertical slice.
+- Status: Superseded by the Rust-only cutover; retained as historical context.
 - Date: 2026-11-02
 
 ## Identity source

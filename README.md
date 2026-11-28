@@ -38,8 +38,8 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 - **Web Studio** (`apps/web-studio`): Vue 3 operator workspace with a persistent
   left rail and a full-surface Control Agent chat column — thread-level
   execution target, reasoning effort, goal and plan-first settings, file and
-  knowledge-base attachments, and scheduled turns the worker executes
-  unattended. The chat executes what the composer selects: the control-plane
+  knowledge-base attachments, and scheduled turns.
+   The chat executes what the composer selects: the control-plane
   tools and the capability of every chosen skill or plugin are offered to the
   model, run through the real connector transport, and recorded per call on the
   assistant message. `Cloud computer` / `Local computer` selects where the
@@ -53,7 +53,6 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
   Governance, Audit, Organization and Scheduled tasks. The whole SaaS interface switches between
   English and Chinese through the central locale engine, persisted per browser
   and backed by Element Plus locale packs.
-- **Platform Worker** (`apps/worker`): independent asynchronous executor for Agent, Workflow and Agent Team tasks. It owns atomic task claims, lease tokens, heartbeat renewal, bounded retries and cooperative cancellation.
 - **Agent Teams**: a project-scoped team publishes a versioned roster and one strategy: `sequential`, `coordinator`, `parallel` fan-out or `router` dispatch. Publishing materializes an immutable Workflow version made of `agent` and routing nodes, so every team run reuses the same lease, token-budget, retry and audit machinery as ordinary Workflows. Runs are idempotent by `Idempotency-Key` and expose per-member step records. See `docs/agent-teams.md`; members with plugin tools are rejected until per-member tool approvals exist.
 - **Model gateway**: OpenAI-compatible chat and embeddings endpoints with retry classification. `fake` exists only for tests.
 - **Integration Hub**: connector catalog, project installation, explicit grants, credential references, HTTP/OpenAPI tools and MCP tool discovery/import. Newly discovered MCP tools remain disabled until reviewed.
@@ -208,14 +207,11 @@ development instructions. Provision the initial administrator through the
 Rust-native identity/bootstrap workflow; there is no Django Admin or
 `manage.py` bootstrap path.
 
-**Deployment migration warning:** the existing Compose files still contain
-legacy Django/Daphne API and backup-scheduler commands, and the optional
-`rust-edge` profile is obsolete. There must be no proxy or Django upstream:
-remove the edge/bridge implementation and run the Rust API directly. These
-legacy manifests are not a valid Rust-only deployment. Django is not an
-approved fallback or rollback target. The independent Agent migration work
-must remove the remaining Django code, dependencies, schema tooling and
-deployment references before the Rust-only cutover is declared complete.
+**Rust-only cutover:** Django, Django REST Framework, Daphne, the Python
+platform API image, the Python task worker and the Python Compose schedulers
+have been removed. The root `Dockerfile` no longer exists. Codespaces start
+the Rust API on 8001 and proxy `/api` and `/health` through Vue Studio on
+8000. Django is not an approved fallback or rollback target.
 
 ## Three-Agent deployment
 
@@ -272,7 +268,6 @@ npm run build
 ## Repository layout
 
 - `apps/rust-api`: Rust/Axum SaaS API, authentication, tenancy, Agents, Workflows, audit and deployment APIs.
-- `apps/worker`: asynchronous Agent, Agent Team and Workflow executor.
 - `apps/cloud_control_agent`: cloud-side infrastructure control plane.
 - `apps/eph_agent`: temporary EPH bootstrap Agent.
 - `apps/target_agent`: Target takeover, CAPI Pivot and data-plane Agent.

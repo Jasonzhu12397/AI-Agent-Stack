@@ -163,9 +163,12 @@ test("a plugin that still needs a credential offers authorization instead of sel
 });
 
 test("every model gateway error code has a Chinese translation", () => {
-  const gateway = readFileSync(join(root, "..", "..", "platform-api", "core", "model_gateway.py"), "utf8");
+  const gateway = readFileSync(
+    join(root, "..", "..", "rust-api", "src", "model_api.rs"),
+    "utf8",
+  );
   const codes = new Set();
-  const raised = /ModelGatewayError\(\s*"([A-Z0-9_]+)"/g;
+  const raised = /^\s*"([A-Z][A-Z0-9_]{3,})",$/gm;
   let match;
   while ((match = raised.exec(gateway))) codes.add(match[1]);
   const table = readFileSync(join(root, "i18n", "serverErrors.ts"), "utf8");

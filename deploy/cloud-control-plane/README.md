@@ -48,7 +48,7 @@ Set `CLOUD_CONTROL_API_URL`, `CLOUD_CONTROL_CA_PEM_PATH`, `PLATFORM_API_CLIENT_P
 
 ~~~bash
 python3 deploy/cloud-control-plane/deploy_cloud_control.py
-docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml exec api python apps/platform-api/manage.py createsuperuser
+Create the first administrator through `/api/v1/auth/register/` or the Rust provisioning workflow.
 docker compose --env-file .env.cloud -f deploy/docker-compose.cloud.yml logs -f api worker web
 ~~~
 

@@ -1,8 +1,7 @@
-"""Prepare a Codespace so the web console opens with data already in place.
+"""Prepare a Codespace for the native Rust console.
 
-Runs once after the container is created: Python dependencies, the frontend
-bundler, the SQLite database and a demo tenant. Every step is idempotent, so
-re-running it after a pull only fills what is missing.
+Installs the Python tooling used by the development agents, builds the Vue
+console, and compiles the Rust API. Every step is idempotent.
 """
 
 from __future__ import annotations
@@ -16,11 +15,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-PLATFORM_API = REPO_ROOT / "apps" / "platform-api"
+RUST_API = REPO_ROOT / "apps" / "rust-api"
 WEB_STUDIO = REPO_ROOT / "apps" / "web-studio"
 DATA_DIR = REPO_ROOT / ".devdata"
-
-
 LOG_PATH = DATA_DIR / "bootstrap.log"
 
 
@@ -33,56 +30,9 @@ def log(message: str) -> None:
         handle.write(line + "\n")
 
 
-def report(stage: str, ok: bool = False) -> None:
-    """Publish progress so a failing setup is diagnosable from outside."""
-
-    try:
-        sys.path.insert(0, str(HERE))
-        import healthcheck
-
-        healthcheck.publish(
-            {
-                "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "stage": stage,
-                "ok": ok,
-                "bootstrap_log": log_tail(),
-            }
-        )
-    except Exception as exc:  # noqa: BLE001 - reporting must never break setup
-        log(f"report failed: {type(exc).__name__}: {exc}")
-
-
-def log_tail(lines: int = 15) -> list[str]:
-    if not LOG_PATH.exists():
-        return []
-    return LOG_PATH.read_text(errors="replace").splitlines()[-lines:]
-
-
 def run(command: list[str], *, cwd: Path, env: dict | None = None) -> None:
     log("+ " + " ".join(command))
     subprocess.run(command, cwd=str(cwd), env={**os.environ, **(env or {})}, check=True)
-
-
-def runtime_env() -> dict:
-    """Environment every management command needs in a Codespace."""
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return {
-        "DJANGO_SETTINGS_MODULE": "platform_api.settings",
-        "APP_ENV": "development",
-        "DEBUG": "true",
-        "SECRET_KEY": os.getenv("SECRET_KEY", "codespace-demo-secret-key-not-for-production-use"),
-        "DATABASE_URL": f"sqlite:///{DATA_DIR / 'console.db'}",
-        "PYTHONPATH": f"{PLATFORM_API}:{REPO_ROOT}",
-        "ALLOWED_HOSTS": "*",
-        # Any origin that may front this container: the Codespaces port proxy,
-        # the Cloudflare quick tunnel used when the proxy gate blocks XHRs, and
-        # the local dev server.
-        "CSRF_TRUSTED_ORIGINS": (
-            "https://*.app.github.dev,https://*.trycloudflare.com,"
-            "http://localhost:5173,http://127.0.0.1:5173"
-        ),
-    }
 
 
 def install_python() -> None:
@@ -104,40 +54,18 @@ def build_console() -> None:
     run([npm, "exec", "--", "vite", "build"], cwd=WEB_STUDIO)
 
 
-def migrate() -> None:
-    run([sys.executable, "manage.py", "migrate", "--noinput"], cwd=PLATFORM_API, env=runtime_env())
-
-
-def sync_catalog() -> None:
-    env = runtime_env()
-    run([sys.executable, "manage.py", "sync_plugin_catalog"], cwd=PLATFORM_API, env=env)
-    run(
-        [sys.executable, "manage.py", "install_builtin_connectors"],
-        cwd=PLATFORM_API,
-        env=env,
-    )
-
-
-def seed() -> None:
-    env = runtime_env()
-    env["PYTHONPATH"] = f"{PLATFORM_API}:{REPO_ROOT}"
-    run([sys.executable, str(Path(__file__).with_name("seed_demo.py"))], cwd=REPO_ROOT, env=env)
+def build_api() -> None:
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        raise RuntimeError("cargo is missing; install the Rust toolchain")
+    run([cargo, "build", "--release", "--locked"], cwd=RUST_API)
 
 
 def main() -> None:
-    report("starting")
     install_python()
-    report("python-deps")
     install_frontend()
-    report("frontend-deps")
     build_console()
-    report("built-console")
-    migrate()
-    report("migrated")
-    seed()
-    report("seeded")
-    sync_catalog()
-    report("catalog")
+    build_api()
     log("codespace prepared: run `python3 .devcontainer/start.py` to serve the console")
 
 

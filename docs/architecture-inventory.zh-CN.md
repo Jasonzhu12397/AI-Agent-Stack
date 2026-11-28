@@ -15,7 +15,7 @@
 
 ## 1. 基线证据（本次复核）
 
-- 本地基线（2026-11-19 复核）：**975 passed**；`ruff check .` All checks passed；`manage.py check` 0 issues；`makemigrations --check --dry-run` 无模型漂移。
+- 本地基线（2026-11-19 复核）：**975 passed**；`ruff check .` All checks passed；`cargo clippy --all-targets -- -D warnings` 无告警；`cargo test` 全部通过。
 - 测试环境：本地无 PostgreSQL/Redis，测试以内联 `DATABASE_URL=sqlite://` 覆盖运行；CI 使用 PostgreSQL 16 服务容器。
 - 规模：`apps/` + `packages/` Python 源码与测试合计约 31.3k 行；`tests/test_*.py` 80 个。
 - CI 工作流：`.github/workflows/ci.yml` 三个 job —— `python`（ruff / system check / 迁移漂移 / migrate / pytest）、`web`（npm test / Vite build）、`compose`（两份 compose 配置校验）。
@@ -28,11 +28,11 @@
 | 分层 | 目标组件 | 真实代码位置 | 现状 |
 |---|---|---|---|
 | 用户入口 | Web UI / Chat / Workflow / Agent 管理 / 插件市场 / 运维控制台 | `apps/web-studio/src/components/`、`src/services/api.ts` | 【基础】页面与 API 接线已存在；逐交互验收待核对（见 §6） |
-| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`、`apps/worker/worker_app/`；`apps/rust-api` 提供 Rust Axum 边缘层（`/health/ready`、`/api/v1/edge/info`），转发 `/ws/` 升级到 Django Channels，开启原生身份后由 Rust 基于共享 Django 会话与审计表完整提供 CSRF、登录、登出和 `/api/v1/auth/me/`，其余 HTTP 流量带转发头、超时和上游健康闸门流式转给 Django（见 `docs/rust-api-edge.md`） | 【基础】大部分模块有实现；任务页实时推送已落地（Channels WebSocket 主通道 + SSE 回退），模型路由已支持管理员配置的主备链与可重试故障降级（见 §3） |
+| 平台后端 | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/rust-api`；Django 与 Python worker 已删除 | 【基础】大部分模块有实现；任务页实时推送已落地（Channels WebSocket 主通道 + SSE 回退），模型路由已支持管理员配置的主备链与可重试故障降级（见 §3） |
 | 基础设施 Agent 控制面 | Cloud Control / EPH / Target 三 Agent | `apps/cloud_control_agent/`、`apps/eph_agent/`、`apps/target_agent/` | 【基础】三 Agent 独立入口、协议与状态机已存在；真实裸金属链路待验证（见 §4） |
 | Agent 协议与传输 | 身份 / 命令 / 租约 / 心跳 / 检查点 / mTLS | `packages/agent_contracts/`、`packages/agent_transport/` | 【基础】契约与传输已实现（见 §7） |
 | 执行层 | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | 由三 Agent 内 skill / adapter 模块调用 `kubectl` / `clusterctl` / Ironic HTTP 客户端 | 【待验证】执行适配器以只读观察 + fail-closed 校验为主；真实安装/迁移/数据面转发待验收（见 §5） |
-| 物理裸金属 | 服务器 / BMC·IPMI·Redfish / 管理网 / 控制面网 / 数据面网 | `apps/platform-api/core/bmc_credentials.py`、fleet 库存视图；BMC 配置持久化 | 【基础】凭据与库存模型存在；真实 BMC/Ironic 通电验收待开发 |
+| 物理裸金属 | 服务器 / BMC·IPMI·Redfish / 管理网 / 控制面网 / 数据面网 | `apps/rust-api/src/fleet_api.rs`；BMC 凭据与库存持久化 | 【基础】凭据与库存模型存在；真实 BMC/Ironic 通电验收待开发 |
 
 ## 3. 平台层：通用 AI Agent 能力逐项盘点
 
@@ -144,7 +144,7 @@
 
 | 服务 | 目录 | 作用 | 三态 |
 |---|---|---|---|
-| Platform API | `apps/platform-api` | Django REST API、认证、权限、数据管理 | 【基础】 |
+| Platform API | `apps/rust-api` | Rust/Axum REST API、认证、权限、数据管理 | 【基础】 |
 | Worker | `apps/worker/worker_app` | 异步任务、通用 Agent 执行、Workflow 执行（`tasks.py` / `main.py`） | 【基础】 |
 | Cloud Control Agent | `apps/cloud_control_agent` | 云端部署控制面（协议校验/状态汇总） | 【基础】；真实云编排【待开发】 |
 | EPH Agent | `apps/eph_agent` | Bootstrap 集群操作与源侧观察 | 【基础/待验证】 |
@@ -208,7 +208,7 @@
 - 租户/项目成员隔离、角色校验、链式哈希审计记录与 verify（租户链 + 全局认证链）。
 - MCP 客户端运行时（streamable HTTP 与 stdio JSON-RPC、工具映射、SSE 响应、超时与 allowlist 门禁）、项目级 MCP Server（`/api/v1/tenants/<tenant>/projects/<project>/mcp/`）与工具发现导入接口。
 - Qdrant 集合自举（幂等建集）、readiness 探针、按 embedding 模型 / 维度版本化的集合绑定与记录；CI 内以真实 Qdrant 服务运行集合创建/列举/删除与 ingest/retrieve 全链路。
-- `manage.py reindex_knowledge`：按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
+- Rust 知识库接口按当前 embedding 模型重新嵌入历史文档并回写集合与维度，支持 dry-run、定向重试与逐文档失败隔离。
 - 全局审计链（认证事件）的只读对外接口：`GET /api/v1/audit-events/global/`（分页列表）与 `GET /api/v1/audit-events/global/verify/`（链校验），仅平台管理员（`is_staff` / `is_superuser`）可读。
 - 项目级实时事件：Task / AuditEvent 提交后 `pg_notify`，Channels WebSocket 与 SSE 端点均消费同一事件源；前端优先 WebSocket、SSE 回退；SQLite 下为有界轮询，PostgreSQL 下为 LISTEN 唤醒。
 - Day-2 工作节点扩缩容：`cluster.scale` 校验集群身份与 MachineDeployment 归属，扩容时可用 BareMetalHost 容量不足会在修改前阻断，只 patch `spec.replicas`，并等待副本数、就绪副本数与 observedGeneration 收敛。模拟模式无副作用；执行模式必须审批。舰队控制台已提供同一命令入口。

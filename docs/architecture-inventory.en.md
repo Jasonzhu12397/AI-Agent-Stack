@@ -15,7 +15,7 @@
 
 ## 1. Baseline evidence (this review)
 
-- Local baseline (re-verified 2026-11-19): **975 passed**; `ruff check .` All checks passed; `manage.py check` 0 issues; `makemigrations --check --dry-run` reports no model drift.
+- Local baseline (re-verified 2026-11-19): **975 passed**; `ruff check .` All checks passed; `cargo clippy --all-targets -- -D warnings` is clean; `cargo test` passes.
 - Test environment: no local PostgreSQL/Redis; tests run with an inline `DATABASE_URL=sqlite://` override; CI uses a PostgreSQL 16 service container.
 - Scale: `apps/` + `packages/` Python source and tests total about 31.3k lines; 80 `tests/test_*.py` files.
 - CI workflow: three jobs in `.github/workflows/ci.yml` — `python` (ruff / system check / migration drift / migrate / pytest), `web` (npm test / Vite build), `compose` (config validation of both compose files).
@@ -28,11 +28,11 @@ Target form: **a general-purpose AI Agent platform + three infrastructure deploy
 | Layer | Target components | Real code location | Current state |
 |---|---|---|---|
 | User entry | Web UI / Chat / Workflow / Agent management / plugin marketplace / operations console | `apps/web-studio/src/components/`, `src/services/api.ts` | 【Baseline】 Pages and API wiring exist; per-interaction acceptance still to be checked (see §6) |
-| Platform backend | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/platform-api/core/`, `apps/worker/worker_app/`; `apps/rust-api` serves the Rust Axum edge (`/health/ready`, `/api/v1/edge/info`), relays `/ws/` upgrades to Django Channels, owns CSRF, login, logout and `/api/v1/auth/me/` against the shared Django session and audit tables when native identity is enabled, and streams all other HTTP traffic to Django (see `docs/rust-api-edge.md`) | 【Baseline】 Most modules implemented; task-page realtime push is in place (Channels WebSocket primary, SSE fallback), and model routing now supports an admin-set primary/standby chain with retryable-failure fallback (see §3) |
+| Platform backend | API Gateway / Auth / Agent Runtime / Workflow Engine / Model Router / Plugin·MCP Gateway / Knowledge·RAG / Token Budget / Audit·RBAC / Task Queue / Realtime Logs / Events | `apps/rust-api`; Django and the Python worker are deleted | 【Baseline】 Most modules implemented; task-page realtime push is in place (Channels WebSocket primary, SSE fallback), and model routing now supports an admin-set primary/standby chain with retryable-failure fallback (see §3) |
 | Infrastructure Agent control plane | Cloud Control / EPH / Target Agents | `apps/cloud_control_agent/`, `apps/eph_agent/`, `apps/target_agent/` | 【Baseline】 Independent entrypoints, protocols, and state machines exist for all three; the real bare-metal chain awaits validation (see §4) |
 | Agent contracts & transport | Identity / command / lease / heartbeat / checkpoint / mTLS | `packages/agent_contracts/`, `packages/agent_transport/` | 【Baseline】 Contracts and transport implemented (see §7) |
 | Execution layer | CAPI / Metal3 / Ironic·BMO / Omni / BMH Inventory / Kubeadm·K8s / Chrony·NTP / SR-IOV·DPDK·Multus | Skill/adapter modules inside the three Agents call `kubectl` / `clusterctl` / the Ironic HTTP client | 【Pending validation】 Execution adapters are mostly read-only observation plus fail-closed validation; real install/migration/data-plane forwarding awaits acceptance (see §5) |
-| Physical bare metal | Servers / BMC·IPMI·Redfish / management network / control-plane network / data-plane network | `apps/platform-api/core/bmc_credentials.py`, fleet inventory views; BMC config persistence | 【Baseline】 Credential and inventory models exist; real BMC/Ironic power-on acceptance to be developed |
+| Physical bare metal | Servers / BMC·IPMI·Redfish / management network / control-plane network / data-plane network | `apps/rust-api/src/fleet_api.rs`; BMC credential and inventory persistence | 【Baseline】 Credential and inventory models exist; real BMC/Ironic power-on acceptance to be developed |
 
 ## 3. Platform layer: general-purpose AI Agent capabilities, item by item
 
@@ -144,7 +144,7 @@ Acceptance bar: every button connects to a real API, can persist data, execute t
 
 | Service | Directory | Role | State |
 |---|---|---|---|
-| Platform API | `apps/platform-api` | Django REST API, authentication, permissions, data management | 【Baseline】 |
+| Platform API | `apps/rust-api` | Rust/Axum REST API, authentication, permissions, data management | 【Baseline】 |
 | Worker | `apps/worker/worker_app` | Async tasks, general Agent execution, Workflow execution (`tasks.py` / `main.py`) | 【Baseline】 |
 | Cloud Control Agent | `apps/cloud_control_agent` | Cloud deployment control plane (protocol validation / status aggregation) | 【Baseline】; real cloud orchestration 【To develop】 |
 | EPH Agent | `apps/eph_agent` | Bootstrap cluster operations and source-side observation | 【Baseline/Pending validation】 |
@@ -208,7 +208,7 @@ The following documents previously followed the old wording that "the EPH perfor
 - Tenant/project member isolation, role validation, chained-hash audit records and verify (tenant chain + global authentication chain).
 - The MCP client runtime (streamable HTTP and stdio JSON-RPC, tool mapping, SSE responses, timeouts and allowlist gates), a project-scoped MCP server (`/api/v1/tenants/<tenant>/projects/<project>/mcp/`) and the tool discovery/import endpoint.
 - Qdrant collection bootstrap (idempotent create), the readiness probe, and collections bound and recorded per embedding model / dimension.
-- `manage.py reindex_knowledge`: re-embeds historical documents with the current embedding model and writes back the collection and dimensions, with dry-run, targeted retries, and per-document failure isolation.
+- The Rust knowledge API re-embeds historical documents with the current embedding model and writes back the collection and dimensions, with dry-run, targeted retries, and per-document failure isolation.
 - Read-only global audit chain endpoints: `GET /api/v1/audit-events/global/` (paginated list) and `GET /api/v1/audit-events/global/verify/` (chain verification), readable by platform administrators only (`is_staff` / `is_superuser`), and rendered in the Audit page with the same 403-aware hidden state.
 - Project realtime events: Task / AuditEvent commits publish `pg_notify`; the Channels WebSocket and SSE endpoints consume them, and the frontend prefers WebSocket with SSE fallback. SQLite uses a bounded poll; PostgreSQL wakes on LISTEN.
 - Day-2 worker scaling: `cluster.scale` validates cluster identity and MachineDeployment ownership, blocks scale-out when available BareMetalHost capacity is short, patches only `spec.replicas`, and waits for replica, ready-replica and observedGeneration reconciliation. Simulation mode is side-effect free; execute mode requires approval. The fleet console exposes the same command.

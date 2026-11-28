@@ -81,7 +81,7 @@ execution_target, effort, enabled, next_run_at, last_run_at, last_error_code
   calls the shared chat runtime, writes the assistant turn (including
   `error_code` on failure) and advances the schedule. `last_error_code` is kept
   on the job so the console can show it without opening the conversation.
-- `python manage.py dispatch_scheduled_jobs` runs the same dispatch manually.
+- Scheduled jobs are dispatched by the Rust API; there is no Python management command.
 
 API (tenant scoped, project scoped):
 
@@ -166,7 +166,7 @@ choice, not a label on the prompt:
   fabricated value.
 - `apps/local-agent/local_agent.py` is the agent that serves it: it heartbeats,
   leases commands over `/api/v1/agent-runtime/*`, runs read-only probes with
-  the standard library and posts the result. `manage.py enroll_local_runner`
+  the standard library and posts the result. the Rust agent-runtime enrollment API
   registers the machine and writes its bearer token; `.devcontainer/start.py`
   starts both in a development deployment.
 

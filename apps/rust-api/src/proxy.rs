@@ -36,15 +36,55 @@ impl AppState {
         let Some(pool) = self.identity_pool.as_ref() else {
             return Err("DATABASE_URL is required to initialize Rust identity storage".into());
         };
-        for migration in [
-            include_str!("../migrations/0001_rust_sessions.sql"),
-            include_str!("../migrations/0002_platform_identity.sql"),
-            include_str!("../migrations/0003_platform_user_profiles.sql"),
-        ] {
+        let sqlite = self
+            .config
+            .database_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("sqlite"));
+        let migrations: [&str; 3] = if sqlite {
+            [
+                include_str!("../migrations/0001_rust_sessions.sqlite.sql"),
+                include_str!("../migrations/0002_platform_identity.sqlite.sql"),
+                include_str!("../migrations/0003_platform_user_profiles.sqlite.sql"),
+            ]
+        } else {
+            [
+                include_str!("../migrations/0001_rust_sessions.sql"),
+                include_str!("../migrations/0002_platform_identity.sql"),
+                include_str!("../migrations/0003_platform_user_profiles.sql"),
+            ]
+        };
+        for migration in migrations {
             sqlx::raw_sql(migration)
                 .execute(pool)
                 .await
                 .map_err(|error| format!("failed to apply Rust identity migration: {error}"))?;
+        }
+        if sqlite
+            && sqlx::query("SELECT 1 FROM auth_user LIMIT 1")
+                .execute(pool)
+                .await
+                .is_ok()
+        {
+            sqlx::raw_sql(include_str!(
+                "../migrations/0002_platform_identity_legacy.sqlite.sql"
+            ))
+            .execute(pool)
+            .await
+            .map_err(|error| format!("failed to migrate legacy SQLite identity: {error}"))?;
+        }
+        // Fresh databases need the retired ORM's business schema exactly once.
+        // Existing deployments already own these tables, so the probe keeps the
+        // baseline idempotent without rewriting every historical ALTER.
+        if sqlx::query("SELECT 1 FROM core_tenant LIMIT 1")
+            .execute(pool)
+            .await
+            .is_err()
+        {
+            sqlx::raw_sql(include_str!("../migrations/0004_platform_schema.sql"))
+                .execute(pool)
+                .await
+                .map_err(|error| format!("failed to apply platform schema baseline: {error}"))?;
         }
         Ok(())
     }

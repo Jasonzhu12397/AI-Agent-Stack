@@ -344,6 +344,167 @@ async fn fetch_document(url: &str, document: Option<&Value>) -> Result<(Value, S
     Ok((document, url.to_string()))
 }
 
+async fn discover_mcp(endpoint_url: &str) -> Result<Discovered, Response> {
+    use sha2::Digest;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| database_error(error.to_string()))?;
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "ai-agent-stack", "version": "1.0"},
+        },
+    });
+    let response = client
+        .post(endpoint_url)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .json(&initialize)
+        .send()
+        .await
+        .map_err(|error| {
+            studio_error(
+                StatusCode::BAD_GATEWAY,
+                "PLUGIN_DISCOVERY_FAILED",
+                &format!("The MCP endpoint could not be reached: {error}"),
+            )
+        })?;
+    if !response.status().is_success() {
+        return Err(studio_error(
+            StatusCode::BAD_GATEWAY,
+            "PLUGIN_AUTH_REJECTED",
+            &format!("The MCP endpoint returned HTTP {}.", response.status()),
+        ));
+    }
+    let list = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}});
+    let response = client
+        .post(endpoint_url)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .json(&list)
+        .send()
+        .await
+        .map_err(|error| {
+            studio_error(
+                StatusCode::BAD_GATEWAY,
+                "PLUGIN_DISCOVERY_FAILED",
+                &format!("The MCP tools/list call failed: {error}"),
+            )
+        })?;
+    let body: Value = response.json().await.map_err(|error| {
+        studio_error(
+            StatusCode::BAD_GATEWAY,
+            "PLUGIN_DISCOVERY_FAILED",
+            &format!("The MCP response was not valid JSON: {error}"),
+        )
+    })?;
+    let tools = body
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            studio_error(
+                StatusCode::BAD_GATEWAY,
+                "PLUGIN_DISCOVERY_FAILED",
+                "The MCP server returned no tools list.",
+            )
+        })?;
+    let mut capabilities = Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    for tool in tools.iter().take(MAX_TOOLS) {
+        let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(mut name) = safe_name(raw_name) else {
+            continue;
+        };
+        let base = name.clone();
+        let mut suffix = 2;
+        while names.contains(&name) {
+            name = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        names.insert(name.clone());
+        let input_schema = tool
+            .get("inputSchema")
+            .or_else(|| tool.get("input_schema"))
+            .cloned()
+            .unwrap_or_else(
+                || json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            );
+        capabilities.push(json!({
+            "name": name,
+            "description": tool.get("description").and_then(Value::as_str).unwrap_or("").chars().take(1000).collect::<String>(),
+            "input_schema": input_schema,
+            "output_schema": text_output_schema(),
+            "risk_level": "unclassified",
+            "review_required": true,
+            "timeout_seconds": 30,
+            "source": "discovered",
+            "remote_name": raw_name,
+        }));
+    }
+    if capabilities.is_empty() {
+        return Err(studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_NO_CAPABILITIES",
+            "The MCP server exposed no usable tools.",
+        ));
+    }
+    let names: Vec<String> = capabilities
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    let manifest = json!({
+        "version": 1,
+        "capabilities": capabilities,
+        "mcp": {
+            "timeout_seconds": 30,
+            "discovery": {
+                "endpoint": format!("{:x}", sha2::Sha256::digest(endpoint_url.as_bytes())),
+                "discovered_at": chrono::Utc::now().to_rfc3339(),
+                "tool_count": names.len(),
+                "tools": names,
+            },
+        },
+        "permission_policy": {
+            "default": "deny",
+            "approval_required": capabilities.iter().filter_map(|entry| entry.get("name").cloned()).collect::<Vec<_>>(),
+            "blocked_methods": [],
+            "max_risk": "unclassified",
+            "review_required": true,
+        },
+        "studio": {
+            "plugin_type": "mcp",
+            "auth_mode": "none",
+            "discovered_at": chrono::Utc::now().to_rfc3339(),
+        },
+    });
+    let count = capabilities.len();
+    Ok(Discovered {
+        protocol: "mcp",
+        endpoint_url: endpoint_url.to_string(),
+        manifest,
+        capabilities,
+        skipped: Vec::new(),
+        connection: json!({
+            "status": "success",
+            "http_status": 200,
+            "authenticated": false,
+            "message": format!("MCP initialized and listed {count} tools."),
+        }),
+    })
+}
+
 async fn discover(payload: &Value) -> Result<Discovered, Response> {
     let plugin_type = payload
         .get("plugin_type")
@@ -369,11 +530,7 @@ async fn discover(payload: &Value) -> Result<Discovered, Response> {
         ));
     }
     if plugin_type == "mcp" {
-        return Err(studio_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "PLUGIN_TYPE_UNSUPPORTED",
-            "MCP discovery is not available in this native build yet.",
-        ));
+        return discover_mcp(base_url).await;
     }
     if plugin_type != "openapi" {
         return Err(studio_error(
