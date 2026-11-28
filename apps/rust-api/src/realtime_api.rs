@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -205,6 +206,146 @@ fn stream_body(state: StreamState) -> impl Stream<Item = Result<String, std::io:
         tokio::time::sleep(Duration::from_secs(2)).await;
         Some((Ok(output), Some(state)))
     })
+}
+
+async fn socket_auth_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut auth_headers = headers.clone();
+    if let Some(protocols) = headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+    {
+        let token = protocols
+            .split(',')
+            .map(str::trim)
+            .find_map(|protocol| protocol.strip_prefix("session."))
+            .map(str::trim)
+            .filter(|token| !token.is_empty() && token.len() <= 128);
+        if let Some(token) = token {
+            if let Ok(header_value) = token.parse() {
+                auth_headers.insert("x-session-token", header_value);
+            }
+        }
+    }
+    auth_headers
+}
+
+/// Native replacement for the project WebSocket event channel. The HTTP SSE
+/// endpoint remains the fallback for clients or intermediaries that cannot
+/// complete the WebSocket handshake.
+pub async fn events_socket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, project_id)): Path<(String, String)>,
+    Query(query): Query<StreamQuery>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let auth_headers = socket_auth_headers(&headers).await;
+    let user = match crate::billing_api::require_user(&state, &auth_headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !match project_access(pool, &tenant_id, &project_id, user.id).await {
+        Ok(access) => access,
+        Err(error) => return database_error(error),
+    } {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found."})),
+        )
+            .into_response();
+    }
+    let role = match tenant_role(pool, &tenant_id, user.id).await {
+        Ok(role) => role.unwrap_or_default(),
+        Err(error) => return database_error(error),
+    };
+    let since_header = headers
+        .get("last-event-id")
+        .and_then(|value| value.to_str().ok());
+    let cursor = parse_cursor(since_header.or(query.since.as_deref()));
+    let stream_state = StreamState {
+        pool: pool.clone(),
+        postgres: is_postgres(&state),
+        tenant_id,
+        project_id,
+        audit_visible: role == "owner" || role == "admin",
+        cursor,
+        max_events: None,
+        emitted: 0,
+        ticks: 0,
+    };
+    upgrade
+        .protocols(["aiagentstack"])
+        .on_upgrade(move |socket| handle_socket(socket, stream_state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: StreamState) {
+    let mut cursor = state.cursor.clone();
+    let mut last_heartbeat = std::time::Instant::now();
+    loop {
+        let poll_state = StreamState {
+            cursor: cursor.clone(),
+            ..state.clone()
+        };
+        match collect_events(&poll_state).await {
+            Ok((items, next)) => {
+                for (stamp, _, event) in &items {
+                    let message = json!({
+                        "event": event.get("type").and_then(Value::as_str).unwrap_or("message"),
+                        "data": event,
+                        "cursor": stamp,
+                    });
+                    if socket
+                        .send(Message::Text(message.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                cursor = next;
+            }
+            Err(error) => {
+                let _ = socket
+                    .send(Message::Text(
+                        json!({"event": "error", "data": {"detail": error}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+        }
+        if last_heartbeat.elapsed() >= Duration::from_secs(15) {
+            last_heartbeat = std::time::Instant::now();
+            if socket
+                .send(Message::Text(
+                    json!({"event": "heartbeat"}).to_string().into(),
+                ))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+        tokio::select! {
+            incoming = socket.recv() => match incoming {
+                None => return,
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&text) {
+                        if let Some(Value::String(since)) = object.get("since") {
+                            cursor = parse_cursor(Some(since));
+                        }
+                    }
+                }
+                Some(Ok(_)) => {}
+                Some(Err(_)) => return,
+            },
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+        }
+    }
 }
 
 /// Native replacement for `GET /api/v1/tenants/{t}/projects/{p}/events/stream/`.

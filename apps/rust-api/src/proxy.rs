@@ -263,6 +263,10 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::get(crate::realtime_api::events_stream),
             )
             .route(
+                "/ws/tenants/{tenant_id}/projects/{project_id}/events/",
+                axum::routing::get(crate::realtime_api::events_socket),
+            )
+            .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/network/collect/",
                 axum::routing::post(crate::agent_runtime_api::collect_fleet_network),
             )
@@ -798,7 +802,7 @@ async fn info() -> Json<ApiInfo> {
     Json(ApiInfo {
         service: "rust-api",
         version: env!("CARGO_PKG_VERSION"),
-        websocket: false,
+        websocket: true,
         server_sent_events: true,
     })
 }

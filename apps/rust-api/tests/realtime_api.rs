@@ -86,3 +86,26 @@ async fn rejects_out_of_range_max_events() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn websocket_route_is_registered_for_real_upgrade_handshakes() {
+    let state = state().await;
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/ws/tenants/tenant/projects/project/events/")
+                .header("upgrade", "websocket")
+                .header("connection", "Upgrade")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-protocol", "aiagentstack")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // The in-process test request has no hyper upgrade extension. A real
+    // handshake supplies that extension; then the handler performs session
+    // and project authorization before accepting the WebSocket.
+    assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
