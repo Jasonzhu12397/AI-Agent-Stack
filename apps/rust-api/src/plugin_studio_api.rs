@@ -5,6 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use sqlx::Row;
 
@@ -866,4 +867,399 @@ pub async fn studio_publish(
 
 fn id_after_insert(_id: &str, _version: &str) -> Option<()> {
     Some(())
+}
+
+/// AES-GCM sealing compatible with `core.field_crypto`: the key is
+/// `sha256(f"{scope}:{SECRET_KEY}")`, the nonce is the first 12 bytes of the
+/// blob and the AAD is the scope.
+fn seal_scope(secret: &str, scope: &str, plaintext: &str) -> Result<String, Response> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes256Gcm, Nonce};
+    use sha2::Digest;
+    let key = sha2::Sha256::digest(format!("{scope}:{secret}").as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| database_error("invalid plugin credential key".into()))?;
+    let uuid = uuid::Uuid::new_v4();
+    let nonce_bytes = &uuid.as_bytes()[..12];
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: scope.as_bytes(),
+            },
+        )
+        .map_err(|_| database_error("failed to seal the plugin credential".into()))?;
+    let mut blob = nonce_bytes.to_vec();
+    blob.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::URL_SAFE.encode(blob))
+}
+
+fn open_scope(secret: &str, scope: &str, blob: &str) -> Option<String> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes256Gcm, Nonce};
+    use sha2::Digest;
+    let key = sha2::Sha256::digest(format!("{scope}:{secret}").as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+    let raw = base64::engine::general_purpose::URL_SAFE
+        .decode(blob)
+        .ok()?;
+    if raw.len() < 12 {
+        return None;
+    }
+    let nonce = Nonce::from_slice(&raw[..12]);
+    let plaintext = cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &raw[12..],
+                aad: scope.as_bytes(),
+            },
+        )
+        .ok()?;
+    String::from_utf8(plaintext).ok()
+}
+
+fn encode_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            b' ' => encoded.push('+'),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+pub async fn oauth_authorize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user_id = match authorize(&state, &headers, &tenant_id, true).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(secret) = state.config.platform_secret_key.as_deref() else {
+        return database_error("Platform secret key is not configured.".into());
+    };
+    let field = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let authorization_url = field("authorization_url");
+    let token_url = field("token_url");
+    let redirect_uri = field("redirect_uri");
+    let client_id = field("client_id");
+    if authorization_url.is_empty()
+        || token_url.is_empty()
+        || redirect_uri.is_empty()
+        || client_id.is_empty()
+    {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "authorization_url, token_url, redirect_uri and client_id are required.",
+        );
+    }
+    let scope_value = payload.get("scope").and_then(Value::as_str).unwrap_or("");
+    let client_secret = payload
+        .get("client_secret")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let verifier = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+    .chars()
+    .take(64)
+    .collect::<String>();
+    use sha2::Digest;
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+    let expires = chrono::Utc::now() + chrono::Duration::seconds(600);
+    let state_payload = json!({
+        "version": 1,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "authorization_url": authorization_url,
+        "token_url": token_url,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": scope_value,
+        "code_verifier": verifier,
+        "expires_at": expires.to_rfc3339(),
+    });
+    let encoded_state = match seal_scope(
+        secret,
+        "agent-plugin-oauth-state",
+        &serde_json::to_string(&state_payload).unwrap_or_default(),
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let separator = if authorization_url.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let query = format!(
+        "response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+        encode_component(&client_id),
+        encode_component(&redirect_uri),
+        encode_component(scope_value),
+        encode_component(&encoded_state),
+        encode_component(&challenge),
+    );
+    Json(json!({
+        "authorize_url": format!("{authorization_url}{separator}{query}"),
+        "state": encoded_state,
+        "expires_in": 600,
+    }))
+    .into_response()
+}
+
+async fn complete_oauth(
+    state: &AppState,
+    headers: &HeaderMap,
+    tenant_id: &str,
+    code: &str,
+    encoded_state: &str,
+) -> Response {
+    let user_id = match authorize(state, headers, tenant_id, false).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(secret) = state.config.platform_secret_key.as_deref() else {
+        return database_error("Platform secret key is not configured.".into());
+    };
+    if code.trim().is_empty() || encoded_state.trim().is_empty() {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "The authorization code and state are required.",
+        );
+    }
+    let Some(plaintext) = open_scope(secret, "agent-plugin-oauth-state", encoded_state) else {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "The OAuth state could not be read.",
+        );
+    };
+    let pending: Value = match serde_json::from_str(&plaintext) {
+        Ok(value) => value,
+        Err(_) => {
+            return studio_error(
+                StatusCode::BAD_REQUEST,
+                "PLUGIN_AUTH_INVALID",
+                "The OAuth state is invalid.",
+            )
+        }
+    };
+    if pending.get("version").and_then(Value::as_i64) != Some(1) {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "The OAuth state is invalid.",
+        );
+    }
+    let expires = pending
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+    if expires
+        .map(|value| value < chrono::Utc::now())
+        .unwrap_or(true)
+    {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_EXPIRED",
+            "The OAuth state has expired.",
+        );
+    }
+    if pending.get("tenant_id").and_then(Value::as_str) != Some(tenant_id)
+        || pending.get("user_id").and_then(Value::as_i64) != Some(user_id)
+    {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_STATE_MISMATCH",
+            "The OAuth state belongs to another workspace or user.",
+        );
+    }
+    let token_url = pending
+        .get("token_url")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let client_id = pending
+        .get("client_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let client_secret = pending
+        .get("client_secret")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let redirect_uri = pending
+        .get("redirect_uri")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let scope_value = pending.get("scope").and_then(Value::as_str).unwrap_or("");
+    let verifier = pending
+        .get("code_verifier")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return database_error(error.to_string()),
+    };
+    let response = match client
+        .post(token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.trim()),
+            ("redirect_uri", redirect_uri),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return studio_error(
+                StatusCode::BAD_GATEWAY,
+                "PLUGIN_AUTH_FAILED",
+                &format!("The token endpoint could not be reached: {error}"),
+            )
+        }
+    };
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or_else(|_| json!({}));
+    if !status.is_success() {
+        return studio_error(
+            StatusCode::BAD_GATEWAY,
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                "PLUGIN_AUTH_REJECTED"
+            } else {
+                "PLUGIN_AUTH_FAILED"
+            },
+            "The token endpoint rejected the authorization code.",
+        );
+    }
+    let refresh_token = body
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if refresh_token.is_empty() {
+        return studio_error(
+            StatusCode::BAD_REQUEST,
+            "PLUGIN_AUTH_INVALID",
+            "The provider did not issue a refresh token; offline access is required.",
+        );
+    }
+    let access_token = body
+        .get("access_token")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let expires_in = body
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .unwrap_or(3600);
+    let token_type = body
+        .get("token_type")
+        .and_then(Value::as_str)
+        .unwrap_or("Bearer");
+    let contract = json!({
+        "type": "oauth2",
+        "grant": "refresh_token",
+        "token_url": token_url,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": scope_value,
+        "redirect_uri": redirect_uri,
+        "refresh_token": refresh_token,
+        "access_token": access_token,
+        "access_token_expires_at": (chrono::Utc::now() + chrono::Duration::seconds(expires_in)).to_rfc3339(),
+    });
+    let sealed = match seal_scope(
+        secret,
+        "agent-plugin-credential",
+        &serde_json::to_string(&contract).unwrap_or_default(),
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return database_error("Identity pool is not configured.".into());
+    };
+    let credential_id = uuid::Uuid::new_v4().simple().to_string();
+    let now = if state
+        .config
+        .database_url
+        .as_deref()
+        .unwrap_or("")
+        .starts_with("postgres")
+    {
+        "NOW()"
+    } else {
+        "datetime('now')"
+    };
+    let insert = format!(
+        "INSERT INTO core_agentplugincredential (id, tenant_id, created_by_id, name, sealed_value, created_at) \
+         VALUES (?, ?, ?, 'OAuth plugin credential', ?, {now})"
+    );
+    if let Err(error) = sqlx::query(&insert)
+        .bind(&credential_id)
+        .bind(tenant_id)
+        .bind(user_id)
+        .bind(&sealed)
+        .execute(pool)
+        .await
+    {
+        return database_error(error.to_string());
+    }
+    Json(json!({
+        "credential": format!("plugin://{credential_id}"),
+        "expires_in": expires_in,
+        "scope": scope_value,
+        "token_type": token_type,
+    }))
+    .into_response()
+}
+
+pub async fn oauth_callback_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::BTreeMap<String, String>>,
+) -> Response {
+    let code = params.get("code").map(String::as_str).unwrap_or("");
+    let encoded_state = params.get("state").map(String::as_str).unwrap_or("");
+    complete_oauth(&state, &headers, &tenant_id, code, encoded_state).await
+}
+
+pub async fn oauth_callback_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let code = payload.get("code").and_then(Value::as_str).unwrap_or("");
+    let encoded_state = payload.get("state").and_then(Value::as_str).unwrap_or("");
+    complete_oauth(&state, &headers, &tenant_id, code, encoded_state).await
 }

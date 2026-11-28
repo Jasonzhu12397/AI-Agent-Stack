@@ -483,6 +483,15 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::plugin_studio_api::studio_publish),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/studio/oauth/authorize/",
+                axum::routing::post(crate::plugin_studio_api::oauth_authorize),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/studio/oauth/callback/",
+                get(crate::plugin_studio_api::oauth_callback_get)
+                    .post(crate::plugin_studio_api::oauth_callback_post),
+            )
+            .route(
                 "/api/v1/users/me/",
                 get(crate::account_api::get_profile).patch(crate::account_api::update_profile),
             )

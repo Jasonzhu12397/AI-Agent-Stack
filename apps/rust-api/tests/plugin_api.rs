@@ -441,3 +441,27 @@ async fn studio_publishes_a_definition_and_installation() {
     assert_eq!(body["definition"]["plugin_key"], "openapi-demo");
     assert_eq!(body["installation"]["status"], "installed");
 }
+
+#[tokio::test]
+async fn studio_builds_an_oauth_authorize_url() {
+    let state = state().await;
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/studio/oauth/authorize/"),
+        Some(json!({
+            "authorization_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+            "redirect_uri": "https://console.example.com/callback",
+            "client_id": "client-1",
+            "client_secret": "secret-1",
+            "scope": "read",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let url = body["authorize_url"].as_str().unwrap();
+    assert!(url.contains("code_challenge_method=S256"));
+    assert!(url.contains("response_type=code"));
+    assert!(!body["state"].as_str().unwrap().is_empty());
+}
