@@ -17,13 +17,15 @@ use sqlx::{AnyPool, Row};
 use crate::proxy::AppState;
 use crate::tenancy::{is_postgres, normalize_timestamp, project_access, tenant_role};
 
+/// PostgreSQL notification channel the write triggers publish on.
+const CHANNEL: &str = "platform_events";
+
 #[derive(Deserialize, Default)]
 pub struct StreamQuery {
     since: Option<String>,
     max_events: Option<String>,
 }
 
-#[derive(Clone)]
 struct StreamState {
     pool: AnyPool,
     postgres: bool,
@@ -34,6 +36,57 @@ struct StreamState {
     max_events: Option<i64>,
     emitted: i64,
     ticks: i64,
+    listener: Option<sqlx::postgres::PgListener>,
+}
+
+impl StreamState {
+    fn at_cursor(&self, cursor: &str) -> StreamState {
+        StreamState {
+            pool: self.pool.clone(),
+            postgres: self.postgres,
+            tenant_id: self.tenant_id.clone(),
+            project_id: self.project_id.clone(),
+            audit_visible: self.audit_visible,
+            cursor: cursor.to_string(),
+            max_events: self.max_events,
+            emitted: 0,
+            ticks: 0,
+            listener: None,
+        }
+    }
+}
+
+/// Wait for one notification that belongs to this project. PostgreSQL is the
+/// wakeup source; the query after every wakeup stays the source of truth, so a
+/// dropped notification can only delay an event, never lose it.
+async fn await_scope_notification(
+    listener: &mut sqlx::postgres::PgListener,
+    tenant_id: &str,
+    project_id: &str,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match tokio::time::timeout(remaining, listener.recv()).await {
+            Ok(Ok(notification)) => {
+                let payload: Value =
+                    serde_json::from_str(notification.payload()).unwrap_or(Value::Null);
+                let tenant = payload.get("tenant_id").and_then(Value::as_str);
+                let project = payload.get("project_id").and_then(Value::as_str);
+                if tenant == Some(tenant_id) && project == Some(project_id) {
+                    return;
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "realtime listener stopped");
+                return;
+            }
+            Err(_) => return,
+        }
+    }
 }
 
 fn stream_error(detail: &str) -> Response {
@@ -203,7 +256,12 @@ fn stream_body(state: StreamState) -> impl Stream<Item = Result<String, std::io:
         if state.ticks > 1800 {
             return Some((Ok(output), None));
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        match state.listener.as_mut() {
+            Some(listener) => {
+                await_scope_notification(listener, &state.tenant_id, &state.project_id).await
+            }
+            None => tokio::time::sleep(Duration::from_secs(2)).await,
+        }
         Some((Ok(output), Some(state)))
     })
 }
@@ -275,6 +333,7 @@ pub async fn events_socket(
         max_events: None,
         emitted: 0,
         ticks: 0,
+        listener: None,
     };
     upgrade
         .protocols(["aiagentstack"])
@@ -285,10 +344,7 @@ async fn handle_socket(mut socket: WebSocket, state: StreamState) {
     let mut cursor = state.cursor.clone();
     let mut last_heartbeat = std::time::Instant::now();
     loop {
-        let poll_state = StreamState {
-            cursor: cursor.clone(),
-            ..state.clone()
-        };
+        let poll_state = state.at_cursor(&cursor);
         match collect_events(&poll_state).await {
             Ok((items, next)) => {
                 for (stamp, _, event) in &items {
@@ -388,9 +444,30 @@ pub async fn events_stream(
         .get("last-event-id")
         .and_then(|value| value.to_str().ok());
     let cursor = parse_cursor(since_header.or(query.since.as_deref()));
+    let postgres = is_postgres(&state);
+    let listener = if postgres {
+        match state.config.database_url.as_deref() {
+            Some(url) => match sqlx::postgres::PgListener::connect(url).await {
+                Ok(mut listener) => match listener.listen(CHANNEL).await {
+                    Ok(()) => Some(listener),
+                    Err(error) => {
+                        tracing::warn!(%error, "realtime listener could not subscribe");
+                        None
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(%error, "realtime listener could not connect");
+                    None
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
     let stream_state = StreamState {
         pool: pool.clone(),
-        postgres: is_postgres(&state),
+        postgres,
         tenant_id,
         project_id,
         audit_visible: role == "owner" || role == "admin",
@@ -398,6 +475,7 @@ pub async fn events_stream(
         max_events,
         emitted: 0,
         ticks: 0,
+        listener,
     };
     let mut response = Response::new(Body::from_stream(stream_body(stream_state)));
     response.headers_mut().insert(

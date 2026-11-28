@@ -673,7 +673,8 @@ pub async fn poll_commands(
     let select = format!(
         "SELECT CAST(id AS TEXT) AS id, command_type, CAST(payload AS TEXT) AS payload_text, \
          CAST(attempts AS INTEGER) AS attempts, CAST(max_attempts AS INTEGER) AS max_attempts, \
-         status, approved_plan_hash, {approval_time} AS approved_text, {lease_time} AS lease_text \
+         status, approved_plan_hash, {approval_time} AS approved_text, {lease_time} AS lease_text, \
+         CAST(deployment_id AS TEXT) AS deployment_id \
          FROM core_agentcommand WHERE CAST(node_id AS TEXT) = ? \
          AND (status = 'queued' OR (status = 'running' AND lease_expires_at < ?)) \
          ORDER BY created_at, CAST(id AS TEXT) LIMIT 20"
@@ -747,6 +748,34 @@ pub async fn poll_commands(
         .try_get("payload_text")
         .unwrap_or_else(|_| "{}".to_string());
     let attempts: i64 = row.try_get("attempts").unwrap_or(0);
+    let deployment_id: Option<String> = row.try_get("deployment_id").ok().flatten();
+    // The payload frozen at enqueue cannot know about a rollback created later,
+    // so a backup recomputes its protect set from live command state here.
+    let payload_text = if matches!(
+        command_type.as_str(),
+        "cluster.kubernetes.backup.run" | "cluster.kubernetes.backup.status"
+    ) {
+        match deployment_id.as_deref() {
+            Some(deployment_id) if !deployment_id.is_empty() => {
+                let payload: Value =
+                    serde_json::from_str(&payload_text).unwrap_or_else(|_| json!({}));
+                match crate::backup_queue::refresh_command_protect(
+                    pool,
+                    &command_id,
+                    &payload,
+                    deployment_id,
+                )
+                .await
+                {
+                    Ok(value) => serde_json::to_string(&value).unwrap_or(payload_text),
+                    Err(error) => return database_error(error),
+                }
+            }
+            _ => payload_text,
+        }
+    } else {
+        payload_text
+    };
     let lease = uuid::Uuid::new_v4().simple().to_string();
     let expires_expr = sql_expression_after(&state, 90);
     let started_expr = if postgres {
@@ -780,7 +809,7 @@ pub async fn poll_commands(
         "attempt": attempts + 1,
         "lease_token": lease,
         "lease_expires_at": expires_text(&state, &now),
-        "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten(),
+        "deployment_id": deployment_id,
     }}))
     .into_response()
 }

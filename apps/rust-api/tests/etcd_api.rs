@@ -31,6 +31,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, eph_node_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, cluster_name VARCHAR(120) NOT NULL, kubernetes_version VARCHAR(40) NOT NULL, spec TEXT NOT NULL, plan_result TEXT NOT NULL, preflight_result TEXT NOT NULL, status VARCHAR(32) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, error TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, started_at DATETIME, finished_at DATETIME)",
+        "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(80) NOT NULL, payload TEXT NOT NULL, status VARCHAR(16) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, plan_hash VARCHAR(64) NOT NULL, attempts INTEGER NOT NULL, result TEXT, error TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, node_id TEXT, project_id TEXT NOT NULL, requested_by_id INTEGER, tenant_id TEXT NOT NULL, deployment_id TEXT)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -168,6 +169,48 @@ async fn queues_one_backup_per_hour() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["created"], false);
     assert_eq!(body["code"], "ETCD_BACKUP_ALREADY_QUEUED");
+}
+
+#[tokio::test]
+async fn queues_backup_with_derived_directories_and_protect_set() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query(
+        "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, \
+         plan_hash, attempts, created_at, updated_at, project_id, tenant_id, deployment_id) \
+         VALUES ('rollback-1', 'cluster.kubernetes.version.rollback', \
+         '{\"snapshot_path\": \"/var/lib/etcd/backups/lab-cluster-20260101T010101Z.db\"}', \
+         'queued', 'rb-key', 'hash', 0, datetime('now'), datetime('now'), ?, ?, 'deploy-1')",
+    )
+    .bind(PROJECT)
+    .bind(TENANT)
+    .execute(pool)
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &state,
+        "POST",
+        "/api/v1/cluster-deployments/deploy-1/etcd-backup/run/",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let payload: String = sqlx::query_scalar(
+        "SELECT CAST(payload AS TEXT) FROM core_agentcommand \
+         WHERE command_type = 'cluster.kubernetes.backup.run' LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let payload: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(payload["directory"], "/var/lib/etcd/backups");
+    assert_eq!(payload["directories"], json!(["/var/lib/etcd/backups"]));
+    assert_eq!(payload["keep_count"], 4);
+    assert_eq!(payload["min_free_bytes"], 536_870_912);
+    assert_eq!(
+        payload["protect"],
+        json!(["lab-cluster-20260101T010101Z.db"])
+    );
 }
 
 #[tokio::test]

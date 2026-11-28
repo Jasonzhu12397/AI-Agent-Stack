@@ -37,7 +37,10 @@ pub fn spawn(state: AppState) {
                 last_backup_dispatch = std::time::Instant::now();
                 if let Some(pool) = state.identity_pool.as_ref() {
                     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-                    match crate::backup_queue::dispatch_hourly_backups(pool, &now).await {
+                    let database_url = state.config.database_url.clone().unwrap_or_default();
+                    match crate::backup_queue::dispatch_hourly_backups(pool, &database_url, &now)
+                        .await
+                    {
                         Ok(queued) if queued > 0 => {
                             tracing::info!(queued, "queued hourly etcd backups")
                         }

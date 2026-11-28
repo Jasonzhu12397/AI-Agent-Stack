@@ -264,20 +264,6 @@ async fn authorize(
     Ok((pool, deployment))
 }
 
-fn backup_payload(deployment: &DeploymentRow, policy: &Value) -> Value {
-    json!({
-        "cluster_name": deployment.cluster_name,
-        "execution_mode": "execute",
-        "confirm_cluster_name": deployment.cluster_name,
-        "directory": policy.get("directory").cloned().unwrap_or(json!(DEFAULT_DIRECTORY)),
-        "keep_count": policy.get("keep_count").cloned().unwrap_or(json!(DEFAULT_KEEP_COUNT)),
-        "keep_max_age_hours": policy.get("keep_max_age_hours").cloned().unwrap_or(json!(DEFAULT_KEEP_MAX_AGE_HOURS)),
-        "pre_upgrade_keep_max_age_hours": policy.get("pre_upgrade_keep_max_age_hours").cloned().unwrap_or(json!(DEFAULT_PRE_UPGRADE_KEEP_MAX_AGE_HOURS)),
-        "max_age_hours": policy.get("max_age_hours").cloned().unwrap_or(json!(DEFAULT_MAX_AGE_HOURS)),
-        "min_free_bytes": policy.get("min_free_bytes").cloned().unwrap_or(json!(DEFAULT_MIN_FREE_BYTES)),
-    })
-}
-
 fn payload_hash(command_type: &str, payload: &Value) -> String {
     let canonical = json!({"command_type": command_type, "payload": payload});
     let encoded = serde_json::to_string(&canonical).unwrap_or_default();
@@ -569,6 +555,31 @@ pub async fn update_policy(
             &error.to_string(),
         );
     }
+    let policy_values = Value::Object(object.clone());
+    if let Err(error) = crate::audit::record_event(
+        &pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(deployment.tenant_id.as_str()),
+            project_id: Some(deployment.project_id.as_str()),
+            event_type: "cluster.etcd_backup.policy.updated",
+            resource_type: "cluster_deployment",
+            resource_id: deployment.id.as_str(),
+            outcome: "success",
+            actor_id: None,
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({
+                "cluster_name": deployment.cluster_name,
+                "policy": policy_values,
+            }),
+        },
+    )
+    .await
+    {
+        tracing::warn!(%error, "etcd backup policy audit event failed");
+    }
     let (mut response, _) = match policy_response(&deployment, &spec) {
         Ok(value) => value,
         Err(message) => return fail(StatusCode::BAD_REQUEST, "policy_invalid", &message),
@@ -617,14 +628,24 @@ async fn queue(
         }
     }
     let kubernetes = kubernetes(&deployment.spec);
-    let policy = match enabled_switch(&kubernetes).and_then(|_| spec_policy(&kubernetes)) {
-        Ok(value) => value,
-        Err(message) => {
-            let code = message.split(':').next().unwrap_or("ETCD_BACKUP_INVALID");
-            return Err(fail(StatusCode::CONFLICT, code, &message));
+    if let Err(message) = enabled_switch(&kubernetes).and_then(|_| spec_policy(&kubernetes)) {
+        let code = message.split(':').next().unwrap_or("ETCD_BACKUP_INVALID");
+        return Err(fail(StatusCode::CONFLICT, code, &message));
+    }
+    let payload = match crate::backup_queue::deployment_backup_payload(
+        pool,
+        &deployment.id,
+        &deployment.spec,
+        &deployment.cluster_name,
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(code) => {
+            let detail = format!("etcd backup request refused: {code}");
+            return Err(fail(StatusCode::CONFLICT, &code, &detail));
         }
     };
-    let payload = backup_payload(deployment, &policy);
     let hash = payload_hash(command_type, &payload);
     let id = uuid::Uuid::new_v4().simple().to_string();
     let sql = "INSERT INTO core_agentcommand \

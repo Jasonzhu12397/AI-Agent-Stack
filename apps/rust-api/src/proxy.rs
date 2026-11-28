@@ -86,6 +86,14 @@ impl AppState {
                 .await
                 .map_err(|error| format!("failed to apply platform schema baseline: {error}"))?;
         }
+        // PostgreSQL is the event transport as well as the source of truth: the
+        // trigger publishes one notification per committed task or audit write.
+        if !sqlite {
+            sqlx::raw_sql(include_str!("../migrations/0005_realtime_notify.sql"))
+                .execute(pool)
+                .await
+                .map_err(|error| format!("failed to install realtime triggers: {error}"))?;
+        }
         Ok(())
     }
 }

@@ -164,15 +164,16 @@ async fn renews_lease_and_records_terminal_result() {
     assert_eq!(backups, 1);
 
     let pool = state.identity_pool.as_ref().unwrap();
+    let database_url = state.config.database_url.clone().unwrap_or_default();
     let now = "2026-11-28 10:00:00";
     assert_eq!(
-        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, now)
+        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, &database_url, now)
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, now)
+        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, &database_url, now)
             .await
             .unwrap(),
         0
@@ -184,6 +185,21 @@ async fn renews_lease_and_records_terminal_result() {
     .await
     .unwrap();
     assert_eq!(backups, 2);
+    let heartbeats: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_auditevent WHERE event_type = 'cluster.etcd_backup.scheduler.run'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(heartbeats, 1);
+    let metadata: String = sqlx::query_scalar(
+        "SELECT CAST(metadata AS TEXT) FROM core_auditevent \
+         WHERE event_type = 'cluster.etcd_backup.scheduler.run' LIMIT 1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(metadata.contains("20261128T10"), "{metadata}");
 
     let (status, body) = post(
         &state,
