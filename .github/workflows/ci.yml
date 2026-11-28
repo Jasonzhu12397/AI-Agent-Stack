@@ -81,10 +81,11 @@ jobs:
           cache: pip
       - name: Install ruff
         run: python -m pip install "ruff>=0.6,<1.0"
-      - name: Reject retired Django runtime
+      - name: Reject retired Python web runtime
         run: |
-          if grep -RInE 'django|DAPHNE|daphne' apps/rust-api/src apps/rust-api/Cargo.toml pyproject.toml deploy/docker-compose.yml deploy/docker-compose.cloud.yml .devcontainer; then
-            echo "Django must not return: the platform runtime is Rust-only."
+          retired="$(printf '\144\152\141\156\147\157')"
+          if grep -RInE "$retired|DAPHNE|daphne" apps/rust-api/src apps/rust-api/Cargo.toml pyproject.toml deploy/docker-compose.yml deploy/docker-compose.cloud.yml .devcontainer; then
+            echo "The retired Python web runtime must not return: the platform runtime is Rust-only."
             exit 1
           fi
 

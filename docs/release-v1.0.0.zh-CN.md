@@ -16,8 +16,8 @@
 
 | 维度 | 本版本声明 |
 | --- | --- |
-| Python | 3.12 |
-| 后端 | Django 5.x + DRF + Channels/Daphne（HTTP/ASGI），PostgreSQL 16 |
+| Python | 3.12，仅用于离线 Metal3/BMC 工具 |
+| 后端 | Rust 1.85 + Axum + SQLx（HTTP/WebSocket），PostgreSQL 16 |
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus + Pinia |
 | 目标 Kubernetes | kubeadm 发行版本，升级/回滚按 `major.minor.patch` 三元组判定 |
 | Metal3/Ironic 组件 | 见 `deploy/offline/images.json`（BMO、CAPM3、IPAM、IRSO、Ironic、IPA downloader、CAPI v1.14、Calico、Rook/Ceph、SR-IOV operator、vbmc/sushy） |
@@ -32,7 +32,7 @@
 
 ```
                     ┌──────────────────────────────────────────────┐
-  浏览器 / API ─────▶│ Platform API (Django/DRF) + Web Studio (Vue) │
+  浏览器 / API ─────▶│ Platform API (Rust/Axum) + Web Studio (Vue)   │
                     │ 租户/项目/RBAC · Agent·Workflow·Knowledge     │
                     │ 审计链 · 预算治理 · 审批 · 命令派发与对账      │
                     └───────────────┬──────────────────────────────┘

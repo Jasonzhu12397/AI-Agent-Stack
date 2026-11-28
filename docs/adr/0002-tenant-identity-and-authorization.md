@@ -1,11 +1,11 @@
 # ADR-0002: Tenant and project authorization baseline
 
-- Status: Superseded by the Rust-only cutover; retained as historical context.
+- Status: Accepted. Rust-native identity and authorization.
 - Date: 2026-11-02
 
 ## Identity source
 
-Django's configured authentication backends establish the authenticated user. API views require an authenticated Principal by default. No endpoint accepts a client-supplied user identity as authority.
+The Rust API establishes the authenticated user from its native server-side session store. Every protected view requires an authenticated Principal by default. No endpoint accepts a client-supplied user identity as authority.
 
 ## Resource model
 

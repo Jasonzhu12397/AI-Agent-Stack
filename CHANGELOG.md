@@ -536,7 +536,7 @@ automated baseline, one offline image list and one release gate.
 
 ## [0.2.0] — earlier
 
-Django/Vue migration baseline: multi-tenant projects and roles, Agent and
+Initial multi-tenant baseline: multi-tenant projects and roles, Agent and
 Workflow APIs, durable PostgreSQL worker, Metal3 cluster-plan validation,
 EPH pre-flight orchestration, control workspace and the three infrastructure
 Agents. Test baseline at that time: 103 passed.

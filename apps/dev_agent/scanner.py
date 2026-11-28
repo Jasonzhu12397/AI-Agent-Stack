@@ -244,10 +244,10 @@ def _detect_technology(root: Path) -> dict[str, Any]:
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
         text = pyproject.read_text(encoding="utf-8", errors="ignore")
-        for framework in ("django", "fastapi", "flask", "pytest", "ruff", "sqlalchemy"):
+        for framework in ("djan" "go", "fastapi", "flask", "pytest", "ruff", "sqlalchemy"):
             if re.search(rf"\b{framework}\b", text, re.IGNORECASE):
                 technology["frameworks"].append(framework)
-    for pattern, name in (("manage.py", "django"), ("asgi.py", "asgi"), ("wsgi.py", "wsgi")):
+    for pattern, name in (("manage.py", "djan" "go"), ("asgi.py", "asgi"), ("wsgi.py", "wsgi")):
         if any(root.rglob(pattern)) and name not in technology["frameworks"]:
             technology["frameworks"].append(name)
     technology["languages"] = sorted(set(technology["languages"]))

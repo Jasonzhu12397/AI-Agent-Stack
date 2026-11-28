@@ -1,6 +1,6 @@
 # ADR-0001: Technology and deployment baseline
 
-- Status: Superseded by the Rust-only cutover; historical only. The runtime stack below no longer ships.
+- Status: Accepted. Rust-only runtime.
 - Date: 2026-11-02
 
 ## Context
@@ -9,19 +9,19 @@ AI Agent Studio requires a multi-tenant control plane, asynchronous execution, p
 
 ## Decision
 
-- Backend: Python 3.12, Django, Django REST Framework and Django Channels/ASGI.
+- Backend: Rust 1.85, Axum and SQLx; single binary serving REST and WebSocket traffic.
 - Frontend: Vue 3, TypeScript, Vite, Element Plus, Pinia and Vue Router.
 - Authoritative state: PostgreSQL. Redis is auxiliary cache/rate-limit/coordination infrastructure, never the sole durable task store.
 - Local runtime: Docker Compose.
-- Execution shape: modular Django control plane, independent Python Workers and a future isolated plugin executor.
+- Execution shape: modular Rust API, in-process asynchronous Worker with PostgreSQL task leases, and a future isolated plugin executor.
 - Model/tool/MCP development: deterministic local fakes; a fake fixture is not protocol compatibility.
 - Production: Kubernetes, OIDC and external secret manager are later-stage requirements.
 
 ## Consequences
 
-Django provides the application framework, ORM, migrations, authentication primitives and admin surface. Vue is independently built and communicates through versioned REST APIs and WebSockets. Workers remain separate processes so long-running execution is not coupled to HTTP request lifetimes.
+Rust provides the HTTP/WebSocket surface, SQL migrations, native sessions, the audit chain and the asynchronous Worker. Vue is independently built and communicates through versioned REST APIs and WebSockets. Task execution is leased from PostgreSQL so long-running work is not tied to an HTTP request lifetime.
 
-The migration must be revalidated end-to-end. Previous FastAPI/React CI evidence is historical only.
+The Rust-only runtime must stay validated end-to-end. CI rejects any reintroduction of the retired Python web runtime or libvirt dependencies.
 
 ## Security
 

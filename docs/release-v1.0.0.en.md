@@ -13,8 +13,8 @@ This release turns the "AI Agent SaaS platform" and the "three-Agent physical ba
 
 | Dimension | What this release declares |
 | --- | --- |
-| Python | 3.12 |
-| Backend | Django 5.x + DRF + Channels/Daphne (HTTP/ASGI), PostgreSQL 16 |
+| Python | 3.12 for offline Metal3/BMC tooling only |
+| Backend | Rust 1.85 + Axum + SQLx (HTTP/WebSocket), PostgreSQL 16 |
 | Frontend | Vue 3 + TypeScript + Vite + Element Plus + Pinia |
 | Target Kubernetes | kubeadm-provisioned; upgrade and rollback decide on the full `major.minor.patch` triple |
 | Metal3/Ironic components | See `deploy/offline/images.json` (BMO, CAPM3, IPAM, IRSO, Ironic, IPA downloader, CAPI v1.14, Calico, Rook/Ceph, SR-IOV operator, vbmc/sushy) |
@@ -29,7 +29,7 @@ This release turns the "AI Agent SaaS platform" and the "three-Agent physical ba
 
 ```
                     ┌──────────────────────────────────────────────┐
-  browser / API ───▶│ Platform API (Django/DRF) + Web Studio (Vue) │
+  browser / API ───▶│ Platform API (Rust/Axum) + Web Studio (Vue)   │
                     │ tenancy/RBAC · Agent/Workflow/Knowledge      │
                     │ audit chain · budgets · approvals · dispatch │
                     └───────────────┬──────────────────────────────┘
