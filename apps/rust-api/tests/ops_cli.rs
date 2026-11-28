@@ -25,6 +25,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, eph_node_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, cluster_name VARCHAR(120) NOT NULL, kubernetes_version VARCHAR(40) NOT NULL, spec TEXT NOT NULL, plan_result TEXT NOT NULL, preflight_result TEXT NOT NULL, status VARCHAR(32) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, error TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, started_at DATETIME, finished_at DATETIME)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
+        "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER, name VARCHAR(120) NOT NULL, node_type VARCHAR(24) NOT NULL, capabilities TEXT NOT NULL DEFAULT '[]', labels TEXT NOT NULL DEFAULT '{}', credential_hash TEXT, status VARCHAR(24) NOT NULL DEFAULT 'pending', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(80) NOT NULL, payload TEXT NOT NULL, status VARCHAR(16) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, plan_hash VARCHAR(64) NOT NULL, attempts INTEGER NOT NULL, result TEXT, error TEXT, started_at DATETIME, finished_at DATETIME, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, node_id TEXT, project_id TEXT NOT NULL, requested_by_id INTEGER, tenant_id TEXT NOT NULL, deployment_id TEXT)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -139,4 +140,44 @@ async fn check_backups_dry_run_never_writes() {
         .unwrap();
     assert_eq!(code, 1);
     assert_eq!(audit_count(&state, "cluster.etcd_backup.problem").await, 0);
+}
+
+#[tokio::test]
+async fn enrolls_the_local_runner_once_and_reuses_the_token() {
+    let state = state().await;
+    let path = std::env::temp_dir().join(format!("local-runner-{}.token", uuid::Uuid::new_v4()));
+    let file = path.display().to_string();
+    let args = ["--name", "Local computer", "--token-file", &file];
+    let owned: Vec<String> = args.iter().map(|value| value.to_string()).collect();
+    let code = ai_agent_stack_api::ops_cli::run(&state, "enroll-local-runner", &owned)
+        .await
+        .unwrap();
+    assert_eq!(code, 0);
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert!(first.trim().len() > 30);
+    let pool = state.identity_pool.as_ref().unwrap();
+    let (id, node_type): (String, String) = sqlx::query_as(
+        "SELECT CAST(id AS TEXT), node_type FROM core_agentnode WHERE name = 'Local computer'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(node_type, "local_runner");
+    let code = ai_agent_stack_api::ops_cli::run(&state, "enroll-local-runner", &owned)
+        .await
+        .unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM core_agentnode")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "a re-run must reuse the node {id}");
+    let capabilities: String =
+        sqlx::query_scalar("SELECT capabilities FROM core_agentnode WHERE name = 'Local computer'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(capabilities.contains("local.disk_usage"));
+    let _ = std::fs::remove_file(&path);
 }

@@ -30,6 +30,7 @@ pub fn is_ops_command(name: &str) -> bool {
             | "sync-plugin-catalog"
             | "prune-qdrant-collections"
             | "reindex-knowledge"
+            | "enroll-local-runner"
     )
 }
 
@@ -73,6 +74,7 @@ pub async fn run(state: &AppState, name: &str, args: &[String]) -> Result<i32, S
         "sync-plugin-catalog" => sync_plugin_catalog(state, &flags).await,
         "prune-qdrant-collections" => prune_qdrant_collections(state, &flags).await,
         "reindex-knowledge" => reindex_knowledge(state, &flags).await,
+        "enroll-local-runner" => enroll_local_runner(state, &flags).await,
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -749,5 +751,174 @@ async fn reindex_knowledge(state: &AppState, flags: &Flags) -> Result<i32, Strin
     {
         return Ok(1);
     }
+    Ok(0)
+}
+
+const LOCAL_RUNNER_CAPABILITIES: &str = r#"["local.system_info","local.disk_usage"]"#;
+const LOCAL_RUNNER_LABELS: &str = r#"{"role":"console_host"}"#;
+
+/// Register the machine hosting the console as a `local_runner` node, writing
+/// the bearer token the local agent needs. Idempotent: a re-run reuses the
+/// node and only rewrites the credential when the token changed.
+async fn enroll_local_runner(state: &AppState, flags: &Flags) -> Result<i32, String> {
+    let pool = pool_of(state)?;
+    let name = flags
+        .value("--name")
+        .unwrap_or_else(|| "Local computer".to_string());
+    let token_file = flags
+        .value("--token-file")
+        .ok_or_else(|| "--token-file is required".to_string())?;
+    let postgres = crate::tenancy::is_postgres(state);
+    let tenant_column = "CAST(id AS TEXT) AS id";
+    let tenant = match flags.value("--tenant") {
+        Some(slug) => sqlx::query(&format!(
+            "SELECT {tenant_column} FROM core_tenant WHERE slug = ? LIMIT 1"
+        ))
+        .bind(&slug)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| row.try_get::<String, _>("id").ok()),
+        None => None,
+    };
+    let tenant = match tenant {
+        Some(tenant) => tenant,
+        None => sqlx::query(&format!(
+            "SELECT {tenant_column} FROM core_tenant ORDER BY created_at LIMIT 1"
+        ))
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| row.try_get::<String, _>("id").ok())
+        .ok_or_else(|| "No tenant exists yet; run the demo seed first.".to_string())?,
+    };
+    let project = match flags.value("--project") {
+        Some(slug) => sqlx::query(
+            "SELECT CAST(id AS TEXT) AS id FROM core_project \
+             WHERE CAST(tenant_id AS TEXT) = ? AND slug = ? LIMIT 1",
+        )
+        .bind(&tenant)
+        .bind(&slug)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| row.try_get::<String, _>("id").ok()),
+        None => None,
+    };
+    let project = match project {
+        Some(project) => project,
+        None => sqlx::query(
+            "SELECT CAST(id AS TEXT) AS id FROM core_project \
+             WHERE CAST(tenant_id AS TEXT) = ? ORDER BY name LIMIT 1",
+        )
+        .bind(&tenant)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .and_then(|row| row.try_get::<String, _>("id").ok())
+        .ok_or_else(|| "No project exists yet; run the demo seed first.".to_string())?,
+    };
+    let owner: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM platform_users WHERE is_staff = 1 ORDER BY id LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?
+    .or(
+        sqlx::query_scalar::<_, i64>("SELECT id FROM platform_users ORDER BY id LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|error| error.to_string())?,
+    )
+    .ok_or_else(|| "No user exists yet; run the demo seed first.".to_string())?;
+
+    let path = std::path::PathBuf::from(&token_file);
+    let mut token = std::fs::read_to_string(&path)
+        .map(|text| text.trim().to_string())
+        .unwrap_or_default();
+    if token.is_empty() {
+        token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&path, format!("{token}\n")).map_err(|error| error.to_string())?;
+    let digest = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(token.as_bytes()))
+    };
+
+    let existing: Option<(String, String)> = sqlx::query_as::<_, (String, String)>(
+        "SELECT CAST(id AS TEXT) AS id, node_type FROM core_agentnode \
+         WHERE CAST(project_id AS TEXT) = ? AND name = ? LIMIT 1",
+    )
+    .bind(&project)
+    .bind(&name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    let now = if postgres { "NOW()" } else { "datetime('now')" };
+    let node_id = match existing {
+        Some((id, node_type)) => {
+            if node_type != "local_runner" {
+                return Err(format!(
+                    "Node {name} already exists as {node_type}; pick another name."
+                ));
+            }
+            let credential = sqlx::query(
+                "SELECT credential_hash FROM core_agentnode WHERE CAST(id AS TEXT) = ? LIMIT 1",
+            )
+            .bind(&id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|error| error.to_string())?
+            .and_then(|row| {
+                row.try_get::<Option<String>, _>("credential_hash")
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_default();
+            if credential != digest {
+                let caps = if postgres { "?::jsonb" } else { "?" };
+                sqlx::query(&format!(
+                    "UPDATE core_agentnode SET credential_hash = ?, capabilities = {caps}, \
+                     updated_at = {now} WHERE CAST(id AS TEXT) = ?"
+                ))
+                .bind(&digest)
+                .bind(LOCAL_RUNNER_CAPABILITIES)
+                .bind(&id)
+                .execute(pool)
+                .await
+                .map_err(|error| error.to_string())?;
+            }
+            id
+        }
+        None => {
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            let json = if postgres { "?::jsonb" } else { "?" };
+            sqlx::query(&format!(
+                "INSERT INTO core_agentnode (id, tenant_id, project_id, created_by_id, name, \
+                 node_type, capabilities, labels, credential_hash, status, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, 'local_runner', {json}, {json}, ?, 'pending', {now}, {now})"
+            ))
+            .bind(&id)
+            .bind(&tenant)
+            .bind(&project)
+            .bind(owner)
+            .bind(&name)
+            .bind(LOCAL_RUNNER_CAPABILITIES)
+            .bind(LOCAL_RUNNER_LABELS)
+            .bind(&digest)
+            .execute(pool)
+            .await
+            .map_err(|error| error.to_string())?;
+            id
+        }
+    };
+    println!("{node_id}");
     Ok(0)
 }
