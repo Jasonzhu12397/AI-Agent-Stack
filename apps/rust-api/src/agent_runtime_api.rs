@@ -257,6 +257,65 @@ pub async fn command_result(
             "Command lease is invalid or expired.",
         );
     }
+    let deployment_id_for_fence: Option<String> = row.try_get("deployment_id").ok().flatten();
+    let fenced = if node.node_type == "eph_node" {
+        match deployment_id_for_fence.as_deref() {
+            None => false,
+            Some(deployment_id) => {
+                let plan_result: Option<String> = sqlx::query_scalar(
+                    "SELECT CAST(plan_result AS TEXT) FROM core_clusterdeployment \
+                     WHERE CAST(id AS TEXT) = ? LIMIT 1",
+                )
+                .bind(deployment_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+                match plan_result {
+                    None => true,
+                    Some(text) => serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .and_then(|plan| plan.get("dual_agent").cloned())
+                        .and_then(|dual| dual.as_object().cloned())
+                        .is_some_and(|dual| {
+                            dual.get("target_agent_owns_cluster")
+                                .and_then(Value::as_bool)
+                                == Some(true)
+                                || dual.get("pivot_executed").and_then(Value::as_bool) == Some(true)
+                        }),
+                }
+            }
+        }
+    } else {
+        false
+    };
+    if fenced {
+        let now = timestamp();
+        let error_text = json!({
+            "code": "AGENT_CONTROL_OWNERSHIP_FENCED",
+            "retryable": false
+        });
+        let _ = sqlx::query(
+            "UPDATE core_agentcommand SET status = 'failed', error = ?, finished_at = ?, \
+             lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(error_text.to_string())
+        .bind(&now)
+        .bind(&now)
+        .bind(&command_id)
+        .execute(pool)
+        .await;
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": {
+                    "code": "AGENT_CONTROL_OWNERSHIP_FENCED",
+                    "detail": "EPH Agent no longer owns this cluster command."
+                }
+            })),
+        )
+            .into_response();
+    }
     if outcome == "succeeded" {
         let command_type: String = row.try_get("command_type").unwrap_or_default();
         let stored_payload: Value = sqlx::query_scalar::<_, String>(

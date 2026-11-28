@@ -32,7 +32,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, agent_node_id TEXT NOT NULL, vendor VARCHAR(256) NOT NULL, product_name VARCHAR(256) NOT NULL, system_uuid VARCHAR(128) NOT NULL, identity_material TEXT NOT NULL, identity_fingerprint VARCHAR(64) NOT NULL, identity_status VARCHAR(16) NOT NULL, identity_conflicts TEXT NOT NULL, hardware_inventory TEXT NOT NULL, inventory_source VARCHAR(48) NOT NULL, inventory_revision INTEGER NOT NULL, observed_at DATETIME, bmc_credential_ref VARCHAR(160) NOT NULL, bmc_endpoint VARCHAR(500) NOT NULL, bmc_trust_bundle_ref VARCHAR(160) NOT NULL, bmc_tls_verify BOOLEAN NOT NULL, bmc_configured_at DATETIME, bmc_identity_evidence TEXT NOT NULL, bmh_name VARCHAR(253) NOT NULL, capi_machine_name VARCHAR(253) NOT NULL, kubernetes_node_name VARCHAR(253) NOT NULL, lifecycle_state VARCHAR(32) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
-        "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, cluster_name VARCHAR(63) NOT NULL, spec TEXT NOT NULL, status VARCHAR(32) NOT NULL, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, cluster_name VARCHAR(63) NOT NULL, spec TEXT NOT NULL, plan_result TEXT, status VARCHAR(32) NOT NULL, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(64) NOT NULL, payload TEXT NOT NULL, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, lease_token VARCHAR(32), lease_expires_at DATETIME, result TEXT, error TEXT, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, plan_hash VARCHAR(64), approved_plan_hash VARCHAR(64), approved_at DATETIME, approved_by_id INTEGER, started_at DATETIME, finished_at DATETIME, deployment_id TEXT, node_id TEXT, tenant_id TEXT, project_id TEXT, requested_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -194,6 +194,36 @@ async fn renews_lease_and_records_terminal_result() {
     .await;
     assert_eq!(status, StatusCode::OK, "replay: {body}");
     assert_eq!(body["status"], "succeeded");
+}
+
+#[tokio::test]
+async fn fences_eph_results_after_the_target_agent_took_ownership() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query("UPDATE core_agentnode SET node_type = 'eph_node' WHERE id = ?")
+        .bind(NODE)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE core_clusterdeployment SET plan_result = '{\"dual_agent\": {\"pivot_executed\": true}}' WHERE id = '66666666666666666666666666666666'")
+        .execute(pool)
+        .await
+        .unwrap();
+    let (status, body) = post(
+        &state,
+        &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
+        json!({"node_id": NODE, "outcome": "succeeded", "result": {"scale_performed": true}}),
+        Some(LEASE),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "AGENT_CONTROL_OWNERSHIP_FENCED");
+    let status: String = sqlx::query_scalar("SELECT status FROM core_agentcommand WHERE id = ?")
+        .bind(COMMAND)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "failed");
 }
 
 #[tokio::test]
