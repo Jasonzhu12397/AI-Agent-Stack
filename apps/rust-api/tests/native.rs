@@ -32,6 +32,14 @@ async fn state() -> (AppState, String) {
     .await
     .unwrap();
     sqlx::query(
+        "CREATE TABLE platform_session_activity (token_hash CHAR(64) PRIMARY KEY, \
+         user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, \
+         last_activity DATETIME NOT NULL, revoked_at DATETIME)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO platform_users (id, username, email, is_staff, is_active) \
          VALUES (1, 'edge-check@example.com', 'edge-check@example.com', 0, 1)",
     )

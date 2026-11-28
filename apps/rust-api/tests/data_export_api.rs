@@ -27,6 +27,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_dataexportjob (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT, requested_by_id INTEGER NOT NULL, scope TEXT NOT NULL, status VARCHAR(16) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, row_count INTEGER NOT NULL, file_ref VARCHAR(500) NOT NULL, expires_at DATETIME, error_code VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE (tenant_id, idempotency_key))",
         "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",
         "CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",
+        "CREATE TABLE platform_session_activity (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, created_at DATETIME NOT NULL, last_activity DATETIME NOT NULL, revoked_at DATETIME)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
     }
