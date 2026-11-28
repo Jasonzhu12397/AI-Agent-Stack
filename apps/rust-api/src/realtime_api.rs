@@ -125,7 +125,9 @@ fn timestamp_column(column: &str, postgres: bool) -> String {
     if postgres {
         format!("to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') AS {column}")
     } else {
-        format!("strftime('%Y-%m-%d %H:%M:%S.%f', {column}) AS {column}")
+        // SQLite's %f is "seconds with fraction" (\`SS.SSS\`), not a bare
+        // fraction: appending ".%f" to %S would print the seconds twice.
+        format!("strftime('%Y-%m-%d %H:%M:%f', {column}) AS {column}")
     }
 }
 

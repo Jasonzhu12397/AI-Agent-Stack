@@ -69,6 +69,18 @@ async fn streams_bounded_task_and_audit_events() {
     assert!(body.contains("event: ready"), "{body}");
     assert!(body.contains("event: task"), "{body}");
     assert!(body.contains("event: audit"), "{body}");
+    // Every id must be a parseable RFC3339 instant: the client hands the last
+    // one back as Last-Event-ID, and a malformed stamp silently resets the
+    // stream to "now".
+    for line in body.lines().filter_map(|line| line.strip_prefix("id: ")) {
+        if line.is_empty() {
+            continue;
+        }
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(line).is_ok(),
+            "event id is not RFC3339: {line}"
+        );
+    }
 }
 
 #[tokio::test]
