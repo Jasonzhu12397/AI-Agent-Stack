@@ -614,7 +614,15 @@ async fn creates_node_commands_idempotently_and_rejects_forbidden_payloads() {
     let response = router(state.clone())
         .oneshot(create(
             "command-create-3",
-            json!({"command_type": "cluster.kubernetes.version.upgrade", "payload": {"version": "1.30"}}),
+            json!({
+                "command_type": "cluster.kubernetes.version.upgrade",
+                "payload": {
+                    "cluster_name": "lab",
+                    "current_version": "v1.34.2",
+                    "target_version": "v1.35.0",
+                    "execution_mode": "simulation"
+                }
+            }),
         ))
         .await
         .unwrap();
@@ -625,4 +633,27 @@ async fn creates_node_commands_idempotently_and_rejects_forbidden_payloads() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     assert_eq!(body["status"], "waiting_approval");
+
+    let response = router(state.clone())
+        .oneshot(create(
+            "command-create-4",
+            json!({
+                "command_type": "cluster.kubernetes.version.upgrade",
+                "payload": {
+                    "cluster_name": "lab",
+                    "current_version": "v1.34.2",
+                    "target_version": "v1.36.0",
+                    "execution_mode": "simulation"
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "VERSION_STEP_INVALID");
 }

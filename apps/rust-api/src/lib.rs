@@ -14,6 +14,7 @@ pub mod cloud_vm_api;
 pub mod cluster_api;
 pub mod cluster_create_api;
 pub mod cluster_sync_api;
+pub mod command_contracts;
 pub mod config;
 pub mod context;
 pub mod data_export_api;

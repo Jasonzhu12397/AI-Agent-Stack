@@ -1106,6 +1106,22 @@ pub async fn create_node_command(
     if let Some(message) = validate_command_payload(&command_payload) {
         return error(StatusCode::BAD_REQUEST, message);
     }
+    let command_payload =
+        match crate::command_contracts::validate(&command_type, &command_payload, &cluster_name) {
+            Ok(value) => value,
+            Err(contract) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": {
+                            "code": contract.code,
+                            "detail": contract.detail,
+                        }
+                    })),
+                )
+                    .into_response()
+            }
+        };
     let idempotency_key = headers
         .get("Idempotency-Key")
         .and_then(|value| value.to_str().ok())
