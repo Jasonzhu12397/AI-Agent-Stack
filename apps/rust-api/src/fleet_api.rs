@@ -176,6 +176,154 @@ pub(crate) struct Machine {
     pub(crate) inventory: Value,
 }
 
+/// Marker stored on a machine that has already consumed one inspection result,
+/// so the same command is applied once even if it is polled repeatedly.
+const APPLIED_MARKER: &str = "bmh_inspect_command_id";
+const INSPECT_ACTION: &str = "metal3.host.inspect";
+const MAX_COMMANDS_PER_PASS: i64 = 20;
+
+async fn mark_inspection_applied(
+    pool: &AnyPool,
+    machine_id: &str,
+    command_id: &str,
+) -> Result<(), String> {
+    let text = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT CAST(hardware_inventory AS TEXT) FROM core_agentmachine WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(machine_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| error.to_string())?
+    .flatten()
+    .unwrap_or_default();
+    let mut inventory: serde_json::Map<String, Value> = serde_json::from_str(&text)
+        .ok()
+        .and_then(|value: Value| value.as_object().cloned())
+        .unwrap_or_default();
+    inventory.insert(APPLIED_MARKER.into(), json!(command_id));
+    sqlx::query(
+        "UPDATE core_agentmachine SET hardware_inventory = ?, updated_at = CURRENT_TIMESTAMP \
+         WHERE CAST(id AS TEXT) = ?",
+    )
+    .bind(Value::Object(inventory).to_string())
+    .bind(machine_id)
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+/// Apply every succeeded inspection command the project has not consumed yet.
+///
+/// Discovery queues ``metal3.host.inspect``; its result lands on the command
+/// record. Applying it before a fleet read means a refresh shows the discovered
+/// PCI inventory without opening a deployment or pressing a sync button.
+pub async fn sync_fleet_inspections(
+    pool: &AnyPool,
+    tenant_id: &str,
+    project_id: &str,
+) -> Result<Value, String> {
+    let machines = load_machines(pool, tenant_id, project_id).await?;
+    if machines.is_empty() {
+        return Ok(json!({"commands": [], "applied_machines": 0, "pci_adopted": 0}));
+    }
+    let rows = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(result AS TEXT) AS result_text \
+         FROM core_agentcommand WHERE CAST(tenant_id AS TEXT) = ? AND CAST(project_id AS TEXT) = ? \
+         AND command_type = ? AND status = 'succeeded' AND result IS NOT NULL \
+         ORDER BY finished_at DESC, updated_at DESC, CAST(id AS TEXT) DESC LIMIT ?",
+    )
+    .bind(tenant_id)
+    .bind(project_id)
+    .bind(INSPECT_ACTION)
+    .bind(MAX_COMMANDS_PER_PASS)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut reports = Vec::new();
+    let mut applied_machines = 0_i64;
+    let mut pci_adopted = 0_i64;
+    for row in rows {
+        let command_id: String = row.try_get("id").unwrap_or_default();
+        let result_text: Option<String> = row.try_get("result_text").ok().flatten();
+        let result: Value = result_text
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_else(|| json!({}));
+        let Some(output) = result.get("output").filter(|value| value.is_object()) else {
+            reports.push(
+                json!({"command_id": command_id, "applied": 0, "reason": "BMH_OUTPUT_MISSING"}),
+            );
+            continue;
+        };
+        let hosts = match normalize_hosts(output.get("hosts").unwrap_or(&Value::Null)) {
+            Ok(hosts) => hosts,
+            Err(code) => {
+                reports.push(json!({"command_id": command_id, "applied": 0, "reason": code}));
+                continue;
+            }
+        };
+        let mut applied = 0_i64;
+        let mut adopted = 0_i64;
+        let mut unmatched = Vec::new();
+        for host in &hosts {
+            let host_key = text(host.get("bmc_host"));
+            let name = text(host.get("bmh_name"));
+            let uuid = text(host.get("system_uuid"));
+            let machine = machines
+                .iter()
+                .find(|m| !host_key.is_empty() && bmc_host(&m.bmc_endpoint) == host_key)
+                .or_else(|| {
+                    machines
+                        .iter()
+                        .find(|m| !m.bmh_name.is_empty() && m.bmh_name == name)
+                })
+                .or_else(|| {
+                    (!uuid.is_empty())
+                        .then(|| machines.iter().find(|m| m.system_uuid == uuid))
+                        .flatten()
+                });
+            let Some(machine) = machine else {
+                unmatched.push(json!(name));
+                continue;
+            };
+            if machine
+                .inventory
+                .get(APPLIED_MARKER)
+                .and_then(Value::as_str)
+                == Some(command_id.as_str())
+            {
+                continue;
+            }
+            if merge_host(pool, machine, host).await? {
+                adopted += 1;
+            }
+            mark_inspection_applied(pool, &machine.id, &command_id).await?;
+            applied += 1;
+        }
+        if applied > 0 {
+            applied_machines += applied;
+            pci_adopted += adopted;
+            reports.push(json!({
+                "command_id": command_id,
+                "applied": applied,
+                "pci_adopted": adopted,
+                "host_count": hosts.len(),
+                "unmatched": unmatched
+                    .iter()
+                    .take(32)
+                    .cloned()
+                    .collect::<Vec<Value>>(),
+            }));
+        }
+    }
+    Ok(json!({
+        "commands": reports,
+        "applied_machines": applied_machines,
+        "pci_adopted": pci_adopted,
+    }))
+}
+
 pub async fn bmh_inventory(
     State(state): State<AppState>,
     Path((tenant_id, project_id)): Path<(String, String)>,

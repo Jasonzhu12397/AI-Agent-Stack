@@ -2406,6 +2406,13 @@ pub async fn fleet_machines(
     ) {
         return error(StatusCode::NOT_FOUND, "Project not found.");
     }
+    // Discovery results land on command records; applying them before the
+    // read is what makes a fleet refresh show the PCI inventory.
+    if let Err(error) =
+        crate::fleet_api::sync_fleet_inspections(pool, &tenant_id, &project_id).await
+    {
+        tracing::warn!(%error, "fleet inspection sync failed");
+    }
     let limit: i64 = match params
         .get("limit")
         .map(|value| value.parse())

@@ -269,6 +269,41 @@ async fn expires_approved_rollbacks_past_their_protection_horizon() {
 }
 
 #[tokio::test]
+async fn applies_inspection_commands_to_machines_once() {
+    let state = state().await;
+    let pool = state.identity_pool.as_ref().unwrap();
+    sqlx::query(
+        "INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, \
+         lease_token, attempts, max_attempts, result, created_at, updated_at, finished_at, \
+         node_id, tenant_id, project_id, requested_by_id, deployment_id) \
+         VALUES ('inspect-1', 'metal3.host.inspect', '{}', 'succeeded', 'k', NULL, 1, 3, \
+         '{\"output\":{\"hosts\":[{\"bmh_name\":\"bmh-1\",\"bmc_host\":\"bmc.example.com\", \
+         \"pci_addresses\":[\"0000:3b:00.0\"],\"nics\":[{\"name\":\"eth0\",\"pci_address\":\"0000:3b:00.0\",\"mac\":\"aa:bb:cc:dd:ee:ff\"}]}]}}', \
+         datetime('now'), datetime('now'), datetime('now'), ?, 'tenant', 'project', 1, NULL)",
+    )
+    .bind(NODE)
+    .execute(pool)
+    .await
+    .unwrap();
+    let report = ai_agent_stack_api::fleet_api::sync_fleet_inspections(pool, "tenant", "project")
+        .await
+        .unwrap();
+    assert_eq!(report["applied_machines"], 1, "{report}");
+    let inventory: String = sqlx::query_scalar(
+        "SELECT hardware_inventory FROM core_agentmachine WHERE id = 'machine-1'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(inventory.contains("bmh_inspect_command_id"), "{inventory}");
+    assert!(inventory.contains("bmh_inspect"), "{inventory}");
+    let again = ai_agent_stack_api::fleet_api::sync_fleet_inspections(pool, "tenant", "project")
+        .await
+        .unwrap();
+    assert_eq!(again["applied_machines"], 0, "{again}");
+}
+
+#[tokio::test]
 async fn fences_eph_results_after_the_target_agent_took_ownership() {
     let state = state().await;
     let pool = state.identity_pool.as_ref().unwrap();
