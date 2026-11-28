@@ -428,7 +428,7 @@ pub async fn dispatch_due_jobs(state: &AppState, limit: i64) -> Result<usize, St
          CAST(job.thread_id AS TEXT) AS thread_id, CAST(job.model_config_id AS TEXT) AS model_config_id, \
          CAST(job.tenant_id AS TEXT) AS tenant_id, CAST(job.project_id AS TEXT) AS project_id, \
          CAST(job.created_by_id AS BIGINT) AS created_by_id \
-         FROM core_scheduledchatjob job WHERE job.status = 'active' AND job.next_run_at <= {{now}} \
+         FROM core_scheduledchatjob job WHERE job.status = 'active' AND job.next_run_at <= {now} \
          ORDER BY job.next_run_at, job.created_at LIMIT ?";
     let now_expr = if postgres {
         "?::timestamptz".to_string()
