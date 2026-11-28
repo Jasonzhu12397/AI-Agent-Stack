@@ -237,7 +237,9 @@ pub async fn sync_eph_preflight(
 }
 
 const BMH_INSPECT_ACTION: &str = "metal3.host.inspect";
-const BMH_INVENTORY_KEY: &str = "bmh_inventory";
+// The console reads `preflight_result.bmh_inventory_sync`; the response body
+// keeps the historical `bmh_inventory` key.
+const BMH_INVENTORY_KEY: &str = "bmh_inventory_sync";
 
 fn bmh_record(payload: &Value) -> Value {
     let output = payload.get("output").and_then(Value::as_object);
@@ -295,6 +297,98 @@ async fn store_snapshot(
         .map_err(|error| error.to_string())?;
     }
     Ok(Value::Object(document))
+}
+
+/// Refresh both stored snapshots from Cloud Control before a detail read.
+///
+/// Missing runs and bridge outages are normal states rather than errors, so the
+/// page renders with whatever was stored last instead of failing.
+pub async fn reconcile_deployment(
+    state: &AppState,
+    pool: &AnyPool,
+    deployment_id: &str,
+    tenant_id: &str,
+    project_id: &str,
+) {
+    if let Ok(payload) = fetch_action(deployment_id, EPH_PREFLIGHT_ACTION).await {
+        if payload.get("available").and_then(Value::as_bool) == Some(true) {
+            let snapshot = preflight_snapshot(&payload);
+            let _ = store_snapshot(pool, deployment_id, EPH_PREFLIGHT_KEY, &snapshot).await;
+        }
+    }
+    let Ok(payload) = fetch_action(deployment_id, BMH_INSPECT_ACTION).await else {
+        return;
+    };
+    if payload.get("available").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let mut record = bmh_record(&payload);
+    if record["status"] == json!("succeeded") {
+        let output = payload.get("output").cloned().unwrap_or_else(|| json!({}));
+        match crate::fleet_api::normalize_hosts(output.get("hosts").unwrap_or(&Value::Null)) {
+            Ok(hosts) => {
+                if let Ok(machines) =
+                    crate::fleet_api::load_machines(pool, tenant_id, project_id).await
+                {
+                    let mut updated = 0;
+                    let mut unmatched = Vec::new();
+                    for host in &hosts {
+                        let host_key = host
+                            .get("bmc_host")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let machine = machines
+                            .iter()
+                            .find(|m| {
+                                !host_key.is_empty()
+                                    && crate::fleet_api::bmc_host(&m.bmc_endpoint) == host_key
+                            })
+                            .or_else(|| {
+                                let name = host
+                                    .get("bmh_name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default();
+                                machines
+                                    .iter()
+                                    .find(|m| !m.bmh_name.is_empty() && m.bmh_name == name)
+                            })
+                            .or_else(|| {
+                                let uuid = host
+                                    .get("system_uuid")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default();
+                                (!uuid.is_empty())
+                                    .then(|| machines.iter().find(|m| m.system_uuid == uuid))
+                                    .flatten()
+                            });
+                        match machine {
+                            Some(machine) => {
+                                if crate::fleet_api::merge_host(pool, machine, host)
+                                    .await
+                                    .is_ok()
+                                {
+                                    updated += 1;
+                                }
+                            }
+                            None => {
+                                unmatched.push(host.get("bmh_name").cloned().unwrap_or(Value::Null))
+                            }
+                        }
+                    }
+                    unmatched.truncate(64);
+                    record["host_count"] = json!(hosts.len());
+                    record["matched"] = json!(updated);
+                    record["unmatched"] = json!(unmatched);
+                    record["warnings"] = json!(bounded_warnings(output.get("warnings")));
+                }
+            }
+            Err(code) => record["reason"] = json!(code),
+        }
+    } else {
+        record["reason"] = json!("BMH_INSPECT_NOT_SUCCEEDED");
+    }
+    let _ = store_snapshot(pool, deployment_id, BMH_INVENTORY_KEY, &record).await;
+    let _ = state;
 }
 
 pub async fn sync_bmh_inventory(

@@ -212,6 +212,16 @@ pub async fn get_deployment(
         Ok(false) => return fail(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
         Err(error) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error),
     }
+    // Pull whatever the EPH reported since the last read before answering: a
+    // stale snapshot was the normal case when only the sync buttons refreshed it.
+    crate::cluster_sync_api::reconcile_deployment(
+        &state,
+        pool,
+        &deployment_id,
+        &tenant_id,
+        &project_id,
+    )
+    .await;
     let created = column(&state, "deployment", "created_at");
     let updated = column(&state, "deployment", "updated_at");
     let started = column(&state, "deployment", "started_at");
