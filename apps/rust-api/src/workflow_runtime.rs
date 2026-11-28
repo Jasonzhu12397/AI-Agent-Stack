@@ -30,6 +30,7 @@ struct StepRecord {
 struct NodeContext<'a> {
     state: &'a AppState,
     user_id: i64,
+    lease_token: &'a str,
 }
 
 pub async fn execute(
@@ -84,7 +85,11 @@ pub async fn execute(
         .await
         .map_err(WorkflowError::Failed)?;
     let mut active_nodes: HashSet<String> = HashSet::new();
-    let ctx = NodeContext { state, user_id };
+    let ctx = NodeContext {
+        state,
+        user_id,
+        lease_token,
+    };
     for node_id in &graph.order {
         let node = graph
             .nodes
@@ -214,6 +219,75 @@ async fn load_run(pool: &AnyPool, task_id: &str) -> Result<WorkflowRun, String> 
         deadline_at: row.try_get("deadline_at").ok(),
         definition,
     })
+}
+
+struct ModelCall<'a> {
+    model: &'a crate::runtime_model::RuntimeModel,
+    credential: &'a str,
+    messages: &'a [Value],
+    max_tokens: i64,
+    timeout: i64,
+}
+
+async fn complete_with_budget(
+    ctx: &NodeContext<'_>,
+    run: &WorkflowRun,
+    step: &str,
+    call: ModelCall<'_>,
+) -> Result<crate::runtime_model::Completion, String> {
+    let ModelCall {
+        model,
+        credential,
+        messages,
+        max_tokens,
+        timeout,
+    } = call;
+    let pool = ctx
+        .state
+        .identity_pool
+        .as_ref()
+        .ok_or_else(|| "Database is unavailable.".to_string())?;
+    let requested = (max_tokens
+        + serde_json::to_string(messages)
+            .map(|text| text.len())
+            .unwrap_or(0) as i64
+            / 4)
+    .max(1);
+    let reservation = crate::token_guard::reserve(
+        pool,
+        crate::tenancy::is_postgres(ctx.state),
+        crate::token_guard::ReservationRequest {
+            tenant_id: &run.tenant_id,
+            task_id: &run.task_id,
+            agent_run_id: None,
+            workflow_run_id: Some(&run.id),
+            run_id: &run.id,
+            step: &format!("{step}-{}", ctx.lease_token),
+            lease_token: ctx.lease_token,
+            requested_tokens: requested,
+        },
+    )
+    .await?;
+    match model
+        .complete(ctx.state, credential, messages, max_tokens, None, timeout)
+        .await
+    {
+        Ok(completion) => {
+            crate::token_guard::settle(
+                pool,
+                &reservation,
+                completion.input_tokens + completion.output_tokens,
+            )
+            .await?;
+            Ok(completion)
+        }
+        Err(error) => {
+            let _ = crate::token_guard::release(pool, &reservation).await;
+            Err(format!(
+                "WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:{error}"
+            ))
+        }
+    }
 }
 
 fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -417,22 +491,23 @@ async fn execute_node(
                 .and_then(Value::as_i64)
                 .unwrap_or(60)
                 .clamp(1, 120);
-            let completion = model
-                .complete(
-                    ctx.state,
-                    &credential,
-                    &[
-                        json!({"role":"system","content":system}),
-                        json!({"role":"user","content":prompt}),
-                    ],
+            let messages = vec![
+                json!({"role":"system","content":system}),
+                json!({"role":"user","content":prompt}),
+            ];
+            let completion = complete_with_budget(
+                ctx,
+                run,
+                &format!("llm-{}", node.id),
+                ModelCall {
+                    model: &model,
+                    credential: &credential,
+                    messages: &messages,
                     max_tokens,
-                    None,
                     timeout,
-                )
-                .await
-                .map_err(|error| {
-                    format!("WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:{error}")
-                })?;
+                },
+            )
+            .await?;
             bump_usage(run_state, completion.input_tokens, completion.output_tokens);
             Ok(json!({
                 "content": completion.content,
@@ -683,12 +758,19 @@ async fn execute_node(
                 .and_then(Value::as_i64)
                 .unwrap_or(60)
                 .clamp(1, 120);
-            let completion = model
-                .complete(ctx.state, &credential, &messages, max_tokens, None, timeout)
-                .await
-                .map_err(|error| {
-                    format!("WORKFLOW_MODEL_REQUEST_FAILED_NO_AUTOMATIC_RETRY:{error}")
-                })?;
+            let completion = complete_with_budget(
+                ctx,
+                run,
+                &format!("agent-{}", node.id),
+                ModelCall {
+                    model: &model,
+                    credential: &credential,
+                    messages: &messages,
+                    max_tokens,
+                    timeout,
+                },
+            )
+            .await?;
             bump_usage(run_state, completion.input_tokens, completion.output_tokens);
             Ok(json!({
                 "content": completion.content,

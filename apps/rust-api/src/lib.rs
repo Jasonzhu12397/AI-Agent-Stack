@@ -43,6 +43,7 @@ pub mod settings_api;
 pub mod tasks;
 pub mod tenancy;
 pub mod token_budget;
+pub mod token_guard;
 pub mod worker;
 pub mod workflow_reads;
 pub mod workflow_runtime;

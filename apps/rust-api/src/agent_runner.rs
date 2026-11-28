@@ -200,7 +200,28 @@ pub async fn execute(
             .min(model.max_output_tokens)
             .min(200_000 - input_tokens - output_tokens)
             .max(1);
-        let completion = model
+        let requested_tokens = (allowed_output
+            + (serde_json::to_string(&messages)
+                .map(|text| text.len())
+                .unwrap_or(0) as i64
+                / 4))
+            .max(1);
+        let reservation = crate::token_guard::reserve(
+            pool,
+            crate::tenancy::is_postgres(state),
+            crate::token_guard::ReservationRequest {
+                tenant_id,
+                task_id,
+                agent_run_id: Some(&run.id),
+                workflow_run_id: None,
+                run_id: &run.id,
+                step: &format!("agent-{iteration}"),
+                lease_token,
+                requested_tokens,
+            },
+        )
+        .await?;
+        let completion = match model
             .complete(
                 state,
                 &credential,
@@ -210,7 +231,23 @@ pub async fn execute(
                 timeout_seconds,
             )
             .await
-            .map_err(|error| format!("MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:{error}"))?;
+        {
+            Ok(completion) => {
+                crate::token_guard::settle(
+                    pool,
+                    &reservation,
+                    completion.input_tokens + completion.output_tokens,
+                )
+                .await?;
+                completion
+            }
+            Err(error) => {
+                let _ = crate::token_guard::release(pool, &reservation).await;
+                return Err(format!(
+                    "MODEL_PROVIDER_REQUEST_FAILED_NO_AUTOMATIC_RETRY:{error}"
+                ));
+            }
+        };
         input_tokens += completion.input_tokens;
         output_tokens += completion.output_tokens;
         latency_ms += completion.latency_ms;
