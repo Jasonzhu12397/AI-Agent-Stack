@@ -1,5 +1,5 @@
 -- Baseline business schema for a fresh database. Generated from the retired
--- Django migrations and normalized for PostgreSQL and SQLite.
+-- retired platform migrations and normalized for PostgreSQL and SQLite.
 -- 0001_initial
 --
 -- Create model Tenant

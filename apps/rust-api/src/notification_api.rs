@@ -3,7 +3,7 @@
 //! Native IM group-robot notification endpoints.
 //!
 //! Webhook URLs and signing secrets are sealed with the same AES-256-GCM
-//! envelope as the Django settings API and are never returned by reads.
+//! envelope as the platform settings API and are never returned by reads.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};

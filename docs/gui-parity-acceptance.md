@@ -2,7 +2,7 @@
 
 ## Authority and implementation rule
 
-The reference is the complete `main` branch of [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), not only its landing page or navigation. The production application remains the Vue 3 + TypeScript frontend and Django REST API in this repository. Port user-visible workflows, states, validation, filters, dialogs, actions, and navigation; do not add a second React runtime.
+The reference is the complete `main` branch of [AI-Stack-Agent-GUI](https://github.com/Jasonzhu12397/AI-Stack-Agent-GUI), not only its landing page or navigation. The production application remains the Vue 3 + TypeScript frontend and Rust REST API in this repository. Port user-visible workflows, states, validation, filters, dialogs, actions, and navigation; do not add a second React runtime.
 
 A reference interaction is not complete merely because a similarly named Vue page exists. Every action must call a real API, persist authoritative state where appropriate, enforce tenant/project scope and server-side permissions, emit audit evidence for security-sensitive mutations, and have automated tests. Reference-only mock providers, in-memory stores, random map data, demo credentials, and simulated infrastructure state must not be carried into production.
 

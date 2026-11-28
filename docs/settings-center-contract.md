@@ -63,7 +63,7 @@ Rules:
 
 - The envelope is enforced by the shared `ErrorEnvelopeMixin` in
   `core/api_errors.py` (the `SettingsBaseView` family emits the same shape).
-  DRF/Django exceptions are mapped as follows; `details` defaults to `{}` and
+  The Rust API error envelope is mapped as follows; `details` defaults to `{}` and
   field-level validation errors are placed there. The 404 message never
   discloses whether the target object exists, and unexpected exceptions stay
   500 without echoing internal details or tracebacks.
@@ -179,7 +179,7 @@ GET  .../billing/orders/<id>/status/  (read-only settlement poll: local status +
 Registration hooks (each worker appends exactly its own lines, nothing else):
 
 - `core/urls.py`: `path("", include("core.<module>_urls"))` appended at the end of `urlpatterns`.
-- `core/models.py`: `from core import <module>  # noqa: F401,E402` appended at the very end so Django registers
+- SQL migrations under `apps/rust-api/migrations` are applied by the Rust API on startup.
   the models (`app_label` resolves to `core`).
 - `platform_api/settings.py`: only if a worker needs an env-driven switch — use `os.environ.get` in code
   instead; do not add INSTALLED_APPS entries.

@@ -2,7 +2,7 @@
 
 The Vue dev server owns the forwarded port so the browser keeps one origin.
 Every /api and /health request is proxied to the Rust API on localhost:8001,
-which is the only backend: there is no Django or Python HTTP process left.
+which is the only backend: there is no Python HTTP process left.
 """
 
 from __future__ import annotations

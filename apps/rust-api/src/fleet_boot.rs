@@ -32,7 +32,7 @@ fn text(row: &sqlx::any::AnyRow, column: &str) -> String {
         .unwrap_or_default()
 }
 
-fn bmc_base(endpoint: &str) -> Result<String, &'static str> {
+pub(crate) fn bmc_base(endpoint: &str) -> Result<String, &'static str> {
     let (scheme, rest) = endpoint
         .split_once("://")
         .ok_or("PXE_BOOT_BMC_ADDRESS_INVALID")?;
@@ -140,7 +140,7 @@ async fn vault_token(tenant_id: &str, project_id: &str, address: &str) -> Result
     Ok(token)
 }
 
-async fn vault_secret(
+pub(crate) async fn vault_secret(
     reference: &str,
     tenant_id: &str,
     project_id: &str,

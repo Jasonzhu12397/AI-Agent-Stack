@@ -4,14 +4,14 @@ Evidence is tied to immutable commits and CI runs. A file existing is not proof 
 
 ## Historical verification: FastAPI + React
 
-[GitHub Actions run 41404656581](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41404656581), commit `71d3ae6684902befc8ca851ebe98705571af83c3`, passed the former FastAPI/React stack. This does not verify the Django/Vue migration.
+[GitHub Actions run 41404656581](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/41404656581), commit `71d3ae6684902befc8ca851ebe98705571af83c3`, passed the former FastAPI/React stack. This does not verify the current stack.
 
 ## Latest verified commit
 
 [GitHub Actions run 45125794420](https://github.com/Jasonzhu12397/AI-Agent-Stack/actions/runs/45125794420), commit `dd6dfd4517a861c5fe15f848a59f791b1a9a2fc7`, is the newest verified commit on `main`. It is later than the `v1.1.0` release baseline and carries no version tag: the etcd backup work after v1.1.0 is developed on `main` without releases.
 
 - Pytest: **2052 passed, 15 skipped** (four shards, all green).
-- Ruff, Django checks, migration drift detection, PostgreSQL migrations and mTLS ingress: passed.
+- Ruff and mTLS ingress checks: passed.
 - Compose full-stack smoke (API + Worker + Web + PostgreSQL + Redis build, start and probe): passed.
 - Metal3 and SR-IOV CRD integration against a real kind cluster: passed.
 - Vue unit tests (59) and production build: passed.
@@ -21,13 +21,13 @@ The `v1.1.0` release baseline remains [run 45015159500](https://github.com/Jason
 
 The version reported by `/api/v1/`, `pyproject.toml`, `apps/web-studio/package.json` and the release manifest is asserted to be one value by `tests/test_health.py` and `tests/test_metal3_release_evidence.py`.
 
-## Django + Vue migration
+## Retired Python API migration (historical)
 
 | Area | Target | Status |
 |---|---|---|
-| Backend | Django 5.1+ / Python 3.12 | Passed in run 41405916271 |
-| REST API | Django REST Framework | Tenant/project APIs, session auth, durable task APIs, Agent/Workflow APIs and new node enrollment/command/approval/runtime routes; new routes are awaiting PR CI |
-| ASGI | Django Channels / Daphne | HTTP ASGI entrypoint passed in Compose smoke test; WebSocket consumers not implemented |
+| Backend | Rust API (Axum + SQLx) | Current stack |
+| REST API | Rust Axum handlers | Tenant/project APIs, session auth, durable task APIs, Agent/Workflow APIs and node enrollment/command/approval/runtime routes |
+| Realtime | Rust WebSocket | Session-authenticated task and audit streams |
 | Production configuration | Reject default SECRET_KEY and DEBUG=true | Negative test passed in run 41406654505 |
 | Database | PostgreSQL via dj-database-url | Migration drift check and PostgreSQL migrations passed in run 41407102851 |
 | Health | Liveness and database readiness | Both endpoints passed in Compose smoke test, run 41407102851 |
@@ -42,7 +42,7 @@ The version reported by `/api/v1/`, `pyproject.toml`, `apps/web-studio/package.j
 
 | Area | Target | Current status |
 |---|---|---|
-| Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Django session login/logout/current-user, CSRF protection, tenant/project RBAC, membership administration, last-owner/last-project-admin protections and membership revocation tested. OIDC/OAuth2, invitations/email workflow, password reset, service identities and fine-grained resource/tool policies remain unimplemented. |
+| Identity and authorization | Server-derived Principal, tenant/project RBAC | Partial: Rust session login/logout/current-user, CSRF protection, tenant/project RBAC, membership administration, last-owner/last-project-admin protections and membership revocation tested. OIDC/OAuth2, invitations/email workflow, password reset, service identities and fine-grained resource/tool policies remain unimplemented. |
 | Durable task queue | Atomic claim, lease, heartbeat, expiry recovery, idempotency | Implemented for safe demo tasks and text-only Agent Runs; tests cover idempotent enqueue, role authorization, completion, stale lease rejection, lease recovery, retryable failure path and cancellation. No external side-effect handlers or Workflow Engine integration yet |
 | Agent runtime | Run snapshots, model routing, Tool Router, durable steps | Partial: published Agent versions and asynchronous single-turn LLM runs work. Multi-step tool calling, model routing/fallback, memory and tool policy integration remain unimplemented |
 | Workflow engine | Versioned DAG, branches, recovery | Partial: immutable versions; start/LLM/condition/end nodes; DAG validation; branch skip; persisted node steps; idempotent run creation. No drag/drop canvas, loop/parallel/join, human approval, HTTP/Code nodes, scheduler/webhook triggers or fault-injection proof of process restart recovery |

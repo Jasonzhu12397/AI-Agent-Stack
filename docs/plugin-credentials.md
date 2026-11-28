@@ -103,7 +103,7 @@ mount. The field fragment is optional and defaults to `value`.
 - Reference shape: `vault://secret/research-agent#api_key`. The mount must be
   `[A-Za-z0-9_-]+`, the path segments must be safe identifier parts (no `.` or
   `..` traversal), and the optional field must be `[A-Za-z0-9_-]+`.
-- Configuration is read from Django settings with an environment-variable
+- Configuration is read from the Rust API environment with an environment-variable
   fallback; no entry is added to `settings.py`:
   - `PLUGIN_VAULT_ADDR` / `PLUGIN_VAULT_ADDR` env: Vault origin. HTTPS is
     enforced. Plain HTTP is allowed only when the host is `127.0.0.1` or

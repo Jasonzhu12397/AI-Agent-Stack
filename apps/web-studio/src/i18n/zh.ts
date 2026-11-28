@@ -77,7 +77,7 @@ export const zhCN: Record<string, string> = {
   "Agent runtime": "智能体运行时",
   "Workflow engine": "工作流引擎",
   "Multi-agent control": "多智能体控制",
-  "Django API, Vue Studio, PostgreSQL, Worker and Compose": "Django API、Vue Studio、PostgreSQL、Worker 与 Compose",
+  "Rust API, Vue Studio, PostgreSQL, Redis and Compose": "Rust API、Vue Studio、PostgreSQL、Redis 与 Compose",
   "Published Agent versions and asynchronous LLM runs": "已发布智能体版本与异步 LLM 运行",
   "Versioned DAG, LLM/Condition nodes and persisted steps": "版本化 DAG、LLM/条件节点与持久化步骤",
   "EPH and Target Cluster enrollment, command leases and approval gate": "EPH 与目标集群注册、命令租约与审批门禁",

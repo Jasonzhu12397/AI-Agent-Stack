@@ -2,7 +2,7 @@
 
 //! Native user preference endpoints.
 //!
-//! Mirrors the Django settings center: defaults are code-owned, unknown keys are
+//! Mirrors the platform settings center: defaults are code-owned, unknown keys are
 //! rejected, and shortcut combinations are validated per user.
 
 use axum::extract::{Path, State};

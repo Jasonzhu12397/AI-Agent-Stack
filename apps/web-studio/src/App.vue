@@ -39,7 +39,7 @@ const ROADMAP_FALLBACK: RoadmapItem[] = [
   {
     code: "M0",
     title: "Platform foundation",
-    detail: "Django API, Vue Studio, PostgreSQL, Worker and Compose",
+    detail: "Rust API, Vue Studio, PostgreSQL, Redis and Compose",
     status: "verified",
     evidence: {},
   },

@@ -1,7 +1,7 @@
 # Redfish Firmware Management
 
 AI Agent Stack exposes BMC firmware inventory and firmware updates through the
-Django platform API and the Metal3 Fleet workspace. Every call uses the machine's
+Rust platform API and the Metal3 Fleet workspace. Every call uses the machine's
 configured BMC endpoint and credential reference; no BMC password, token or
 inline secret is stored in the database or returned to the browser.
 

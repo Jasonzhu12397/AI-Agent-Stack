@@ -308,6 +308,31 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::post(crate::fleet_api::bmh_inventory),
             )
             .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/bmc-config/",
+                axum::routing::put(crate::fleet_machine_api::update_bmc_config)
+                    .post(crate::fleet_machine_api::verify_bmc),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/network/verify/",
+                axum::routing::get(crate::fleet_machine_api::verify_networks),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/firmware/",
+                axum::routing::get(crate::fleet_machine_api::list_firmware),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/firmware/upgrades/",
+                axum::routing::post(crate::fleet_machine_api::request_firmware_upgrade),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/firmware/upgrades/{job_id}/",
+                axum::routing::get(crate::fleet_machine_api::firmware_upgrade_detail),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/projects/{project_id}/fleet/machines/{machine_id}/lifecycle-review/",
+                axum::routing::post(crate::fleet_machine_api::lifecycle_review),
+            )
+            .route(
                 "/api/v1/agent-runtime/inventory/",
                 axum::routing::post(crate::agent_runtime_api::report_inventory),
             )

@@ -21,7 +21,7 @@ code commit → CI/CD build → security scan → central registry → image pro
 
 ## Model
 
-Two tables in `apps/platform-api/core/registry_models.py` back the catalog.
+Two Rust API tables back the catalog.
 
 | Model | Purpose |
 | --- | --- |

@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--network-ready-timeout", type=int, default=900)
     parser.add_argument("--deployment-id")
     parser.add_argument("--deployment-ready-timeout", type=int, default=3600)
-    parser.add_argument("--django-settings", default="platform_api.settings")
+    parser.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     parser.add_argument("--hosts-dir")
     parser.add_argument("--work-dir")
     parser.add_argument("--vendor-dir")

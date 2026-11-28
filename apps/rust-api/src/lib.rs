@@ -19,6 +19,7 @@ pub mod data_export_api;
 pub mod etcd_api;
 pub mod fleet_api;
 pub mod fleet_boot;
+pub mod fleet_machine_api;
 pub mod identity;
 pub mod infra_api;
 pub mod knowledge_api;

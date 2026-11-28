@@ -25,6 +25,15 @@ All notable changes to AI Agent Stack are recorded here. The format follows
 - The control-plane overview uses larger type and spacing across its banner,
   metrics, panels and task rows, and the shell widens to 1560px.
 
+### Removed
+
+- The legacy Python API, ASGI server, task worker and Python Compose
+  schedulers are removed. Every platform API, migration and background
+  dispatcher now runs in the Rust service; there is no Python fallback,
+  proxy mode or rollback target. Offline tooling reads the platform database
+  directly through `tools/platform_state.py` and resolves BMC credentials
+  through `tools/bmc_credentials.py` instead of importing the Python API.
+
 ### Fixed
 
 - The landing overview collapsed its module workspace to a clipped heading:

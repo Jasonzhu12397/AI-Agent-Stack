@@ -3,7 +3,7 @@
 ## Technology decision
 
 - Frontend: Vue 3 + TypeScript + Vite + Element Plus + Pinia + Vue Router.
-- Backend/API: Rust + Axum (`apps/rust-api`) is the sole supported SaaS API runtime. Django and Django REST Framework are retired; no production, development, proxy-fallback or compatibility runtime may depend on them.
+- Backend/API: Rust + Axum (`apps/rust-api`) is the sole supported SaaS API runtime. The legacy Python API is retired; no production, development, proxy-fallback or compatibility runtime may depend on it.
 - Realtime: Rust-native HTTP streaming and WebSocket services; authorization and connection lifecycle are owned by Rust.
 - Persistence: PostgreSQL is authoritative. Redis is auxiliary and never the only store for durable state.
 - Execution: independent Python Workers may remain as execution services, but they do not expose or replace the SaaS API. Task claiming, leases and recovery are separate from the three infrastructure Agent runtimes.
@@ -34,7 +34,7 @@ The platform API is implemented in Rust/Axum and uses PostgreSQL as its durable 
 
 ## Deployment boundaries
 
-The Rust API and execution Workers are separate processes. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager. Deployment manifests must start the Rust API directly and must not build or launch Django/Daphne.
+The Rust API and execution Workers are separate processes. Web Studio is a separate Node/Vite application. PostgreSQL owns durable business state; Redis supports cache and coordination only. Production secrets must come from an external secret manager. Deployment manifests must start the Rust API directly and must not build or launch the legacy Python API.
 
 ## Three-Agent bare-metal Kubernetes control system
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const phases = [
-  { id: "P0", name: "Platform foundation", status: "verified", detail: "Django API, Vue 3 Studio, PostgreSQL, Redis and durable Worker queue." },
+  { id: "P0", name: "Platform foundation", status: "verified", detail: "Rust API, Vue 3 Studio, PostgreSQL, Redis and durable task queue." },
   { id: "P1", name: "Identity and tenancy", status: "partial", detail: "Session authentication, tenant/project membership and server-side RBAC." },
   { id: "P2", name: "Model and Agent runtime", status: "partial", detail: "OpenAI-compatible providers, published Agent versions, asynchronous runs and tool routing." },
   { id: "P3", name: "Workflow orchestration", status: "partial", detail: "Versioned DAG definitions, validation, persisted workflow runs and step records." },

@@ -37,7 +37,7 @@ struct Pagination {
 
 /// Native replacement for the tenant, project and membership endpoints.
 ///
-/// These handlers read and write the same tables Django owns, so the console
+/// These handlers read and write the same tables the Rust API owns, so the console
 /// can switch to the Rust API without a data migration or a second schema.
 pub async fn list_tenants(
     State(state): State<AppState>,

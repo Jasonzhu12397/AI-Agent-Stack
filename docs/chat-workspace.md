@@ -201,30 +201,27 @@ answer 503 for bursty datacenter traffic.
 
 An access proxy or in-app webview can drop or partition the session cookie,
 which used to turn every request after sign-in into a 401 that the shell
-reported as "登录已过期". `POST /api/v1/auth/login/` now also returns
-`session_token` (the same server-side session key), the console stores it and
-sends `X-Session-Token` on every call, and `core/api_auth.py` resolves that
-header against the session store. CSRF is not re-checked for the header path:
-the token travels in a custom header that a cross-site page cannot set.
+reported as "登录已过期". `POST /api/v1/auth/login/` also returns `session_token` (the same
+server-side session key), the console stores it and sends `X-Session-Token` on
+every call, and the Rust API resolves that header against the session store.
+CSRF is not re-checked for the header path: the token travels in a custom
+header that a cross-site page cannot set.
 
 ## Local development database
 
-The single-host console runs one daphne process and one worker against the same
-SQLite file, and both write: the worker advances `next_run_at`, the API persists
-turns. `core/sqlite_tuning.py` switches such connections to WAL and sets a 20 s
-busy timeout, so a turn no longer fails with "database is locked" while the
-worker claims a job. Production runs PostgreSQL, where this does not apply.
+The single-host console runs one Rust API against SQLite. The API owns both
+HTTP writes and scheduled-task dispatch. Request-scoped writes are short and
+serialized through one connection pool; production runs PostgreSQL.
 
 ## Quality gates
 
 - `apps/web-studio`: `npx vue-tsc --noEmit`, `node --experimental-strip-types
   --test tests/*.test.mjs` (i18n coverage included), `npx vite build`.
-- `tests/test_chat_tools.py` covers the tool catalogue, skill/plugin
+- `apps/rust-api/tests/chat_api.rs` covers the tool catalogue, skill/plugin
   scoping, platform reads, command idempotency and the step budget.
-- `tests/test_chat_workspace.py` covers settings validation and storage, usage
-  recording, attachment upload/download/ownership, knowledge references,
-  schedule creation and dispatch, `run-now` thread creation, once-only claiming
-  and pause behaviour.
+- `apps/rust-api/tests/tasks.rs` and `chat_api.rs` cover settings storage,
+  usage recording, attachment ownership, schedule dispatch and once-only
+  claiming.
 
 ## Connector catalog and agent capabilities
 

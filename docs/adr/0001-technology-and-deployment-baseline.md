@@ -1,6 +1,6 @@
 # ADR-0001: Technology and deployment baseline
 
-- Status: Superseded by the Rust-only cutover; retained as historical context.
+- Status: Superseded by the Rust-only cutover; historical only. The runtime stack below no longer ships.
 - Date: 2026-11-02
 
 ## Context

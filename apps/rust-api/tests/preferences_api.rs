@@ -17,7 +17,6 @@ async fn state() -> AppState {
     sqlx::any::install_default_drivers();
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
     for statement in [
-        "CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)",
         "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL, email VARCHAR(254) NOT NULL, password VARCHAR(128) NOT NULL, is_staff INTEGER NOT NULL, is_active INTEGER NOT NULL)",
 
         "CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",

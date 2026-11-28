@@ -35,7 +35,9 @@ class ReleaseRunError(ValueError):
 def build_stage_commands(
     args: argparse.Namespace, evidence_dir: Path
 ) -> list[tuple[str, list[str]]]:
-    global_options = ["--django-settings", args.django_settings]
+    global_options = []
+    if args.database_url:
+        global_options = ["--database-url", args.database_url]
     project = ["--project", args.project]
     cluster = [
         "--kubeconfig",
@@ -172,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage-timeout", type=int, default=900)
     parser.add_argument("--skip-redfish", action="store_true")
     parser.add_argument("--commit", help="Override the detected git commit.")
-    parser.add_argument("--django-settings", default="platform_api.settings")
+    parser.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     return parser
 
 

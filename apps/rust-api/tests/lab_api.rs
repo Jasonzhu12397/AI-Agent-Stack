@@ -11,8 +11,6 @@ async fn state() -> AppState {
     let url = format!("sqlite://{}", path.display());
     sqlx::any::install_default_drivers();
     let pool = sqlx::AnyPool::connect(&url).await.unwrap();
-    sqlx::query("CREATE TABLE django_session (session_key VARCHAR(40) PRIMARY KEY, session_data TEXT NOT NULL, expire_date DATETIME NOT NULL)")
-        .execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE platform_users (id INTEGER PRIMARY KEY, username VARCHAR(150) NOT NULL UNIQUE, email VARCHAR(254) NOT NULL DEFAULT '', is_staff INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1)",).execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE platform_credentials (user_id INTEGER NOT NULL, credential_type VARCHAR(32) NOT NULL, credential_hash TEXT NOT NULL, PRIMARY KEY (user_id, credential_type))",).execute(&pool).await.unwrap();
     sqlx::query("CREATE TABLE rust_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL, revoked_at DATETIME)",).execute(&pool).await.unwrap();

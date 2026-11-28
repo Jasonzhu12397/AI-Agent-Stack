@@ -213,7 +213,7 @@ kind cluster and server-side dry-runs the rendered CR.
 
 `POST /api/v1/tenants/<tenant>/projects/<project>/fleet/machines/pxe-boot/` drives the Redfish operations that make discovered machines boot into the Ironic inspection image. The body accepts `execution` (boolean, default `false`), `confirm` (must equal `PXE_ONCE` when executing) and optional `machine_ids` (up to 100 UUIDs; the default is every machine with BMC endpoint and credential configured).
 
-`apps/platform-api/core/bmc_pxe_boot.py` is the single implementation of the BMC side:
+`apps/rust-api/src/fleet_boot.rs` is the single implementation of the BMC side:
 
 - `read_system` requires exactly one Redfish Systems member and a `/redfish/v1/Systems/<id>` path, so an ambiguous service root fails closed.
 - `build_pxe_boot_plan` requires `Boot.BootSourceOverrideSupported` to contain `Pxe` (case insensitive) and a known `PowerState`; a powered-off host resets with `On`, anything else with `ForceRestart`.
@@ -270,7 +270,7 @@ toolbar exposes it as "Run discovery (PXE + inspect)".
 The EPH reports results only through the command lease channel. The platform
 used to require two manual sync buttons before ``preflight_result`` knew
 anything, so it normally rendered from the spec instead of from observations.
-``apps/platform-api/core/deployment_reconcile.py`` now owns both transforms
+``apps/rust-api/src/cluster_sync_api.rs`` owns both transforms
 (``eph_preflight_snapshot`` / ``bmh_inventory_snapshot``) and one
 ``reconcile_deployment`` entry point:
 

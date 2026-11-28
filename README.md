@@ -34,7 +34,7 @@ AI Agent Stack has two cooperating multi-Agent runtime families.
 
 ### 1. Application multi-Agent runtime
 
-- **Platform API** (`apps/rust-api`): the sole SaaS HTTP/API runtime, implemented in Rust with Axum. It owns authentication, tenant/project authorization, Agents, Workflows, models, knowledge, connectors, deployments, approvals, token budgets and audit. Django/Django REST Framework are retired and are not supported as runtime or fallback.
+- **Platform API** (`apps/rust-api`): the sole SaaS HTTP/API runtime, implemented in Rust with Axum. It owns authentication, tenant/project authorization, Agents, Workflows, models, knowledge, connectors, deployments, approvals, token budgets and audit. The legacy Python API is retired and is not supported as runtime or fallback.
 - **Web Studio** (`apps/web-studio`): Vue 3 operator workspace with a persistent
   left rail and a full-surface Control Agent chat column — thread-level
   execution target, reasoning effort, goal and plan-first settings, file and
@@ -204,14 +204,12 @@ cargo run
 The API requires PostgreSQL and the environment variables documented by
 `apps/rust-api/src/config.rs`. Start Vue Studio separately using its
 development instructions. Provision the initial administrator through the
-Rust-native identity/bootstrap workflow; there is no Django Admin or
-`manage.py` bootstrap path.
+Rust-native identity/bootstrap workflow; there is no legacy Python admin or management command.
 
-**Rust-only cutover:** Django, Django REST Framework, Daphne, the Python
-platform API image, the Python task worker and the Python Compose schedulers
-have been removed. The root `Dockerfile` no longer exists. Codespaces start
+**Rust-only cutover:** the legacy Python API, ASGI server, task worker and
+Compose schedulers have been removed. The root `Dockerfile` no longer exists. Codespaces start
 the Rust API on 8001 and proxy `/api` and `/health` through Vue Studio on
-8000. Django is not an approved fallback or rollback target.
+8000. There is no Python fallback or rollback target.
 
 ## Three-Agent deployment
 

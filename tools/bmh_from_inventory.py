@@ -278,9 +278,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project", help="platform project id to read machines from")
     parser.add_argument(
-        "--django-settings",
-        default="platform_api.settings",
-        help="Django settings module used for --from-platform",
+        "--database-url",
+        help="SQLite or PostgreSQL platform DATABASE_URL used for --from-platform",
     )
     parser.add_argument(
         "--redfish-systems-path",
@@ -306,7 +305,7 @@ def _load(args: argparse.Namespace) -> list[Machine]:
         skipped: list[str] = []
         machines = load_platform_machines(
             project_id=args.project,
-            settings_module=args.django_settings,
+            database_url=args.database_url,
             systems_path=args.redfish_systems_path,
             skipped=skipped,
         )

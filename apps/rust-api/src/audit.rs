@@ -31,7 +31,7 @@ pub struct AuditEvent<'a> {
     pub metadata: Value,
 }
 
-/// Append an authentication event to the tenant-less Django audit chain.
+/// Append an authentication event to the tenant-less legacy platform audit chain.
 pub async fn record_auth_event(
     pool: &AnyPool,
     database_url: &str,
@@ -57,11 +57,11 @@ pub async fn record_auth_event(
     .await
 }
 
-/// Append an event to the tenant-scoped Django audit chain.
+/// Append an event to the tenant-scoped legacy platform audit chain.
 ///
-/// Django serializes tenant chains by locking the tenant row, so Rust takes
+/// The retired platform serialized tenant chains by locking the tenant row, so Rust takes
 /// the same row lock before reading the previous hash. The canonical document
-/// must match Django byte for byte or `verify_global_audit_chain` rejects it.
+/// must match the historical bytes exactly or `verify_global_audit_chain` rejects it.
 pub async fn record_event(
     pool: &AnyPool,
     database_url: &str,

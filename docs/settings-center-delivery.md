@@ -5,7 +5,7 @@ Contract: `docs/settings-center-contract.md`. This file records what actually sh
 
 ## 1. Navigation inventory → code
 
-All 14 items in the acceptance document are routed Vue pages backed by real Django endpoints. Slug order is the navigation order.
+All 14 items in the acceptance document are routed Vue pages backed by real Rust API endpoints. Slug order is the navigation order.
 
 | # | Nav item | Slug | Vue page | Primary endpoints |
 |---|---|---|---|---|

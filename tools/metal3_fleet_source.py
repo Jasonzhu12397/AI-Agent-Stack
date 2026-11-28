@@ -14,25 +14,24 @@ default.
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-PLATFORM_API_DIR = ROOT / "apps" / "platform-api"
-for _path in (ROOT, PLATFORM_API_DIR):
-    if str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from apps.eph_agent.fleet_planning import MachineSpec  # noqa: E402
+from tools.bmc_credentials import resolve_bmc_credentials  # noqa: E402
 from tools.bmh_from_platform import (  # noqa: E402
     DEFAULT_REDFISH_SYSTEMS_PATH,
     _bmc_address,
     boot_mac_from_inventory,
     slugify_bmh_name,
 )
+from tools.platform_state import platform_machines  # noqa: E402
 
 CPU_KEYS = ("cpu_cores", "cpu_count", "cores", "cpu")
 RAM_KEYS = ("ram_mib", "memory_mib", "ram_mebibytes", "memory")
@@ -80,7 +79,7 @@ def hardware_facts(inventory: dict[str, Any]) -> tuple[int, int, int]:
 def load_platform_fleet(
     *,
     project_id: str | None = None,
-    settings_module: str = "platform_api.settings",
+    database_url: str | None = None,
     systems_path: str = DEFAULT_REDFISH_SYSTEMS_PATH,
     skipped: list[str] | None = None,
     require_credentials: bool = True,
@@ -90,48 +89,28 @@ def load_platform_fleet(
 
     if skipped is None:
         skipped = []
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
-    import django
-
-    django.setup()
-    from core.models import AgentMachine
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
-    resolver_path = getattr(settings, "BMC_CREDENTIAL_RESOLVER", "")
-    if not resolver_path and getattr(settings, "BMC_VAULT_ADDR", ""):
-        resolver_path = "core.bmc_credentials.resolve_bmc_credentials"
-    resolver = import_string(resolver_path) if resolver_path else None
-    if require_credentials and resolver is None:
-        raise ValueError("BMC_CREDENTIAL_RESOLVER is not configured")
-
-    queryset = AgentMachine.objects.select_related("agent_node", "tenant", "project")
-    if project_id:
-        queryset = queryset.filter(project_id=project_id)
+    resolver = resolve_bmc_credentials
 
     fleet: list[PlatformMachine] = []
-    for machine in queryset.order_by("agent_node__name"):
-        node_name = machine.agent_node.name if machine.agent_node else ""
-        name = slugify_bmh_name(machine.bmh_name or node_name, fallback=str(machine.id))
+    for machine in platform_machines(project_id=project_id, explicit=database_url):
+        node_name = machine["agent_node_name"]
+        name = slugify_bmh_name(machine.get("bmh_name") or node_name, fallback=str(machine["id"]))
         if not name:
-            skipped.append(f"{node_name or machine.id}: no BMH name could be derived")
+            skipped.append(f"{node_name or machine['id']}: no BMH name could be derived")
             continue
-        if not machine.bmc_endpoint:
+        if not machine.get("bmc_endpoint"):
             skipped.append(f"{name}: bmc_endpoint is not configured")
             continue
-        if not machine.bmc_credential_ref:
+        if not machine.get("bmc_credential_ref"):
             skipped.append(f"{name}: bmc_credential_ref is not configured")
-            continue
-        if require_credentials and resolver is None:
-            skipped.append(f"{name}: BMC_CREDENTIAL_RESOLVER is not configured")
             continue
 
         try:
             boot_mac = boot_mac_from_inventory(
-                machine.hardware_inventory or {},
+                machine.get("hardware_inventory") or {},
                 preferred_ports=pxe_boot_ports,
             )
-            address = _bmc_address(machine.bmc_endpoint, systems_path)
+            address = _bmc_address(machine["bmc_endpoint"], systems_path)
         except ValueError as exc:
             skipped.append(f"{name}: {exc}")
             continue
@@ -143,10 +122,10 @@ def load_platform_fleet(
         if require_credentials:
             try:
                 credential = resolver(
-                    credential_ref=machine.bmc_credential_ref,
-                    trust_bundle_ref=machine.bmc_trust_bundle_ref,
-                    tenant_id=str(machine.tenant_id),
-                    project_id=str(machine.project_id),
+                    credential_ref=machine["bmc_credential_ref"],
+                    trust_bundle_ref=machine.get("bmc_trust_bundle_ref") or "",
+                    tenant_id=str(machine["tenant_id"]),
+                    project_id=str(machine["project_id"]),
                 )
             except Exception as exc:  # noqa: BLE001 - one bad reference must not stop the fleet
                 skipped.append(f"{name}: credential resolver failed ({type(exc).__name__})")
@@ -155,16 +134,16 @@ def load_platform_fleet(
                 skipped.append(f"{name}: resolver returned no BMC username")
                 continue
 
-        inventory = machine.hardware_inventory or {}
+        inventory = machine.get("hardware_inventory") or {}
         cpu, ram, disk = hardware_facts(inventory)
-        labels = dict(machine.agent_node.labels or {}) if machine.agent_node else {}
+        labels = dict(machine.get("agent_node_labels") or {})
 
         fleet.append(
             PlatformMachine(
                 spec=MachineSpec(
                     name=name,
-                    machine_id=str(machine.id),
-                    project_id=str(machine.project_id),
+                    machine_id=str(machine["id"]),
+                    project_id=str(machine["project_id"]),
                     bmc_address=address,
                     boot_mac=boot_mac,
                     secret_ref=f"{name}-bmc",
@@ -172,13 +151,13 @@ def load_platform_fleet(
                     ram_mib=ram,
                     disk_gib=disk,
                     labels=labels,
-                    identity_status=str(machine.identity_status),
+                    identity_status=str(machine.get("identity_status")),
                     online=True,
-                    tls_verify=bool(machine.bmc_tls_verify),
+                    tls_verify=bool(machine.get("bmc_tls_verify")),
                 ),
                 username=str(credential.get("username")),
                 password=str(credential.get("password", "")),
-                bmc_credential_ref=machine.bmc_credential_ref,
+                bmc_credential_ref=machine["bmc_credential_ref"],
             )
         )
 

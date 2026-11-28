@@ -59,7 +59,7 @@ pub async fn roadmap(State(state): State<AppState>, headers: HeaderMap) -> Respo
         {
             "code": "M0",
             "title": "Platform foundation",
-            "detail": "Django API, Vue Studio, PostgreSQL, Worker and Compose",
+            "detail": "Rust API, Vue Studio, PostgreSQL and Compose",
             "status": "verified",
             "evidence": {"tasks": tasks},
         },

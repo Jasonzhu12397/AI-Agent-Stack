@@ -60,9 +60,7 @@ def _redfish_get(
 ) -> dict[str, Any]:
     url = _redfish_origin(machine.spec.bmc_address) + path
     request = urllib.request.Request(url, method="GET")
-    token = base64.b64encode(
-        f"{machine.username}:{machine.password}".encode()
-    ).decode("ascii")
+    token = base64.b64encode(f"{machine.username}:{machine.password}".encode()).decode("ascii")
     request.add_header("Authorization", f"Basic {token}")
     request.add_header("Accept", "application/json")
     context = None
@@ -283,9 +281,7 @@ def _bmh_status(bmh: dict[str, Any]) -> tuple[str, str]:
     status = bmh.get("status", {}) if isinstance(bmh.get("status"), dict) else {}
     operational = status.get("operationalStatus", "unknown")
     provisioning = (
-        status.get("provisioning", {})
-        if isinstance(status.get("provisioning"), dict)
-        else {}
+        status.get("provisioning", {}) if isinstance(status.get("provisioning"), dict) else {}
     )
     state = provisioning.get("state", "unknown")
     return str(operational), str(state)
@@ -311,9 +307,7 @@ def verify_cluster(
                 _check(label, STATUS_FAIL, f"{result.get('code')}: {result.get('stderr', '')}")
             )
     bmhs = _items(snapshot.get("baremetalhosts", {}).get("payload"))
-    bmh_names = {
-        str(item.get("metadata", {}).get("name", "")) for item in bmhs
-    }
+    bmh_names = {str(item.get("metadata", {}).get("name", "")) for item in bmhs}
     if expected_machines:
         missing = sorted(name for name in expected_machines if name not in bmh_names)
         if missing:
@@ -356,8 +350,7 @@ def verify_cluster(
         )
     control_planes = _items(snapshot.get("control_planes", {}).get("payload"))
     ready_control_plane = sum(
-        int(item.get("status", {}).get("readyReplicas", 0) or 0)
-        for item in control_planes
+        int(item.get("status", {}).get("readyReplicas", 0) or 0) for item in control_planes
     )
     checks.append(
         _check(
@@ -368,8 +361,7 @@ def verify_cluster(
     )
     deployments = _items(snapshot.get("machine_deployments", {}).get("payload"))
     ready_workers = sum(
-        int(item.get("status", {}).get("readyReplicas", 0) or 0)
-        for item in deployments
+        int(item.get("status", {}).get("readyReplicas", 0) or 0) for item in deployments
     )
     checks.append(
         _check(
@@ -403,16 +395,12 @@ def verify_cluster(
             )
         calico = snapshot.get("calico", {})
         if not calico.get("ok"):
-            checks.append(
-                _check("target.calico_present", STATUS_FAIL, str(calico.get("code")))
-            )
+            checks.append(_check("target.calico_present", STATUS_FAIL, str(calico.get("code"))))
         else:
             daemonsets = _items(calico.get("payload"))
             bpf = False
             for daemonset in daemonsets:
-                pod_spec = (
-                    daemonset.get("spec", {}).get("template", {}).get("spec", {})
-                )
+                pod_spec = daemonset.get("spec", {}).get("template", {}).get("spec", {})
                 containers = pod_spec.get("containers", [])
                 for container in containers:
                     for env in container.get("env", []):
@@ -537,9 +525,7 @@ def command_rollback(args) -> int:
         "checks": checks,
         # The approver reads the mutations here before approving the rollback,
         # so the evidence carries the same step plan the executor would run.
-        "steps": simulation_plan(
-            request, members=tuple(assessed.get("members") or ())
-        )["steps"],
+        "steps": simulation_plan(request, members=tuple(assessed.get("members") or ()))["steps"],
         "status": overall_status(checks),
     }
     if args.out:
@@ -552,7 +538,7 @@ def command_preflight(args) -> int:
     skipped: list[str] = []
     machines = load_platform_fleet(
         project_id=args.project,
-        settings_module=args.django_settings,
+        database_url=args.database_url,
         systems_path=args.redfish_systems_path,
         skipped=skipped,
         require_credentials=False,
@@ -577,7 +563,7 @@ def command_preflight(args) -> int:
 def command_redfish(args) -> int:
     machines = load_platform_fleet(
         project_id=args.project,
-        settings_module=args.django_settings,
+        database_url=args.database_url,
         systems_path=args.redfish_systems_path,
         require_credentials=True,
     )
@@ -626,7 +612,7 @@ def command_verify(args) -> int:
     skipped: list[str] = []
     machines = load_platform_fleet(
         project_id=args.project,
-        settings_module=args.django_settings,
+        database_url=args.database_url,
         systems_path=args.redfish_systems_path,
         skipped=skipped,
         require_credentials=False,
@@ -647,7 +633,7 @@ def command_verify(args) -> int:
     if args.redfish:
         for machine in load_platform_fleet(
             project_id=args.project,
-            settings_module=args.django_settings,
+            database_url=args.database_url,
             systems_path=args.redfish_systems_path,
             require_credentials=True,
         ):
@@ -669,7 +655,7 @@ def command_verify(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--django-settings", default="platform_api.settings")
+    parser.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     parser.add_argument("--redfish-systems-path", default=DEFAULT_SYSTEMS_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
 

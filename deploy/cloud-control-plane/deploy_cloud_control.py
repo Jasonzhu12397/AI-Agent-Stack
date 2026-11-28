@@ -162,7 +162,7 @@ def main() -> None:
 
     if not wait_for_readiness(web_port):
         subprocess.run(
-            compose("logs", "--tail=200", "api", "worker", "web"), check=False
+            compose("logs", "--tail=200", "api", "web"), check=False
         )
         fail("CLOUD_CONTROL_PLANE_HEALTHCHECK_FAILED")
 

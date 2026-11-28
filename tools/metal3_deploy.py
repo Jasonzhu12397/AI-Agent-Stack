@@ -43,7 +43,7 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-for _path in (ROOT, ROOT / "apps" / "platform-api"):
+for _path in (ROOT, ROOT / "packages"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -59,6 +59,7 @@ from apps.eph_agent import (  # noqa: E402
 from apps.target_agent import network_plugins, network_stack_adapter  # noqa: E402
 from tools import metal3_bmc_secrets  # noqa: E402
 from tools.metal3_fleet_source import load_platform_fleet  # noqa: E402
+from tools.platform_state import cluster_deployment  # noqa: E402
 
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 PLAN_FILE = "plan.json"
@@ -172,7 +173,7 @@ def command_plan(args: argparse.Namespace) -> int:
     skipped: list[str] = []
     fleet = load_platform_fleet(
         project_id=args.project,
-        settings_module=args.django_settings,
+        database_url=args.database_url,
         systems_path=args.redfish_systems_path,
         skipped=skipped,
     )
@@ -256,7 +257,7 @@ def command_plan(args: argparse.Namespace) -> int:
 
         result = write_back_plan(
             plan,
-            settings_module=args.django_settings,
+            database_url=args.database_url,
             extra_metadata={"planned_by": "tools/metal3_deploy.py"},
         )
         print(
@@ -316,7 +317,7 @@ def command_secrets(args: argparse.Namespace) -> int:
     skipped: list[str] = []
     fleet = load_platform_fleet(
         project_id=args.project,
-        settings_module=args.django_settings,
+        database_url=args.database_url,
         systems_path=args.redfish_systems_path,
         skipped=skipped,
     )
@@ -675,21 +676,15 @@ def _platform_stage_state(
     }
 
 
-def _load_platform_deployment(deployment_id: str, settings_module: str) -> Any:
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
-    import django
-
-    django.setup()
-    from core.models import ClusterDeployment
-
+def _load_platform_deployment(deployment_id: str, database_url: str | None) -> dict[str, Any]:
     try:
-        identifier = uuid.UUID(deployment_id)
+        uuid.UUID(deployment_id)
     except ValueError as exc:
         raise ValueError("METAL3_DEPLOYMENT_ID_INVALID") from exc
-    try:
-        return ClusterDeployment.objects.get(pk=identifier)
-    except ClusterDeployment.DoesNotExist as exc:
-        raise ValueError("METAL3_DEPLOYMENT_NOT_FOUND") from exc
+    deployment = cluster_deployment(deployment_id, explicit=database_url)
+    if deployment is None:
+        raise ValueError("METAL3_DEPLOYMENT_NOT_FOUND")
+    return deployment
 
 
 def command_stages(args: argparse.Namespace) -> int:
@@ -711,13 +706,13 @@ def command_stages(args: argparse.Namespace) -> int:
     platform_status = None
     platform_error = None
     if args.deployment_id:
-        deployment = _load_platform_deployment(args.deployment_id, args.django_settings)
-        plan_result = deployment.plan_result if isinstance(deployment.plan_result, dict) else {}
+        deployment = _load_platform_deployment(args.deployment_id, args.database_url)
+        plan_result = deployment["plan_result"]
         reached = _platform_stage_state(plan_result, network_ready)
-        platform_status = deployment.status
-        platform_error = deployment.error
+        platform_status = deployment["status"]
+        platform_error = deployment["error"]
         evidence = {
-            "deployment_id": str(deployment.id),
+            "deployment_id": str(deployment["id"]),
             "status": platform_status,
             "phase": plan_result.get("dual_agent", {}).get("phase"),
             "stages": reached,
@@ -777,7 +772,7 @@ def build_parser() -> argparse.ArgumentParser:
         "host networkData; recorded so verify can check the same host links",
     )
     plan.add_argument("--worker-node-labels", help="JSON object of pool -> label list")
-    plan.add_argument("--django-settings", default="platform_api.settings")
+    plan.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     plan.add_argument(
         "--write-back",
         action="store_true",
@@ -794,7 +789,7 @@ def build_parser() -> argparse.ArgumentParser:
     secrets.add_argument("--namespace", default="metal3")
     secrets.add_argument("--out-dir", type=Path, required=True)
     secrets.add_argument("--apply", action="store_true")
-    secrets.add_argument("--django-settings", default="platform_api.settings")
+    secrets.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     secrets.add_argument("--redfish-systems-path", default="/redfish/v1/Systems/1")
     secrets.set_defaults(func=command_secrets)
 
@@ -864,7 +859,7 @@ def build_parser() -> argparse.ArgumentParser:
     stages.add_argument("--dir", type=Path, required=True)
     stages.add_argument("--require-ready", action="store_true")
     stages.add_argument("--deployment-id")
-    stages.add_argument("--django-settings", default="platform_api.settings")
+    stages.add_argument("--database-url", help="SQLite or PostgreSQL platform DATABASE_URL")
     stages.set_defaults(func=command_stages)
 
     count = sub.add_parser("count", help="print how many machines the recorded plan assigns")

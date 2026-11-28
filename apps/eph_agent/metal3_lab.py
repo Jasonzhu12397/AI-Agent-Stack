@@ -64,7 +64,7 @@ class LabSettings:
     network_ready_timeout: int = 900
     deployment_id: str | None = None
     deployment_ready_timeout: int = 3600
-    django_settings: str = "platform_api.settings"
+    database_url: str | None = None
     write_back: bool = False
     allow_host_mutation: bool = False
     apply_retries: int = 10
@@ -247,8 +247,7 @@ class Metal3Lab:
             str(settings.hosts_dir),
             "--control-plane-count",
             str(settings.control_plane_count),
-            "--django-settings",
-            settings.django_settings,
+            *(["--database-url", settings.database_url] if settings.database_url else []),
         ]
         optional = (
             ("--project", settings.project),
@@ -346,8 +345,7 @@ class Metal3Lab:
             str(settings.hosts_dir),
             "--deployment-id",
             settings.deployment_id,
-            "--django-settings",
-            settings.django_settings,
+            *(["--database-url", settings.database_url] if settings.database_url else []),
             "--require-ready",
         ]
         deadline = time.monotonic() + settings.deployment_ready_timeout
@@ -523,7 +521,7 @@ def settings_from_namespace(args: Any) -> LabSettings:
         network_ready_timeout=getattr(args, "network_ready_timeout", 900),
         deployment_id=getattr(args, "deployment_id", None),
         deployment_ready_timeout=getattr(args, "deployment_ready_timeout", 3600),
-        django_settings=args.django_settings,
+        database_url=getattr(args, "database_url", None),
         write_back=(
             args.write_back
             or getattr(args, "action", "") == "auto"

@@ -6,13 +6,13 @@ The design reference is [Jasonzhu12397/AI-Stack-Agent-GUI](https://github.com/Ja
 
 | Reference UI / module | Vue Studio destination | Porting rule |
 |---|---|---|
-| `Header.tsx` | `apps/web-studio/src/App.vue` navigation and account shell | Port tab hierarchy, active navigation, health/account affordances into Vue; use the Django session as the real identity source |
+| `Header.tsx` | `apps/web-studio/src/App.vue` navigation and account shell | Port tab hierarchy, active navigation, health/account affordances into Vue; use the Rust session as the real identity source |
 | `DashboardView.tsx` | Workspace Overview | Preserve dark dashboard/card hierarchy; bind only to real API values and never show mock success metrics |
-| `AgentStudioView.tsx` | Existing `AgentStudioView.vue` | Keep Vue component and Django Agent endpoints; port useful layout and configuration affordances |
+| `AgentStudioView.tsx` | Existing `AgentStudioView.vue` | Keep Vue component and Rust Agent endpoints; port useful layout and configuration affordances |
 | `WorkflowStudioView.tsx` | Existing `WorkflowStudioView.vue` | Keep platform-owned JSON DAG contract and server publish validation; future graph canvas must use the same contract |
-| `IntegrationHubView.tsx` | `IntegrationHubView.vue` | Port catalog/detail/review/install/connection-reference patterns onto Django PluginDefinition/Installation/Connection APIs; add executable read-only starter manifests for Open-Meteo, Google Maps Places, GitHub and Microsoft Graph |
+| `IntegrationHubView.tsx` | `IntegrationHubView.vue` | Port catalog/detail/review/install/connection-reference patterns onto Rust PluginDefinition/Installation/Connection APIs; add executable read-only starter manifests for Open-Meteo, Google Maps Places, GitHub and Microsoft Graph |
 | `GovernanceView.tsx` | Infrastructure command approval and future Approval Center | Backend remains authoritative; approval must bind a canonical hash and require a different approver |
-| `OrgMembersView.tsx` | Tenant/project membership pages | Use Django membership endpoints and server-derived roles, not reference demo principals |
+| `OrgMembersView.tsx` | Tenant/project membership pages | Use Rust membership endpoints and server-derived roles, not reference demo principals |
 | `AuditView.tsx` | Planned Vue Audit Trail | Bind to persistent redacted AuditEvent records; do not use browser-side demo audit data |
 | `DocsAndMatrixView.tsx` | Documentation and verification matrix | Read the platform's actual Markdown documents and CI evidence |
 | `domain/dagValidator.ts`, `stateMachine.ts`, `policyEngine.ts`, `sanitizer.ts` | Python domain services plus TypeScript presentation helpers | Reuse contracts and test cases where useful, but server-side Python is authoritative for validation, state transitions, policy and redaction |
