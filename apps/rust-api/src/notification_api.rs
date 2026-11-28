@@ -321,34 +321,58 @@ pub async fn test_endpoint(
             )
         }
     };
-    let response = client.post(&url).json(&payload).send().await;
-    let (ok, message, status) = match response {
-        Ok(response) => {
-            let status = response.status();
-            let decoded: Value = response.json().await.unwrap_or_else(|_| json!({}));
-            let code = decoded
-                .get("errcode")
-                .or_else(|| decoded.get("code"))
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            if !status.is_success() {
-                (
-                    false,
-                    format!("upstream {}", status.as_u16()),
-                    Some(status.as_u16()),
-                )
-            } else if code != 0 && code != 200 {
-                (
-                    false,
-                    format!("channel rejected the message: {code}"),
-                    Some(status.as_u16()),
-                )
-            } else {
-                (true, String::new(), Some(status.as_u16()))
+    // Group robots throttle at 20 messages/minute; one retry on 5xx is plenty.
+    let mut result = (false, "not attempted".to_string(), None);
+    for attempt in 0..2 {
+        match client.post(&url).json(&payload).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let decoded: Value = response.json().await.unwrap_or_else(|_| json!({}));
+                if status.as_u16() >= 500 && attempt == 0 {
+                    result = (
+                        false,
+                        format!("upstream {}", status.as_u16()),
+                        Some(status.as_u16()),
+                    );
+                    continue;
+                }
+                if status.as_u16() >= 400 {
+                    result = (
+                        false,
+                        format!("upstream {}", status.as_u16()),
+                        Some(status.as_u16()),
+                    );
+                    break;
+                }
+                let code = decoded
+                    .get("errcode")
+                    .or_else(|| decoded.get("code"))
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                if code != 0 && code != 200 {
+                    let reason = decoded
+                        .get("errmsg")
+                        .or_else(|| decoded.get("msg"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| code.to_string());
+                    result = (
+                        false,
+                        format!("{} rejected the message: {reason}", row.2),
+                        Some(status.as_u16()),
+                    );
+                } else {
+                    result = (true, String::new(), Some(status.as_u16()));
+                }
+                break;
+            }
+            Err(error) => {
+                result = (false, format!("transport error: {error}"), None);
+                break;
             }
         }
-        Err(error) => (false, format!("transport error: {error}"), None),
-    };
+    }
+    let (ok, message, status) = result;
     let now = if is_postgres(&state) {
         "NOW()"
     } else {
@@ -364,8 +388,31 @@ pub async fn test_endpoint(
         query = query.bind(truncate(&message, 200));
     }
     let _ = query.bind(&id).execute(pool).await;
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant.as_str()),
+            project_id: None,
+            event_type: "settings.notification.test",
+            resource_type: "notification_endpoint",
+            resource_id: id.as_str(),
+            outcome: if ok { "success" } else { "failure" },
+            actor_id: Some(_user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({"channel": row.2, "message": message}),
+        },
+    )
+    .await;
+    let status_code = if ok {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
     (
-        StatusCode::OK,
+        status_code,
         Json(json!({"ok": ok, "message": message, "status_code": status, "last_sent_at": if ok { Some(now_text()) } else { None }})),
     )
         .into_response()

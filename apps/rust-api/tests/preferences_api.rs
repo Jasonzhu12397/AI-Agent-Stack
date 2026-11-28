@@ -266,7 +266,8 @@ async fn manages_notification_endpoints_without_exposing_secrets() {
     assert_eq!(status, StatusCode::OK);
     let test_uri = format!("{base}{id}/test/");
     let (status, body) = call(&state, "POST", &test_uri, Some(json!({}))).await;
-    assert_eq!(status, StatusCode::OK);
+    // A failed delivery is reported as a bad gateway, not as a successful test.
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(body["ok"], json!(false));
     assert!(body["message"]
         .as_str()
