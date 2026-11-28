@@ -512,4 +512,32 @@ async fn registers_plugin_definitions_and_installations() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["plugin"]["plugin_key"], "weather");
     assert_eq!(body["status"], "installed");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/agent-plugins/"),
+        Some(json!({
+            "plugin_key": "secure",
+            "name": "Secure",
+            "version": "1.0.0",
+            "protocol": "http_json",
+            "endpoint_url": "https://secure.example.com",
+            "auth_required": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = call(
+        &state,
+        "POST",
+        &format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/agent-plugin-installations/"),
+        Some(json!({
+            "plugin_key": "secure",
+            "credential_ref": "plugin://missing-credential"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

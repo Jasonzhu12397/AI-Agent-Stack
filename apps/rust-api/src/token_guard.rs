@@ -323,10 +323,11 @@ pub async fn reserve_adhoc(
     if let Some(row) = existing.as_ref() {
         if sqlx::query(
             "UPDATE core_tenanttokenusage SET status = 'reserved', reserved_tokens = ?, consumed_tokens = 0, \
-             expires_at = ?, updated_at = ?, scope_ref = ? WHERE CAST(id AS TEXT) = ?",
+             expires_at = ?, updated_at = ?, created_at = ?, scope_ref = ? WHERE CAST(id AS TEXT) = ?",
         )
         .bind(requested_tokens)
         .bind(&expires)
+        .bind(&now_text)
         .bind(&now_text)
         .bind(trimmed)
         .bind(row.try_get::<String, _>("id").unwrap_or_default())

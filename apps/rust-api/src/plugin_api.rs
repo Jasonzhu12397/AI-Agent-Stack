@@ -539,24 +539,8 @@ pub async fn create_installation(
         );
     }
     if !credential_ref.is_empty() {
-        let valid = credential_ref.len() <= 200
-            && !credential_ref.chars().any(char::is_whitespace)
-            && credential_ref
-                .split_once("://")
-                .map(|(scheme, rest)| {
-                    !rest.is_empty()
-                        && !scheme.is_empty()
-                        && scheme
-                            .chars()
-                            .next()
-                            .is_some_and(|first| first.is_ascii_lowercase())
-                })
-                .unwrap_or(false);
-        if !valid {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "Connector credential reference is invalid.",
-            );
+        if let Some(message) = credential_reference_error(pool, &tenant_id, &credential_ref).await {
+            return error(StatusCode::BAD_REQUEST, &message);
         }
     }
     let existing = sqlx::query(
@@ -1001,6 +985,53 @@ fn json_text(state: &AppState, column: &str) -> String {
 
 fn parse_json(value: Option<String>) -> Option<Value> {
     value.and_then(|value| serde_json::from_str(&value).ok())
+}
+
+async fn credential_reference_error(
+    pool: &AnyPool,
+    tenant_id: &str,
+    reference: &str,
+) -> Option<String> {
+    if reference.len() > 200 {
+        return Some("credential_ref must be at most 200 characters.".into());
+    }
+    let (scheme, rest) = match reference.split_once("://") {
+        Some(value) => value,
+        None => return Some("Connector credential reference is invalid.".into()),
+    };
+    if rest.is_empty()
+        || scheme.is_empty()
+        || !scheme
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        || !scheme.chars().all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || matches!(value, '+' | '.' | '-')
+        })
+        || reference.chars().any(char::is_whitespace)
+    {
+        return Some("Connector credential reference is invalid.".into());
+    }
+    if !matches!(scheme, "env" | "vault" | "plugin") {
+        return Some(format!(
+            "No credential provider is registered for scheme '{scheme}'."
+        ));
+    }
+    if scheme == "plugin" {
+        let owned = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM core_agentplugincredential \
+             WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?",
+        )
+        .bind(rest)
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if owned == 0 {
+            return Some("Plugin credential is not available in this workspace.".into());
+        }
+    }
+    None
 }
 
 async fn tenant_member(pool: &AnyPool, tenant_id: &str, user_id: i64) -> Result<bool, String> {
