@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address: SocketAddr = config.listen.parse()?;
     let state = AppState::new(config)?;
     state.migrate_identity().await?;
+    ai_agent_stack_api::worker::spawn(state.clone());
     let listener = TcpListener::bind(address).await?;
 
     tracing::info!(%address, "rust api listening");

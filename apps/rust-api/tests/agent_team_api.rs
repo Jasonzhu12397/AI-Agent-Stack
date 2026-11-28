@@ -32,8 +32,8 @@ async fn state() -> AppState {
         "CREATE TABLE core_workflowversion (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, version INTEGER NOT NULL, definition_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentdefinition (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, created_by_id INTEGER NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, description TEXT NOT NULL, draft_config TEXT NOT NULL, current_version INTEGER NOT NULL, is_archived INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, UNIQUE(project_id, slug))",
         "CREATE TABLE core_agentversion (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, version INTEGER NOT NULL, config_snapshot TEXT NOT NULL, created_by_id INTEGER NOT NULL, published_at DATETIME NOT NULL)",
-        "CREATE TABLE core_workflowrun (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workflow_version_id TEXT NOT NULL, input_data TEXT NOT NULL)",
-        "CREATE TABLE core_task (id TEXT PRIMARY KEY, status VARCHAR(16) NOT NULL)",
+        "CREATE TABLE core_workflowrun (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, workflow_version_id TEXT NOT NULL, input_data TEXT NOT NULL, state TEXT, output_data TEXT, deadline_at DATETIME, created_at DATETIME, finished_at DATETIME)",
+        "CREATE TABLE core_task (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, created_by_id INTEGER, task_type VARCHAR(120), payload TEXT, result TEXT, error TEXT, status VARCHAR(16) NOT NULL, idempotency_key VARCHAR(128), attempts INTEGER, max_attempts INTEGER, available_at DATETIME, lease_owner VARCHAR(120), lease_token TEXT, lease_expires_at DATETIME, heartbeat_at DATETIME, cancel_requested_at DATETIME, started_at DATETIME, finished_at DATETIME, created_at DATETIME, updated_at DATETIME, UNIQUE(tenant_id, idempotency_key))",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -184,4 +184,89 @@ async fn publishes_team_and_creates_workflow_version() {
     .await
     .unwrap();
     assert_eq!(versions, 1);
+}
+
+async fn call_with_key(
+    state: &AppState,
+    method: &str,
+    uri: &str,
+    key: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(
+            "cookie",
+            "sessionid=team-session; csrftoken=0123456789abcdef0123456789abcdef",
+        )
+        .header(
+            "x-csrftoken",
+            format!("{}{}", "a".repeat(32), "0123456789abcdef0123456789abcdef"),
+        )
+        .header("idempotency-key", key)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn creates_team_run_once_per_idempotency_key() {
+    let state = state().await;
+    let uri = "/api/v1/agent-teams/team-1/runs/";
+    let (status, body) = call_with_key(
+        &state,
+        "POST",
+        uri,
+        "team-run-key",
+        json!({"input": "Investigate the incident"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["task_status"], "queued");
+    let run_id = body["id"].as_str().unwrap().to_string();
+    let task_id = body["task_id"].as_str().unwrap().to_string();
+    let database = state.identity_pool.clone().expect("identity pool");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM core_task WHERE idempotency_key = 'team-run-key'")
+            .fetch_one(&database)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    let tasks: String = sqlx::query_scalar("SELECT task_type FROM core_task WHERE id = ?")
+        .bind(&task_id)
+        .fetch_one(&database)
+        .await
+        .unwrap();
+    assert_eq!(tasks, "team.run");
+
+    let (status, replay) = call_with_key(
+        &state,
+        "POST",
+        uri,
+        "team-run-key",
+        json!({"input": "Investigate the incident"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay["id"], run_id);
+
+    let (status, _) = call_with_key(
+        &state,
+        "POST",
+        uri,
+        "team-run-key",
+        json!({"input": "A different prompt"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

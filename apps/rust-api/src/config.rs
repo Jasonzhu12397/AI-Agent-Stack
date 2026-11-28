@@ -9,6 +9,8 @@ pub struct Config {
     pub secure_cookies: bool,
     pub external_scheme: String,
     pub media_root: String,
+    pub worker_enabled: bool,
+    pub worker_poll_seconds: u64,
 }
 
 impl Config {
@@ -24,6 +26,8 @@ impl Config {
             secure_cookies: false,
             external_scheme: "http".into(),
             media_root: ".testdata/media".into(),
+            worker_enabled: false,
+            worker_poll_seconds: 2,
         }
     }
 
@@ -64,6 +68,12 @@ impl Config {
             secure_cookies,
             external_scheme,
             media_root: env::var("MEDIA_ROOT").unwrap_or_else(|_| ".devdata/media".into()),
+            worker_enabled: parse_bool("RUST_API_WORKER_ENABLED", true)?,
+            worker_poll_seconds: env::var("RUST_API_WORKER_POLL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| (1..=60).contains(value))
+                .unwrap_or(2),
         })
     }
 }

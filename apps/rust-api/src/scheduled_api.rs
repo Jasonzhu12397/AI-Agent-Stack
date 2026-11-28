@@ -413,6 +413,129 @@ fn job_json(row: &sqlx::any::AnyRow) -> Value {
     })
 }
 
+/// Claim due scheduled jobs and execute one turn for each of them.
+pub async fn dispatch_due_jobs(state: &AppState, limit: i64) -> Result<usize, String> {
+    let pool = state
+        .identity_pool
+        .as_ref()
+        .ok_or_else(|| "Database is unavailable.".to_string())?;
+    let now = Utc::now();
+    let now_text = now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    let postgres = is_postgres(state);
+    let due_sql = "SELECT CAST(job.id AS TEXT) AS id, job.name, job.prompt, job.cadence, \
+         CAST(job.hour AS INTEGER) AS hour, CAST(job.weekday AS INTEGER) AS weekday, \
+         job.execution_target, job.effort, CAST(job.next_run_at AS TEXT) AS next_run_at, \
+         CAST(job.thread_id AS TEXT) AS thread_id, CAST(job.model_config_id AS TEXT) AS model_config_id, \
+         CAST(job.tenant_id AS TEXT) AS tenant_id, CAST(job.project_id AS TEXT) AS project_id, \
+         CAST(job.created_by_id AS BIGINT) AS created_by_id \
+         FROM core_scheduledchatjob job WHERE job.status = 'active' AND job.next_run_at <= {{now}} \
+         ORDER BY job.next_run_at, job.created_at LIMIT ?";
+    let now_expr = if postgres {
+        "?::timestamptz".to_string()
+    } else {
+        "?".to_string()
+    };
+    let due_sql = due_sql.replace("{now}", &now_expr);
+    let rows = sqlx::query(&due_sql)
+        .bind(&now_text)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut ran = 0;
+    for row in rows {
+        let id: String = row.try_get("id").unwrap_or_default();
+        let cadence: String = row.try_get("cadence").unwrap_or_else(|_| "daily".into());
+        let hour: i64 = row.try_get("hour").unwrap_or(0);
+        let weekday: i64 = row.try_get("weekday").unwrap_or(0);
+        let stored_next: Option<String> = row.try_get("next_run_at").ok();
+        let Some(stored_next) = stored_next else {
+            continue;
+        };
+        let next = next_occurrence(&cadence, hour as u32, weekday as u32, now);
+        let next_text = next.to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+        let claim_sql = if postgres {
+            "UPDATE core_scheduledchatjob SET next_run_at = ?::timestamptz, updated_at = ?::timestamptz \
+             WHERE CAST(id AS TEXT) = ? AND status = 'active' AND next_run_at = ?::timestamptz"
+        } else {
+            "UPDATE core_scheduledchatjob SET next_run_at = ?, updated_at = ? \
+             WHERE CAST(id AS TEXT) = ? AND status = 'active' AND next_run_at = ?"
+        };
+        let claimed = sqlx::query(claim_sql)
+            .bind(&next_text)
+            .bind(&now_text)
+            .bind(&id)
+            .bind(&stored_next)
+            .execute(pool)
+            .await
+            .map(|result| result.rows_affected())
+            .unwrap_or(0);
+        if claimed == 0 {
+            continue;
+        }
+        let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
+        let project_id: String = row.try_get("project_id").unwrap_or_default();
+        let user_id: i64 = row.try_get("created_by_id").unwrap_or(0);
+        let name: String = row.try_get("name").unwrap_or_default();
+        let prompt: String = row.try_get("prompt").unwrap_or_default();
+        let execution_target: String = row
+            .try_get("execution_target")
+            .unwrap_or_else(|_| "cloud".into());
+        let effort: String = row.try_get("effort").unwrap_or_else(|_| "auto".into());
+        let thread_id: Option<String> = row.try_get("thread_id").ok().flatten();
+        let model_id: Option<String> = row.try_get("model_config_id").ok().flatten();
+        let outcome = crate::chat_api::scheduled_run(
+            pool,
+            state,
+            &tenant_id,
+            &project_id,
+            user_id,
+            thread_id.as_deref(),
+            &name,
+            model_id.as_deref(),
+            &prompt,
+            &execution_target,
+            &effort,
+            &id,
+        )
+        .await;
+        let error_code = match outcome {
+            Ok((thread_id, _, _, error_code)) => {
+                let _ = sqlx::query(
+                    "UPDATE core_scheduledchatjob SET thread_id = ?, last_run_at = ?, last_error_code = ?, \
+                     updated_at = ? WHERE CAST(id AS TEXT) = ?",
+                )
+                .bind(&thread_id)
+                .bind(&now_text)
+                .bind(&error_code)
+                .bind(&now_text)
+                .bind(&id)
+                .execute(pool)
+                .await;
+                error_code
+            }
+            Err(error) => {
+                tracing::warn!(job_id = %id, %error, "scheduled job execution failed");
+                let code = "SCHEDULED_RUN_FAILED";
+                let _ = sqlx::query(
+                    "UPDATE core_scheduledchatjob SET last_run_at = ?, last_error_code = ?, \
+                     updated_at = ? WHERE CAST(id AS TEXT) = ?",
+                )
+                .bind(&now_text)
+                .bind(code)
+                .bind(&now_text)
+                .bind(&id)
+                .execute(pool)
+                .await;
+                code.to_string()
+            }
+        };
+        let _ = error_code;
+        ran += 1;
+    }
+    Ok(ran)
+}
+
 fn next_occurrence(
     cadence: &str,
     hour: u32,

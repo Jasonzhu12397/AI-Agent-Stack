@@ -4,6 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::Row;
 
@@ -506,6 +507,268 @@ pub async fn list_team_runs(
         Err(value) => return database_error(value.to_string()),
     };
     Json(Value::Array(rows.iter().map(run_json).collect())).into_response()
+}
+
+/// `POST /api/v1/agent-teams/{team_id}/runs/`
+pub async fn create_team_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let user = match crate::billing_api::require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if let Err(response) = team_scope(pool, &team_id, user.id).await {
+        return response;
+    }
+    let team = match sqlx::query(
+        "SELECT CAST(tenant_id AS TEXT) AS tenant_id, CAST(project_id AS TEXT) AS project_id, \
+         CAST(current_version AS INTEGER) AS current_version, \
+         CAST(is_archived AS INTEGER) AS is_archived FROM core_agentteam \
+         WHERE CAST(id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&team_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return error("Not found.", 404),
+        Err(value) => return database_error(value.to_string()),
+    };
+    let current_version: i64 = team.try_get("current_version").unwrap_or(0);
+    let archived: i64 = team.try_get("is_archived").unwrap_or(0);
+    if archived != 0 || current_version <= 0 {
+        return error("Team must have a published version before it can run.", 409);
+    }
+    let input_text = match payload.get("input").and_then(Value::as_str) {
+        Some(value) if !value.trim().is_empty() && value.chars().count() <= 20_000 => value,
+        _ => {
+            return error(
+                "input must be a non-empty string no longer than 20,000 characters.",
+                400,
+            )
+        }
+    };
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+        return error("A valid Idempotency-Key header is required.", 400);
+    }
+    let tenant_id: String = team.try_get("tenant_id").unwrap_or_default();
+    let project_id: String = team.try_get("project_id").unwrap_or_default();
+    let (version_id, workflow_version_id) = match sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(workflow_version_id AS TEXT) AS workflow_version_id \
+         FROM core_agentteamversion WHERE CAST(team_id AS TEXT) = ? AND version = ? LIMIT 1",
+    )
+    .bind(&team_id)
+    .bind(current_version)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => (
+            row.try_get::<String, _>("id").unwrap_or_default(),
+            row.try_get::<String, _>("workflow_version_id")
+                .unwrap_or_default(),
+        ),
+        Ok(None) => return error("Team must have a published version before it can run.", 409),
+        Err(value) => return database_error(value.to_string()),
+    };
+    let payload_json = json!({"team_version_id": version_id, "input_text": input_text}).to_string();
+    let postgres = crate::tenancy::is_postgres(&state);
+    let mut transaction = match pool.begin().await {
+        Ok(transaction) => transaction,
+        Err(value) => return database_error(value.to_string()),
+    };
+    let existing = sqlx::query(
+        "SELECT CAST(id AS TEXT) AS id, CAST(project_id AS TEXT) AS project_id, task_type, payload \
+         FROM core_task WHERE CAST(tenant_id AS TEXT) = ? AND idempotency_key = ? LIMIT 1",
+    )
+    .bind(&tenant_id)
+    .bind(&idempotency_key)
+    .fetch_optional(&mut *transaction)
+    .await;
+    let (task_id, created) = match existing {
+        Ok(Some(row)) => {
+            let stored_project: String = row.try_get("project_id").unwrap_or_default();
+            let task_type: String = row.try_get("task_type").unwrap_or_default();
+            let stored_payload: String = row.try_get("payload").unwrap_or_default();
+            if stored_project != project_id
+                || task_type != "team.run"
+                || stored_payload != payload_json
+            {
+                let _ = transaction.rollback().await;
+                return error(
+                    "Idempotency-Key was already used with a different request.",
+                    409,
+                );
+            }
+            (row.try_get::<String, _>("id").unwrap_or_default(), false)
+        }
+        Ok(None) => {
+            let task_id = uuid::Uuid::new_v4().to_string();
+            let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+            let insert = if postgres {
+                "INSERT INTO core_task (id, tenant_id, project_id, created_by_id, task_type, payload, \
+                 result, error, status, idempotency_key, attempts, max_attempts, available_at, \
+                 lease_owner, lease_token, created_at, updated_at) VALUES \
+                 (?::uuid, ?::uuid, ?::uuid, ?, ?, ?::jsonb, NULL, NULL, 'queued', ?, 0, 3, ?::timestamptz, \
+                 NULL, NULL, ?::timestamptz, ?::timestamptz)"
+            } else {
+                "INSERT INTO core_task (id, tenant_id, project_id, created_by_id, task_type, payload, \
+                 result, error, status, idempotency_key, attempts, max_attempts, available_at, \
+                 lease_owner, lease_token, created_at, updated_at) VALUES \
+                 (?, ?, ?, ?, ?, ?, NULL, NULL, 'queued', ?, 0, 3, ?, NULL, NULL, ?, ?)"
+            };
+            if let Err(value) = sqlx::query(insert)
+                .bind(&task_id)
+                .bind(&tenant_id)
+                .bind(&project_id)
+                .bind(user.id)
+                .bind("team.run")
+                .bind(&payload_json)
+                .bind(&idempotency_key)
+                .bind(&now)
+                .bind(&now)
+                .bind(&now)
+                .execute(&mut *transaction)
+                .await
+            {
+                let _ = transaction.rollback().await;
+                return database_error(value.to_string());
+            }
+            (task_id, true)
+        }
+        Err(value) => {
+            let _ = transaction.rollback().await;
+            return database_error(value.to_string());
+        }
+    };
+    if !created {
+        let _ = transaction.commit().await;
+        let created_at = timestamp_expr(&state, "run", "created_at");
+        let finished_at = timestamp_expr(&state, "run", "finished_at");
+        let sql = format!(
+            "SELECT CAST(run.id AS TEXT) AS id, CAST(run.team_version_id AS TEXT) AS team_version_id, \
+             CAST(task.id AS TEXT) AS task_id, task.status AS task_status, run.input_text, run.output_text, \
+             {created_at} AS created_at, {finished_at} AS finished_at \
+             FROM core_agentteamrun run \
+             JOIN core_workflowrun workflow ON workflow.id = run.workflow_run_id \
+             LEFT JOIN core_task task ON task.id = workflow.task_id \
+             WHERE CAST(workflow.task_id AS TEXT) = ? LIMIT 1"
+        );
+        return match sqlx::query(&sql).bind(&task_id).fetch_optional(pool).await {
+            Ok(Some(row)) => (StatusCode::OK, Json(run_json(&row))).into_response(),
+            Ok(None) => error("Not found.", 404),
+            Err(value) => database_error(value.to_string()),
+        };
+    }
+    let workflow_run_id = uuid::Uuid::new_v4().to_string();
+    let team_run_id = uuid::Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
+    let workflow_sql = if postgres {
+        "INSERT INTO core_workflowrun (id, task_id, workflow_version_id, input_data, state, \
+         output_data, deadline_at, created_at, finished_at) VALUES \
+         (?::uuid, ?::uuid, ?::uuid, ?::jsonb, '{}'::jsonb, NULL, NULL, ?::timestamptz, NULL)"
+    } else {
+        "INSERT INTO core_workflowrun (id, task_id, workflow_version_id, input_data, state, \
+         output_data, deadline_at, created_at, finished_at) VALUES \
+         (?, ?, ?, ?, '{}', NULL, NULL, ?, NULL)"
+    };
+    if let Err(value) = sqlx::query(workflow_sql)
+        .bind(&workflow_run_id)
+        .bind(&task_id)
+        .bind(&workflow_version_id)
+        .bind(json!({"input": input_text}).to_string())
+        .bind(&now)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(value.to_string());
+    }
+    let run_sql = if postgres {
+        "INSERT INTO core_agentteamrun (id, input_text, output_text, created_at, finished_at, \
+         workflow_run_id, team_version_id) VALUES (?::uuid, ?, '', ?::timestamptz, NULL, ?::uuid, ?::uuid)"
+    } else {
+        "INSERT INTO core_agentteamrun (id, input_text, output_text, created_at, finished_at, \
+         workflow_run_id, team_version_id) VALUES (?, ?, '', ?, NULL, ?, ?)"
+    };
+    if let Err(value) = sqlx::query(run_sql)
+        .bind(&team_run_id)
+        .bind(input_text)
+        .bind(&now)
+        .bind(&workflow_run_id)
+        .bind(&version_id)
+        .execute(&mut *transaction)
+        .await
+    {
+        let _ = transaction.rollback().await;
+        return database_error(value.to_string());
+    }
+    if let Err(value) = transaction.commit().await {
+        return database_error(value.to_string());
+    }
+    let _ = crate::audit::record_event(
+        pool,
+        state.config.database_url.as_deref().unwrap_or(""),
+        crate::audit::AuditEvent {
+            tenant_id: Some(tenant_id.as_str()),
+            project_id: Some(project_id.as_str()),
+            event_type: "agent_team.run.created",
+            resource_type: "agent_team_run",
+            resource_id: team_run_id.as_str(),
+            outcome: "success",
+            actor_id: Some(user.id),
+            request_id: "",
+            remote_addr: None,
+            user_agent: "",
+            metadata: json!({
+                "team_id": team_id,
+                "task_id": task_id,
+                "team_version_id": version_id,
+                "deduplicated": !created,
+            }),
+        },
+    )
+    .await;
+    let created_at = timestamp_expr(&state, "run", "created_at");
+    let finished_at = timestamp_expr(&state, "run", "finished_at");
+    let sql = format!(
+        "SELECT CAST(run.id AS TEXT) AS id, CAST(run.team_version_id AS TEXT) AS team_version_id, \
+         CAST(task.id AS TEXT) AS task_id, task.status AS task_status, run.input_text, run.output_text, \
+         {created_at} AS created_at, {finished_at} AS finished_at \
+         FROM core_agentteamrun run \
+         LEFT JOIN core_workflowrun workflow ON workflow.id = run.workflow_run_id \
+         LEFT JOIN core_task task ON task.id = workflow.task_id \
+         WHERE CAST(run.id AS TEXT) = ? LIMIT 1"
+    );
+    let row = match sqlx::query(&sql)
+        .bind(&team_run_id)
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return error("Not found.", 404),
+        Err(value) => return database_error(value.to_string()),
+    };
+    (
+        if created {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(run_json(&row)),
+    )
+        .into_response()
 }
 
 /// `GET /api/v1/agent-team-runs/{run_id}/`

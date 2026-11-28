@@ -144,7 +144,8 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/agent-teams/{team_id}/runs/",
-                axum::routing::get(crate::agent_team_api::list_team_runs),
+                axum::routing::get(crate::agent_team_api::list_team_runs)
+                    .post(crate::agent_team_api::create_team_run),
             )
             .route(
                 "/api/v1/agent-team-runs/{run_id}/",
