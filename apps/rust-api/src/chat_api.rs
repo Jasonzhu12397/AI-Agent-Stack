@@ -640,12 +640,19 @@ async fn resolve_credential(
     Ok(reference)
 }
 
+struct BudgetScope<'a> {
+    tenant_id: &'a str,
+    scope_ref: &'a str,
+    idempotency_key: &'a str,
+}
+
 async fn complete_model(
     state: &AppState,
     model: &ChatModel,
     credential: &str,
     prompt: &str,
     history: &[Value],
+    budget: BudgetScope<'_>,
 ) -> Result<(String, Value), Response> {
     if model.provider_type == "fake" {
         let content = model
@@ -688,19 +695,61 @@ async fn complete_model(
     if !credential.is_empty() {
         request = request.header("Authorization", format!("Bearer {credential}"));
     }
+    let estimated = serde_json::to_vec(&messages)
+        .map(|bytes| bytes.len() as i64 / 4)
+        .unwrap_or(0)
+        + model.max_output_tokens.max(1);
+    let pool = state.identity_pool.as_ref();
+    let reservation = match pool {
+        Some(pool) => match crate::token_guard::reserve_adhoc(
+            pool,
+            crate::tenancy::is_postgres(state),
+            crate::token_guard::AdHocRequest {
+                tenant_id: budget.tenant_id,
+                scope_ref: budget.scope_ref,
+                idempotency_key: budget.idempotency_key,
+                requested_tokens: estimated.max(1),
+            },
+        )
+        .await
+        {
+            Ok(reservation) => Some(reservation),
+            Err(error) if error.starts_with("TENANT_TOKEN_BUDGET_EXCEEDED") => {
+                return Err(legacy_error(
+                    "Tenant token budget would be exceeded.",
+                    StatusCode::PAYMENT_REQUIRED,
+                    "TENANT_TOKEN_BUDGET_EXCEEDED",
+                ))
+            }
+            Err(_) => {
+                return Err(legacy_error(
+                    "Token reservation failed.",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "TOKEN_RESERVATION_FAILED",
+                ))
+            }
+        },
+        None => None,
+    };
     let started = std::time::Instant::now();
     let response = match request.send().await {
         Ok(response) => response,
         Err(_) => {
+            if let (Some(pool), Some(reservation)) = (pool, reservation.as_ref()) {
+                let _ = crate::token_guard::release(pool, reservation).await;
+            }
             return Err(legacy_error(
                 "The model provider could not be reached.",
                 StatusCode::BAD_GATEWAY,
                 "MODEL_PROVIDER_UNREACHABLE",
-            ))
+            ));
         }
     };
     let status = response.status();
     if !status.is_success() {
+        if let (Some(pool), Some(reservation)) = (pool, reservation.as_ref()) {
+            let _ = crate::token_guard::release(pool, reservation).await;
+        }
         return Err(legacy_error(
             &format!(
                 "The model provider refused the request (HTTP {}).",
@@ -713,11 +762,14 @@ async fn complete_model(
     let document: Value = match response.json().await {
         Ok(document) => document,
         Err(_) => {
+            if let (Some(pool), Some(reservation)) = (pool, reservation.as_ref()) {
+                let _ = crate::token_guard::release(pool, reservation).await;
+            }
             return Err(legacy_error(
                 "The model provider returned an unreadable response.",
                 StatusCode::BAD_GATEWAY,
                 "MODEL_PROVIDER_ERROR",
-            ))
+            ));
         }
     };
     let content = document
@@ -726,6 +778,9 @@ async fn complete_model(
         .unwrap_or("")
         .to_string();
     if content.is_empty() {
+        if let (Some(pool), Some(reservation)) = (pool, reservation.as_ref()) {
+            let _ = crate::token_guard::release(pool, reservation).await;
+        }
         return Err(legacy_error(
             "The model provider returned an empty response.",
             StatusCode::BAD_GATEWAY,
@@ -740,6 +795,19 @@ async fn complete_model(
         .pointer("/usage/completion_tokens")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    if let (Some(pool), Some(reservation)) = (pool, reservation.as_ref()) {
+        let consumed = (input_tokens + output_tokens).min(reservation.reserved_tokens);
+        if crate::token_guard::settle(pool, reservation, consumed)
+            .await
+            .is_err()
+        {
+            return Err(legacy_error(
+                "Token settlement failed.",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "TOKEN_SETTLEMENT_FAILED",
+            ));
+        }
+    }
     let usage = json!({
         "content": content,
         "input_tokens": input_tokens,
@@ -945,7 +1013,20 @@ pub async fn create_message(
             .collect::<Vec<_>>(),
         Err(error) => return database_error(error),
     };
-    let (reply, usage) = match complete_model(&state, &model, &credential, &prompt, &history).await
+    let chat_scope = format!("agent-chat:{}:{}", thread.id, user_message_id);
+    let (reply, usage) = match complete_model(
+        &state,
+        &model,
+        &credential,
+        &prompt,
+        &history,
+        BudgetScope {
+            tenant_id: &thread.tenant_id,
+            scope_ref: &chat_scope,
+            idempotency_key: &chat_scope,
+        },
+    )
+    .await
     {
         Ok(result) => result,
         Err(response) => return response,
@@ -1679,12 +1760,18 @@ pub async fn test_model(
             "content": "Reply with a short connection test.",
         })],
     };
+    let model_test_scope = format!("model-test:{}", model.id);
     let (content, usage) = match complete_model(
         &state,
         &model,
         &credential,
         "You are a model connectivity probe. Reply briefly.",
         &messages,
+        BudgetScope {
+            tenant_id: &tenant_id,
+            scope_ref: &model_test_scope,
+            idempotency_key: &model_test_scope,
+        },
     )
     .await
     {
@@ -2245,7 +2332,22 @@ pub(crate) async fn scheduled_run(
                     Ok(credential) => {
                         let system = chat_prompt(pool, state, &thread, &json!({})).await?;
                         let history = vec![json!({"role": "user", "content": prompt_text})];
-                        match complete_model(state, &model, &credential, &system, &history).await {
+                        let scheduled_scope =
+                            format!("agent-chat-scheduled:{job_id}:{}", thread.id);
+                        match complete_model(
+                            state,
+                            &model,
+                            &credential,
+                            &system,
+                            &history,
+                            BudgetScope {
+                                tenant_id,
+                                scope_ref: &scheduled_scope,
+                                idempotency_key: &scheduled_scope,
+                            },
+                        )
+                        .await
+                        {
                             Ok((reply, turn_usage)) => {
                                 content = reply;
                                 usage = turn_usage;

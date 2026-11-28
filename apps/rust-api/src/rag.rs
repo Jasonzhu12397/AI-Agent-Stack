@@ -132,7 +132,10 @@ async fn ingest_inner(
     let mut store = QdrantStore::from_env()?;
     let mut inserted = 0_i64;
     for (batch_index, batch) in chunks.chunks(128).enumerate() {
-        let vectors = model.embed(state, &credential, batch).await?;
+        let scope = format!("rag-ingest:{document_id}");
+        let key = format!("rag-ingest:{document_id}:{}", batch_index * 128);
+        let vectors =
+            embed_guarded(state, &model, &credential, batch, tenant_id, &scope, &key).await?;
         if batch_index == 0 {
             store = store.for_model(&model.model_name, vectors[0].len());
             store.ensure_collection(vectors[0].len()).await?;
@@ -238,6 +241,43 @@ async fn mark_failed(
         .map_err(|error| error.to_string())
 }
 
+async fn embed_guarded(
+    state: &AppState,
+    model: &crate::runtime_model::RuntimeModel,
+    credential: &str,
+    inputs: &[String],
+    tenant_id: &str,
+    scope_ref: &str,
+    idempotency_key: &str,
+) -> Result<Vec<Vec<f64>>, String> {
+    let pool = state
+        .identity_pool
+        .as_ref()
+        .ok_or_else(|| "Database is unavailable.".to_string())?;
+    let requested = (inputs.iter().map(|value| value.len() as i64).sum::<i64>() / 2).max(1);
+    let reservation = crate::token_guard::reserve_adhoc(
+        pool,
+        is_postgres(state),
+        crate::token_guard::AdHocRequest {
+            tenant_id,
+            scope_ref,
+            idempotency_key,
+            requested_tokens: requested,
+        },
+    )
+    .await?;
+    match model.embed(state, credential, inputs).await {
+        Ok(vectors) => {
+            crate::token_guard::settle(pool, &reservation, reservation.reserved_tokens).await?;
+            Ok(vectors)
+        }
+        Err(error) => {
+            let _ = crate::token_guard::release(pool, &reservation).await;
+            Err(error)
+        }
+    }
+}
+
 pub async fn retrieve(
     state: &AppState,
     tenant_id: &str,
@@ -280,9 +320,24 @@ pub async fn retrieve(
     .await?
     .ok_or_else(|| "Knowledge embedding model is unavailable.".to_string())?;
     let credential = crate::runtime_model::credential(pool, state, &model, user_id).await?;
-    let vectors = model
-        .embed(state, &credential, &[query.to_string()])
-        .await?;
+    let scope = format!("rag-retrieve:{project_id}");
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(query.as_bytes());
+        format!("{:x}", hasher.finalize())[..16].to_string()
+    };
+    let key = format!("rag-retrieve:{project_id}:{digest}");
+    let vectors = embed_guarded(
+        state,
+        &model,
+        &credential,
+        &[query.to_string()],
+        tenant_id,
+        &scope,
+        &key,
+    )
+    .await?;
     let store = QdrantStore::from_env()?.for_model(&model.model_name, vectors[0].len());
     let filters = json!({
         "tenant_id": tenant_id,
