@@ -32,6 +32,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_tenantmembership (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_auditevent (id TEXT PRIMARY KEY, tenant_id TEXT, project_id TEXT, actor_id INTEGER, event_type VARCHAR(64) NOT NULL, resource_type VARCHAR(64) NOT NULL, resource_id TEXT, outcome VARCHAR(16) NOT NULL, request_id VARCHAR(64) NOT NULL, remote_addr VARCHAR(39), user_agent TEXT NOT NULL, metadata TEXT NOT NULL, previous_hash VARCHAR(64), event_hash VARCHAR(64) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, agent_node_id TEXT NOT NULL, vendor VARCHAR(256) NOT NULL, product_name VARCHAR(256) NOT NULL, system_uuid VARCHAR(128) NOT NULL, identity_material TEXT NOT NULL, identity_fingerprint VARCHAR(64) NOT NULL, identity_status VARCHAR(16) NOT NULL, identity_conflicts TEXT NOT NULL, hardware_inventory TEXT NOT NULL, inventory_source VARCHAR(48) NOT NULL, inventory_revision INTEGER NOT NULL, observed_at DATETIME, bmc_credential_ref VARCHAR(160) NOT NULL, bmc_endpoint VARCHAR(500) NOT NULL, bmc_trust_bundle_ref VARCHAR(160) NOT NULL, bmc_tls_verify BOOLEAN NOT NULL, bmc_configured_at DATETIME, bmc_identity_evidence TEXT NOT NULL, bmh_name VARCHAR(253) NOT NULL, capi_machine_name VARCHAR(253) NOT NULL, kubernetes_node_name VARCHAR(253) NOT NULL, lifecycle_state VARCHAR(32) NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
+        "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, cluster_name VARCHAR(63) NOT NULL, spec TEXT NOT NULL, status VARCHAR(32) NOT NULL, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentcommand (id TEXT PRIMARY KEY, command_type VARCHAR(64) NOT NULL, payload TEXT NOT NULL, status VARCHAR(24) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, lease_token VARCHAR(32), lease_expires_at DATETIME, result TEXT, error TEXT, attempts INTEGER NOT NULL, max_attempts INTEGER NOT NULL, plan_hash VARCHAR(64), approved_plan_hash VARCHAR(64), approved_at DATETIME, approved_by_id INTEGER, started_at DATETIME, finished_at DATETIME, deployment_id TEXT, node_id TEXT, tenant_id TEXT, project_id TEXT, requested_by_id INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -43,7 +44,9 @@ async fn state() -> AppState {
         .bind(NODE).bind(hash).execute(&pool).await.unwrap();
     sqlx::query(r#"INSERT INTO core_agentmachine (id, tenant_id, project_id, agent_node_id, vendor, product_name, system_uuid, identity_material, identity_fingerprint, identity_status, identity_conflicts, hardware_inventory, inventory_source, inventory_revision, bmc_credential_ref, bmc_endpoint, bmc_trust_bundle_ref, bmc_tls_verify, bmc_identity_evidence, bmh_name, capi_machine_name, kubernetes_node_name, lifecycle_state, created_at, updated_at) VALUES ('machine-1', 'tenant', 'project', ?, 'Dell', 'R750', 'uuid-1', '{}', '', 'verified', '[]', '{"cpu": 2}', 'agent_report', 3, 'bmc-cred', 'https://bmc.example.com', '', 1, '{}', 'bmh-1', '', '', 'commissioned', datetime('now'), datetime('now'))"#)
         .bind(NODE).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, lease_token, lease_expires_at, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES (?, 'cluster.scale', '{}', 'running', 'key-1', ?, datetime('now', '+5 minutes'), 1, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
+    sqlx::query("INSERT INTO core_clusterdeployment (id, cluster_name, spec, status, tenant_id, project_id, target_node_id, requested_by_id, created_at, updated_at) VALUES ('66666666666666666666666666666666', 'lab', '{\"kubernetes\": {\"directory\": \"/var/lib/etcd/backups\", \"keep_count\": 8}}', 'succeeded', 'tenant', 'project', ?, 1, datetime('now'), datetime('now'))")
+        .bind(NODE).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, lease_token, lease_expires_at, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id, deployment_id) VALUES (?, 'cluster.scale', '{}', 'running', 'key-1', ?, datetime('now', '+5 minutes'), 1, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1, '66666666666666666666666666666666')")
          .bind(COMMAND).bind(LEASE).bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('44444444444444444444444444444444', 'cluster.observe', '{}', 'queued', 'key-2', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
         .bind(NODE).execute(&pool).await.unwrap();
@@ -136,17 +139,24 @@ async fn renews_lease_and_records_terminal_result() {
     let (status, body) = post(
         &state,
         &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
-        json!({"node_id": NODE, "outcome": "succeeded", "result": {"replicas": 3}}),
+        json!({"node_id": NODE, "outcome": "succeeded", "result": {"scale_performed": true}}),
         Some(LEASE),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["status"], "succeeded");
+    let backups: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_agentcommand WHERE command_type = 'cluster.kubernetes.backup.run'",
+    )
+    .fetch_one(state.identity_pool.as_ref().unwrap())
+    .await
+    .unwrap();
+    assert_eq!(backups, 1);
 
     let (status, body) = post(
         &state,
         &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
-        json!({"node_id": NODE, "outcome": "succeeded", "result": {"replicas": 3}}),
+        json!({"node_id": NODE, "outcome": "succeeded", "result": {"scale_performed": true}}),
         Some(LEASE),
     )
     .await;

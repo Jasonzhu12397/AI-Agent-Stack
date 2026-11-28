@@ -198,9 +198,9 @@ pub async fn command_result(
         "strftime('%Y-%m-%d %H:%M:%S', lease_expires_at)"
     };
     let select = format!(
-        "SELECT CAST(id AS TEXT) AS id, status, result, error, {lease_time} AS lease_text, \
-         CAST(deployment_id AS TEXT) AS deployment_id FROM core_agentcommand \
-         WHERE CAST(id AS TEXT) = ? AND CAST(node_id AS TEXT) = ? LIMIT 1"
+        "SELECT CAST(id AS TEXT) AS id, command_type, status, result, error, \
+         {lease_time} AS lease_text, CAST(deployment_id AS TEXT) AS deployment_id \
+         FROM core_agentcommand WHERE CAST(id AS TEXT) = ? AND CAST(node_id AS TEXT) = ? LIMIT 1"
     );
     let row = match sqlx::query(&select)
         .bind(&command_id)
@@ -287,7 +287,31 @@ pub async fn command_result(
     {
         return database_error(value.to_string());
     }
-    Json(json!({"id": command_id, "status": status_value, "deployment_id": row.try_get::<Option<String>, _>("deployment_id").ok().flatten()})).into_response()
+    let deployment_id: Option<String> = row.try_get("deployment_id").ok().flatten();
+    // A real change made every older snapshot describe a past state. Queue the
+    // follow-up backup, but never fail the result report if bookkeeping fails.
+    if status_value == "succeeded" {
+        let command_type: String = row.try_get("command_type").unwrap_or_default();
+        let proof = match command_type.as_str() {
+            "cluster.kubernetes.version.upgrade" => Some("upgrade_performed"),
+            "cluster.kubernetes.version.rollback" => Some("rolled_back"),
+            "cluster.scale" => Some("scale_performed"),
+            _ => None,
+        };
+        if let (Some(proof), Some(deployment_id)) = (proof, deployment_id.as_deref()) {
+            if result.get(proof).and_then(Value::as_bool) == Some(true) {
+                let _ = crate::backup_queue::queue_change_backup(
+                    pool,
+                    deployment_id,
+                    &command_id,
+                    &now,
+                )
+                .await;
+            }
+        }
+    }
+    Json(json!({"id": command_id, "status": status_value, "deployment_id": deployment_id}))
+        .into_response()
 }
 
 struct Node {

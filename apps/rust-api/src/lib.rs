@@ -7,6 +7,7 @@ pub mod archive_api;
 pub mod audit;
 pub mod audit_api;
 pub mod auth;
+pub mod backup_queue;
 pub mod billing_api;
 pub mod billing_ext_api;
 pub mod chat_api;
