@@ -32,6 +32,7 @@ async fn state() -> AppState {
         "CREATE TABLE core_project (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, slug VARCHAR(80) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_projectmembership (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id INTEGER NOT NULL, role VARCHAR(16) NOT NULL, created_at DATETIME NOT NULL)",
         "CREATE TABLE core_agentmachine (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, inventory_revision INTEGER NOT NULL, observed_at DATETIME)",
+        "CREATE TABLE core_agentnode (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, name VARCHAR(120) NOT NULL, node_type VARCHAR(32) NOT NULL, status VARCHAR(32) NOT NULL, last_seen_at DATETIME, created_at DATETIME, updated_at DATETIME)",
         "CREATE TABLE core_clusterdeployment (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, project_id TEXT NOT NULL, eph_node_id TEXT NOT NULL, target_node_id TEXT, requested_by_id INTEGER NOT NULL, cluster_name VARCHAR(120) NOT NULL, kubernetes_version VARCHAR(40) NOT NULL, spec TEXT NOT NULL, plan_result TEXT NOT NULL, preflight_result TEXT NOT NULL, status VARCHAR(32) NOT NULL, idempotency_key VARCHAR(128) NOT NULL, error TEXT NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL, started_at DATETIME, finished_at DATETIME)",
     ] {
         sqlx::query(statement).execute(&pool).await.unwrap();
@@ -44,6 +45,10 @@ async fn state() -> AppState {
         .bind(uuid::Uuid::new_v4().to_string()).bind(TENANT).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_project (id, tenant_id, name, slug, created_at) VALUES (?, ?, 'Console', 'console', datetime('now'))")
         .bind(PROJECT).bind(TENANT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_projectmembership (id, project_id, user_id, role, created_at) VALUES ('pm1', ?, 1, 'editor', datetime('now'))")
+        .bind(PROJECT).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_agentnode (id, tenant_id, project_id, name, node_type, status, last_seen_at, created_at, updated_at) VALUES (?, ?, ?, 'eph-1', 'eph_node', 'online', datetime('now'), datetime('now'), datetime('now'))")
+        .bind(NODE).bind(TENANT).bind(PROJECT).execute(&pool).await.unwrap();
     sqlx::query(r#"INSERT INTO core_clusterdeployment (id, tenant_id, project_id, eph_node_id, target_node_id, requested_by_id, cluster_name, kubernetes_version, spec, plan_result, preflight_result, status, idempotency_key, error, created_at, updated_at, started_at, finished_at) VALUES ('deploy-1', ?, ?, ?, NULL, 1, 'lab-cluster', 'v1.31.0', '{"cluster_name":"lab-cluster","network_spec_version":2}', '{"cloud_control":{"deployment_id":"deploy-1"}}', '{"ok":true}', 'provisioning', 'key-1', '{}', datetime('now'), datetime('now'), NULL, NULL)"#)
         .bind(TENANT).bind(PROJECT).bind(NODE).execute(&pool).await.unwrap();
     let data = session_token_hash(SESSION);
@@ -107,4 +112,44 @@ async fn reports_missing_network_evidence() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["status"], "missing");
+}
+
+#[tokio::test]
+async fn creates_a_cluster_deployment_with_an_idempotency_key() {
+    let state = state().await;
+    let uri = format!("/api/v1/tenants/{TENANT}/projects/{PROJECT}/cluster-deployments/");
+    let payload = serde_json::json!({
+        "eph_node_id": NODE,
+        "cluster_spec": {"cluster_name": "lab-cluster", "kubernetes_version": "1.30.2"},
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("x-session-token", SESSION)
+        .header("content-type", "application/json")
+        .header("idempotency-key", "cluster-plan-1")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let response = router(state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["status"], "preflight_queued");
+    assert_eq!(body["cluster_name"], "lab-cluster");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("x-session-token", SESSION)
+        .header("content-type", "application/json")
+        .header("idempotency-key", "cluster-plan-1")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let response = router(state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

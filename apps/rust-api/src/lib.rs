@@ -11,6 +11,7 @@ pub mod billing_ext_api;
 pub mod chat_api;
 pub mod cloud_vm_api;
 pub mod cluster_api;
+pub mod cluster_create_api;
 pub mod cluster_sync_api;
 pub mod config;
 pub mod context;

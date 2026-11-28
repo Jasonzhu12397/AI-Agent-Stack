@@ -1263,3 +1263,111 @@ pub async fn oauth_callback_post(
     let encoded_state = payload.get("state").and_then(Value::as_str).unwrap_or("");
     complete_oauth(&state, &headers, &tenant_id, code, encoded_state).await
 }
+
+/// Re-run discovery for an already published plugin and update its stored
+/// manifest when the remote surface changed.
+pub async fn discover_published_plugin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((tenant_id, plugin_id)): Path<(String, String)>,
+) -> Response {
+    let user_id = match authorize(&state, &headers, &tenant_id, true).await {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return database_error("Identity pool is not configured.".into());
+    };
+    let row = match sqlx::query(
+        "SELECT plugin_key, version, protocol, endpoint_url, manifest FROM core_agentplugindefinition \
+         WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ? LIMIT 1",
+    )
+    .bind(&plugin_id)
+    .bind(&tenant_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return studio_error(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found."),
+        Err(error) => return database_error(error.to_string()),
+    };
+    let endpoint_url: String = row.try_get("endpoint_url").unwrap_or_default();
+    let manifest_text: String = row.try_get("manifest").unwrap_or_default();
+    let manifest: Value = serde_json::from_str(&manifest_text).unwrap_or_else(|_| json!({}));
+    let plugin_type = manifest
+        .pointer("/studio/plugin_type")
+        .and_then(Value::as_str)
+        .unwrap_or("openapi");
+    let mut payload = json!({
+        "plugin_type": plugin_type,
+        "base_url": endpoint_url,
+    });
+    if let Some(document_url) = manifest
+        .pointer("/studio/document_url")
+        .and_then(Value::as_str)
+    {
+        if document_url != "inline://openapi.json" {
+            payload["document_url"] = Value::String(document_url.to_string());
+        }
+    }
+    let discovered = match discover(&payload).await {
+        Ok(discovered) => discovered,
+        Err(response) => return response,
+    };
+    let schema_fingerprint = fingerprint(&discovered.manifest);
+    let previous_fingerprint = fingerprint(&manifest);
+    if previous_fingerprint != schema_fingerprint {
+        let capabilities: Vec<String> = discovered
+            .capabilities
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect();
+        let now = if state
+            .config
+            .database_url
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("postgres")
+        {
+            "NOW()"
+        } else {
+            "datetime('now')"
+        };
+        let update = format!(
+            "UPDATE core_agentplugindefinition SET capabilities = ?, manifest = ?, updated_at = {now} \
+             WHERE CAST(id AS TEXT) = ? AND CAST(tenant_id AS TEXT) = ?"
+        );
+        if let Err(error) = sqlx::query(&update)
+            .bind(serde_json::to_string(&capabilities).unwrap_or_else(|_| "[]".into()))
+            .bind(serde_json::to_string(&discovered.manifest).unwrap_or_default())
+            .bind(&plugin_id)
+            .bind(&tenant_id)
+            .execute(pool)
+            .await
+        {
+            return database_error(error.to_string());
+        }
+    }
+    let plugin_key: String = row.try_get("plugin_key").unwrap_or_default();
+    let version: String = row.try_get("version").unwrap_or_default();
+    Json(json!({
+        "definition": {
+            "id": plugin_id,
+            "plugin_key": plugin_key,
+            "version": version,
+            "protocol": discovered.protocol,
+            "endpoint_url": discovered.endpoint_url,
+            "capabilities": discovered.capabilities,
+        },
+        "schema_fingerprint": schema_fingerprint,
+        "changed": previous_fingerprint != schema_fingerprint,
+        "connection": discovered.connection,
+        "updated_by": user_id,
+    }))
+    .into_response()
+}

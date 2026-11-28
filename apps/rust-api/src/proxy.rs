@@ -152,7 +152,8 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/projects/{project_id}/cluster-deployments/",
-                axum::routing::get(crate::cluster_api::list_deployments),
+                axum::routing::get(crate::cluster_api::list_deployments)
+                    .post(crate::cluster_create_api::create_deployment),
             )
             .route(
                 "/api/v1/metal3/lab-workflow/",
@@ -481,6 +482,10 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/studio/publish/",
                 axum::routing::post(crate::plugin_studio_api::studio_publish),
+            )
+            .route(
+                "/api/v1/tenants/{tenant_id}/agent-plugins/{plugin_id}/discover/",
+                axum::routing::post(crate::plugin_studio_api::discover_published_plugin),
             )
             .route(
                 "/api/v1/tenants/{tenant_id}/agent-plugins/studio/oauth/authorize/",
