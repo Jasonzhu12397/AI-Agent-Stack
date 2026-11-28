@@ -1102,9 +1102,49 @@ pub async fn create_node_command(
             "This command requires a Target Cluster Agent.",
         );
     }
-    let command_payload = payload.get("payload").cloned().unwrap_or_else(|| json!({}));
+    let mut command_payload = payload.get("payload").cloned().unwrap_or_else(|| json!({}));
     if let Some(message) = validate_command_payload(&command_payload) {
         return error(StatusCode::BAD_REQUEST, message);
+    }
+    let deployment = if node_type == "target_cluster" && !cluster_name.is_empty() {
+        sqlx::query(
+            "SELECT CAST(id AS TEXT) AS id, CAST(spec AS TEXT) AS spec FROM core_clusterdeployment \
+             WHERE CAST(project_id AS TEXT) = ? AND cluster_name = ? AND status = 'succeeded' \
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(&project_id)
+        .bind(&cluster_name)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    // The upgrade snapshot must be written under the directory retention prunes.
+    if command_type == "cluster.kubernetes.version.upgrade"
+        && command_payload
+            .get("snapshot_directory")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
+        if let Some(directory) = deployment
+            .as_ref()
+            .and_then(|row| row.try_get::<String, _>("spec").ok())
+            .and_then(|spec| serde_json::from_str::<Value>(&spec).ok())
+            .and_then(|spec| {
+                spec.get("kubernetes")
+                    .and_then(|kubernetes| kubernetes.get("directory"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .map(str::to_string)
+            })
+            .filter(|directory| !directory.is_empty())
+        {
+            command_payload["snapshot_directory"] = json!(directory);
+        }
     }
     let command_payload =
         match crate::command_contracts::validate(&command_type, &command_payload, &cluster_name) {
@@ -1140,21 +1180,9 @@ pub async fn create_node_command(
     } else {
         "queued"
     };
-    let deployment_id: Option<String> = if node_type == "target_cluster" && !cluster_name.is_empty()
-    {
-        sqlx::query_scalar::<_, String>(
-            "SELECT CAST(id AS TEXT) FROM core_clusterdeployment WHERE CAST(project_id AS TEXT) = ? \
-             AND cluster_name = ? AND status = 'succeeded' ORDER BY updated_at DESC LIMIT 1",
-        )
-        .bind(&project_id)
-        .bind(&cluster_name)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-    } else {
-        None
-    };
+    let deployment_id: Option<String> = deployment
+        .as_ref()
+        .and_then(|row| row.try_get::<String, _>("id").ok());
     let existing = sqlx::query(
         "SELECT CAST(id AS TEXT) AS id, CAST(node_id AS TEXT) AS node_id, command_type, \
          CAST(payload AS TEXT) AS payload_text FROM core_agentcommand \
