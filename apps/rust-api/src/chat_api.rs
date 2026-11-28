@@ -644,6 +644,8 @@ struct BudgetScope<'a> {
     tenant_id: &'a str,
     scope_ref: &'a str,
     idempotency_key: &'a str,
+    exceeded_status: StatusCode,
+    include_period: bool,
 }
 
 async fn complete_model(
@@ -715,11 +717,30 @@ async fn complete_model(
         {
             Ok(reservation) => Some(reservation),
             Err(error) if error.starts_with("TENANT_TOKEN_BUDGET_EXCEEDED") => {
-                return Err(legacy_error(
-                    "Tenant token budget would be exceeded.",
-                    StatusCode::PAYMENT_REQUIRED,
-                    "TENANT_TOKEN_BUDGET_EXCEEDED",
-                ))
+                let period = error
+                    .split_once(':')
+                    .map(|(_, detail)| detail.trim())
+                    .and_then(|detail| detail.split_whitespace().next())
+                    .filter(|period| matches!(*period, "daily" | "monthly"));
+                let message = period.map_or_else(
+                    || "Tenant token budget would be exceeded.".to_string(),
+                    |period| format!("Tenant {period} token budget would be exceeded."),
+                );
+                return Err((
+                    budget.exceeded_status,
+                    Json(json!({
+                        "error": {
+                            "code": "TENANT_TOKEN_BUDGET_EXCEEDED",
+                            "message": message,
+                            "details": if budget.include_period {
+                                period.map_or(json!({}), |period| json!({"period": period}))
+                            } else {
+                                json!({})
+                            }
+                        }
+                    })),
+                )
+                    .into_response());
             }
             Err(_) => {
                 return Err(legacy_error(
@@ -1024,6 +1045,8 @@ pub async fn create_message(
             tenant_id: &thread.tenant_id,
             scope_ref: &chat_scope,
             idempotency_key: &chat_scope,
+            exceeded_status: StatusCode::PAYMENT_REQUIRED,
+            include_period: false,
         },
     )
     .await
@@ -1771,6 +1794,8 @@ pub async fn test_model(
             tenant_id: &tenant_id,
             scope_ref: &model_test_scope,
             idempotency_key: &model_test_scope,
+            exceeded_status: StatusCode::TOO_MANY_REQUESTS,
+            include_period: true,
         },
     )
     .await
@@ -2344,6 +2369,8 @@ pub(crate) async fn scheduled_run(
                                 tenant_id,
                                 scope_ref: &scheduled_scope,
                                 idempotency_key: &scheduled_scope,
+                                exceeded_status: StatusCode::PAYMENT_REQUIRED,
+                                include_period: false,
                             },
                         )
                         .await
