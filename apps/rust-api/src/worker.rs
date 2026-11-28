@@ -29,8 +29,23 @@ pub fn spawn(state: AppState) {
             .unwrap_or_else(|_| format!("rust-worker-{}", std::process::id()));
         tracing::info!(%worker_id, poll_seconds = poll, "rust task worker started");
         let dispatch_interval = Duration::from_secs(30);
+        let backup_interval = Duration::from_secs(60);
         let mut last_dispatch = std::time::Instant::now() - dispatch_interval;
+        let mut last_backup_dispatch = std::time::Instant::now() - backup_interval;
         loop {
+            if last_backup_dispatch.elapsed() >= backup_interval {
+                last_backup_dispatch = std::time::Instant::now();
+                if let Some(pool) = state.identity_pool.as_ref() {
+                    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                    match crate::backup_queue::dispatch_hourly_backups(pool, &now).await {
+                        Ok(queued) if queued > 0 => {
+                            tracing::info!(queued, "queued hourly etcd backups")
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::error!(%error, "hourly etcd backup dispatch failed"),
+                    }
+                }
+            }
             if last_dispatch.elapsed() >= dispatch_interval {
                 last_dispatch = std::time::Instant::now();
                 match crate::scheduled_api::dispatch_due_jobs(&state, 3).await {

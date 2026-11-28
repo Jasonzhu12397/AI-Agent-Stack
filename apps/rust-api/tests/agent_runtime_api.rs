@@ -153,6 +153,28 @@ async fn renews_lease_and_records_terminal_result() {
     .unwrap();
     assert_eq!(backups, 1);
 
+    let pool = state.identity_pool.as_ref().unwrap();
+    let now = "2026-11-28 10:00:00";
+    assert_eq!(
+        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, now)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        ai_agent_stack_api::backup_queue::dispatch_hourly_backups(pool, now)
+            .await
+            .unwrap(),
+        0
+    );
+    let backups: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM core_agentcommand WHERE command_type = 'cluster.kubernetes.backup.run'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(backups, 2);
+
     let (status, body) = post(
         &state,
         &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
