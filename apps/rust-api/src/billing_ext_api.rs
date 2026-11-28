@@ -191,13 +191,36 @@ pub async fn refund_order(
             "No native payment provider is configured for this channel.",
         );
     }
-    let reference = format!("refund-{order_id}-{}", uuid::Uuid::new_v4().simple());
+    // A replay of the same refund must not deduct the budget twice: the
+    // reference is derived from the order and the total refunded after this
+    // request, so retrying the same refund resolves to the same reclaim row.
     let after = refunded + cents;
+    let reference = format!("refund-{order_id}-{after}");
     let target = if after >= amount {
         "refunded"
     } else {
         "partial_refunded"
     };
+    let replayed = sqlx::query_scalar::<_, i64>(
+        "SELECT 1 FROM core_entitlementreclaim WHERE refund_reference = ? LIMIT 1",
+    )
+    .bind(&reference)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some();
+    if replayed {
+        return Json(json!({
+            "id": order_id,
+            "tenant": tenant_id,
+            "status": target,
+            "amount_cents": amount,
+            "refunded_cents": after,
+            "reclaim": "existing",
+        }))
+        .into_response();
+    }
     let now = now_expr(&state);
     let update = format!(
         "UPDATE core_order SET refunded_cents = ?, status = ?, updated_at = {now} \
@@ -228,14 +251,19 @@ pub async fn refund_order(
         )),
         _ => None,
     };
-    let already: i64 = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(tokens), 0) FROM core_entitlementreclaim \
-         WHERE grant_id IS NOT NULL AND refund_reference LIKE ?",
-    )
-    .bind(format!("refund-{order_id}-%"))
-    .fetch_one(pool)
-    .await
-    .unwrap_or_default();
+    // Already reclaimed tokens are summed per grant, so a partial refund
+    // series can never reclaim more than the grant ever issued.
+    let already: i64 = match grant.as_ref() {
+        Some((grant_id, _)) => sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(SUM(tokens), 0) FROM core_entitlementreclaim \
+             WHERE CAST(grant_id AS TEXT) = ?",
+        )
+        .bind(grant_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default(),
+        None => 0,
+    };
     let tokens = match grant.as_ref() {
         Some((_, grant_tokens)) if amount > 0 => {
             let raw = grant_tokens.saturating_mul(cents) / amount;
@@ -261,7 +289,7 @@ pub async fn refund_order(
           monthly_limit_before, monthly_limit_after, reason, created_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {now})"
     );
-    let _ = sqlx::query(&insert)
+    let inserted = match sqlx::query(&insert)
         .bind(uuid::Uuid::new_v4().simple().to_string())
         .bind(&tenant_id)
         .bind(grant.as_ref().map(|(id, _)| id.clone()))
@@ -273,7 +301,27 @@ pub async fn refund_order(
         .bind(limit_after)
         .bind(&reason)
         .execute(pool)
-        .await;
+        .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            // A concurrent replay already wrote this reclaim row; its ledger
+            // entry is authoritative and the budget must not move again.
+            tracing::warn!(%error, %order_id, "refund reclaim insert failed");
+            false
+        }
+    };
+    if !inserted {
+        return Json(json!({
+            "id": order_id,
+            "tenant": tenant_id,
+            "status": target,
+            "amount_cents": amount,
+            "refunded_cents": after,
+            "reclaim": "existing",
+        }))
+        .into_response();
+    }
     let budget_update = format!(
         "UPDATE core_tenanttokenbudget SET monthly_limit = ?, updated_at = {now} \
          WHERE CAST(tenant_id AS TEXT) = ?"

@@ -1084,6 +1084,24 @@ pub async fn settle_subscriptions(
             Ok(None) => continue,
             Err(error) => return database_error(error),
         };
+        let previous = sqlx::query(
+            "SELECT COALESCE(daily_limit, 0) AS daily_limit, \
+             COALESCE(monthly_limit, 0) AS monthly_limit FROM core_tenanttokenbudget \
+             WHERE CAST(tenant_id AS TEXT) = ? LIMIT 1",
+        )
+        .bind(&tenant_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        let previous_daily = previous
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("daily_limit").ok())
+            .unwrap_or(0);
+        let previous_monthly = previous
+            .as_ref()
+            .and_then(|row| row.try_get::<i64, _>("monthly_limit").ok())
+            .unwrap_or(0);
         if let Err(response) = set_budget_limits(
             &state,
             &tenant_id,
@@ -1107,7 +1125,13 @@ pub async fn settle_subscriptions(
         } else {
             "billing.subscription.expired"
         };
-        let metadata = json!({"plan_code": plan.code});
+        let metadata = json!({
+            "plan_code": plan.code,
+            "previous_daily_limit": previous_daily,
+            "previous_monthly_limit": previous_monthly,
+            "daily_limit": plan.quota_daily_expired,
+            "monthly_limit": plan.quota_monthly_expired,
+        });
         if let Err(response) = append_billing_audit(
             &state,
             &tenant_id,
