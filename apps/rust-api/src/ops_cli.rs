@@ -94,9 +94,11 @@ fn postgres(state: &AppState) -> bool {
 
 fn created_column(state: &AppState, alias: &str) -> String {
     if postgres(state) {
-        format!("CAST({alias}.created_at AS TEXT)")
+        format!(
+            "to_char({alias}.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+        )
     } else {
-        format!("{alias}.created_at")
+        format!("strftime('%Y-%m-%d %H:%M:%S', {alias}.created_at)")
     }
 }
 
