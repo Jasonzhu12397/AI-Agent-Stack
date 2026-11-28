@@ -46,7 +46,7 @@ async fn state() -> AppState {
         .bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_clusterdeployment (id, cluster_name, spec, status, tenant_id, project_id, target_node_id, requested_by_id, created_at, updated_at) VALUES ('66666666666666666666666666666666', 'lab', '{\"kubernetes\": {\"directory\": \"/var/lib/etcd/backups\", \"keep_count\": 8}}', 'succeeded', 'tenant', 'project', ?, 1, datetime('now'), datetime('now'))")
         .bind(NODE).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, lease_token, lease_expires_at, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id, deployment_id) VALUES (?, 'cluster.scale', '{}', 'running', 'key-1', ?, datetime('now', '+5 minutes'), 1, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1, '66666666666666666666666666666666')")
+    sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, lease_token, lease_expires_at, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id, deployment_id) VALUES (?, 'cluster.scale', '{\"target_cluster_name\": \"lab\", \"desired_workers\": 3, \"execution_mode\": \"execute\", \"machine_deployment\": \"md-0\"}', 'running', 'key-1', ?, datetime('now', '+5 minutes'), 1, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1, '66666666666666666666666666666666')")
          .bind(COMMAND).bind(LEASE).bind(NODE).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO core_agentcommand (id, command_type, payload, status, idempotency_key, attempts, max_attempts, created_at, updated_at, node_id, tenant_id, project_id, requested_by_id) VALUES ('44444444444444444444444444444444', 'cluster.observe', '{}', 'queued', 'key-2', 0, 3, datetime('now'), datetime('now'), ?, 'tenant', 'project', 1)")
         .bind(NODE).execute(&pool).await.unwrap();
@@ -143,6 +143,16 @@ async fn renews_lease_and_records_terminal_result() {
         Some(LEASE),
     )
     .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"]["code"], "COMMAND_RESULT_INVALID");
+
+    let (status, body) = post(
+        &state,
+        &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
+        json!({"node_id": NODE, "outcome": "succeeded", "result": {"cluster_name": "lab", "desired_workers": 3, "machine_deployment": "md-0", "scale_simulated": false, "scale_performed": true, "side_effects": true, "controller_status": {}, "controller_replicas": 3}}),
+        Some(LEASE),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["status"], "succeeded");
     let backups: i64 = sqlx::query_scalar(
@@ -178,7 +188,7 @@ async fn renews_lease_and_records_terminal_result() {
     let (status, body) = post(
         &state,
         &format!("/api/v1/agent-runtime/commands/{COMMAND}/result/"),
-        json!({"node_id": NODE, "outcome": "succeeded", "result": {"scale_performed": true}}),
+        json!({"node_id": NODE, "outcome": "succeeded", "result": {"cluster_name": "lab", "desired_workers": 3, "machine_deployment": "md-0", "scale_simulated": false, "scale_performed": true, "side_effects": true, "controller_status": {}, "controller_replicas": 3}}),
         Some(LEASE),
     )
     .await;

@@ -540,6 +540,521 @@ pub fn validate(
     }
 }
 
+fn bool_is(result: &Value, key: &str, expected: bool) -> bool {
+    result.get(key).and_then(Value::as_bool) == Some(expected)
+}
+
+fn str_field<'a>(result: &'a Value, key: &str) -> Option<&'a str> {
+    result.get(key).and_then(Value::as_str)
+}
+
+fn matches_field(result: &Value, payload: &Value, key: &str, payload_key: &str) -> bool {
+    result.get(key) == payload.get(payload_key)
+}
+
+fn steps_are(result: &Value, names: &[&str], statuses: Option<(&str, &str)>) -> bool {
+    let Some(steps) = result.get("upgrade_steps").or(result.get("steps")) else {
+        return false;
+    };
+    let Value::Array(steps) = steps else {
+        return false;
+    };
+    if steps.len() != names.len() {
+        return false;
+    }
+    steps.iter().enumerate().all(|(index, step)| {
+        step.get("sequence").and_then(Value::as_i64) == Some(index as i64 + 1)
+            && step.get("name").and_then(Value::as_str) == Some(names[index])
+            && statuses.is_none_or(|(allowed_a, allowed_b)| {
+                matches!(
+                    step.get("status").and_then(Value::as_str),
+                    Some(status) if status == allowed_a || status == allowed_b
+                )
+            })
+    })
+}
+
+fn validate_executed_upgrade(result: &Value) -> Option<&'static str> {
+    if !matches!(str_field(result, "execution_mode"), Some("execute"))
+        || !bool_is(result, "approval_required", true)
+        || !bool_is(result, "upgrade_simulated", false)
+        || !bool_is(result, "requires_manual_execution", false)
+        || !bool_is(result, "resume_supported", false)
+        || !bool_is(result, "side_effects", true)
+    {
+        return Some("Kubernetes upgrade result violates the execution safety contract.");
+    }
+    if !bool_is(result, "upgrade_performed", true) {
+        if bool_is(result, "upgrade_performed", false) && bool_is(result, "already_at_target", true)
+        {
+            if result
+                .get("performed_steps")
+                .and_then(Value::as_array)
+                .is_some_and(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|step| step.starts_with("control_plane") || step.starts_with("worker"))
+                })
+            {
+                return Some("A retry that changed nothing cannot report upgraded nodes.");
+            }
+        } else {
+            return Some("Kubernetes upgrade result violates the execution safety contract.");
+        }
+    }
+    let names = ["preflight", "control_plane", "workers", "postflight"];
+    let Some(steps) = result.get("upgrade_steps").and_then(Value::as_array) else {
+        return Some("Kubernetes upgrade execution must report the four ordered stages.");
+    };
+    if steps.len() != names.len()
+        || steps.iter().enumerate().any(|(index, step)| {
+            step.get("sequence").and_then(Value::as_i64) != Some(index as i64 + 1)
+                || step.get("name").and_then(Value::as_str) != Some(names[index])
+                || !matches!(
+                    step.get("status").and_then(Value::as_str),
+                    Some("succeeded" | "skipped")
+                )
+        })
+    {
+        return Some("Kubernetes upgrade stages must all have run to completion.");
+    }
+    let Some(preflight) = result.get("preflight").filter(|value| value.is_object()) else {
+        return Some("A completed Kubernetes upgrade must report its preflight evidence.");
+    };
+    if preflight
+        .get("checks")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Some("A completed Kubernetes upgrade must list the preflight checks it ran.");
+    }
+    if preflight.get("blocked").and_then(Value::as_bool) != Some(false) {
+        return Some("A Kubernetes upgrade cannot complete while its preflight is blocked.");
+    }
+    None
+}
+
+fn validate_kubernetes_rollback_result(payload: &Value, result: &Value) -> Option<&'static str> {
+    if !matches_field(result, payload, "cluster_name", "cluster_name")
+        || !matches_field(result, payload, "snapshot_path", "snapshot_path")
+        || !matches_field(result, payload, "execution_mode", "execution_mode")
+    {
+        return Some("Kubernetes rollback result does not match the approved command.");
+    }
+    let names = [
+        "preflight",
+        "etcd_restore",
+        "data_swap",
+        "kubelet_restart",
+        "postflight",
+    ];
+    if !steps_are(result, &names, None) {
+        return Some("A Kubernetes rollback must report the five ordered stages.");
+    }
+    let simulation = str_field(payload, "execution_mode") == Some("simulation");
+    if simulation {
+        if result
+            .get("steps")
+            .and_then(Value::as_array)
+            .is_some_and(|steps| {
+                steps
+                    .iter()
+                    .any(|step| step.get("status").and_then(Value::as_str) != Some("not_started"))
+            })
+        {
+            return Some("A simulated rollback must not claim any stage ran.");
+        }
+        if !bool_is(result, "approval_required", true)
+            || !bool_is(result, "rollback_simulated", true)
+            || !bool_is(result, "rolled_back", false)
+            || !result
+                .get("performed_steps")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        {
+            return Some("A simulated rollback must not claim the cluster was restored.");
+        }
+        return None;
+    }
+    if !bool_is(result, "approval_required", true)
+        || !bool_is(result, "rollback_simulated", false)
+        || !bool_is(result, "rolled_back", true)
+    {
+        return Some("An executed rollback must report that the cluster was restored.");
+    }
+    let performed = result.get("performed_steps").and_then(Value::as_array);
+    if performed.is_none_or(|steps| {
+        ["etcd_restore", "data_swap", "kubelet_restart", "postflight"]
+            .iter()
+            .any(|required| !steps.iter().any(|item| item.as_str() == Some(required)))
+    }) {
+        return Some("An executed rollback must report every stage it performed.");
+    }
+    if result
+        .get("steps")
+        .and_then(Value::as_array)
+        .is_none_or(|steps| {
+            steps.iter().any(|step| {
+                !matches!(
+                    step.get("status").and_then(Value::as_str),
+                    Some("succeeded" | "skipped")
+                )
+            })
+        })
+    {
+        return Some("Kubernetes rollback stages must all have run to completion.");
+    }
+    let Some(preflight) = result.get("preflight").filter(|value| value.is_object()) else {
+        return Some("A completed rollback must report its preflight evidence.");
+    };
+    if preflight
+        .get("checks")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Some("A completed rollback must list the preflight checks it ran.");
+    }
+    if preflight.get("blocked").and_then(Value::as_bool) != Some(false) {
+        return Some("A rollback cannot complete while its preflight is blocked.");
+    }
+    if !str_field(result, "previous_member_dir")
+        .is_some_and(|path| path.starts_with("/var/lib/etcd/member.pre-rollback-"))
+    {
+        return Some("A rollback must keep the previous etcd data directory on disk.");
+    }
+    None
+}
+
+fn validate_network_result(
+    command_type: &str,
+    payload: &Value,
+    result: &Value,
+) -> Option<&'static str> {
+    let rollback = command_type == "target.network.rollback";
+    if !matches_field(result, payload, "cluster_name", "target_cluster_name")
+        || !matches_field(result, payload, "plugin", "plugin")
+        || !matches!(
+            result.get("namespace").and_then(Value::as_str),
+            Some(namespace)
+                if Some(namespace) == payload.get("target_namespace").and_then(Value::as_str).or(Some("default"))
+        )
+    {
+        return Some("Network plugin result does not match the approved command.");
+    }
+    let mode = payload.get("execution_mode").and_then(Value::as_str);
+    if rollback {
+        let result_revision = result.get("revision").and_then(Value::as_str);
+        if result_revision.is_none_or(str::is_empty) {
+            return Some("A network rollback must name the revision it replayed.");
+        }
+        if payload
+            .get("revision")
+            .and_then(Value::as_str)
+            .is_some_and(|revision| Some(revision) != result_revision)
+        {
+            return Some("A network rollback replayed a different revision.");
+        }
+        if mode == Some("execute") {
+            if !bool_is(result, "rollback_simulated", false)
+                || !bool_is(result, "rollback_performed", true)
+                || !bool_is(result, "side_effects", true)
+            {
+                return Some("An executed rollback must report the replay and its side effects.");
+            }
+            let restored = result.get("restored_objects").and_then(Value::as_array);
+            let removed = result.get("removed_objects").and_then(Value::as_array);
+            if restored.is_none() || removed.is_none() {
+                return Some("A network rollback must report restored and removed objects.");
+            }
+            if restored.is_some_and(Vec::is_empty) && removed.is_some_and(Vec::is_empty) {
+                return Some("A network rollback must replay at least one object.");
+            }
+            return None;
+        }
+        if !bool_is(result, "approval_required", true)
+            || !bool_is(result, "rollback_simulated", true)
+            || !bool_is(result, "rollback_performed", false)
+            || !bool_is(result, "side_effects", false)
+        {
+            return Some("A rollback plan must be simulation-only until approved.");
+        }
+        return None;
+    }
+    if !matches_field(result, payload, "target_version", "target_version") {
+        return Some("The upgrade result changed the approved target version.");
+    }
+    if mode == Some("execute") {
+        if !bool_is(result, "upgrade_simulated", false)
+            || !bool_is(result, "upgrade_performed", true)
+            || !bool_is(result, "side_effects", true)
+        {
+            return Some("An executed upgrade must report the applied bundle and side effects.");
+        }
+        if !str_field(result, "revision").is_some_and(|value| !value.is_empty()) {
+            return Some("An executed upgrade must report its captured revision.");
+        }
+        if !result
+            .get("ready_workloads")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            return Some("An executed upgrade must report ready workload objects.");
+        }
+        return None;
+    }
+    if !bool_is(result, "approval_required", true)
+        || !bool_is(result, "upgrade_simulated", true)
+        || !bool_is(result, "upgrade_performed", false)
+        || !bool_is(result, "side_effects", false)
+    {
+        return Some("An upgrade plan must be simulation-only until approved.");
+    }
+    None
+}
+
+fn validate_network_revisions_result(payload: &Value, result: &Value) -> Option<&'static str> {
+    if !matches_field(result, payload, "cluster_name", "target_cluster_name")
+        || !matches_field(result, payload, "plugin", "plugin")
+        || !matches!(
+            result.get("namespace").and_then(Value::as_str),
+            Some(namespace)
+                if Some(namespace) == payload.get("target_namespace").and_then(Value::as_str).or(Some("default"))
+        )
+    {
+        return Some("Network revision list does not match the requested scope.");
+    }
+    if !bool_is(result, "approval_required", false) || !bool_is(result, "side_effects", false) {
+        return Some("A revision list is a read-only observation.");
+    }
+    let Some(revisions) = result.get("revisions").and_then(Value::as_array) else {
+        return Some("A revision list must report a revisions array.");
+    };
+    if result
+        .get("latest_revision")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Some("The latest revision must be a string or null.");
+    }
+    let names: Vec<&str> = revisions
+        .iter()
+        .map(|revision| {
+            revision
+                .get("revision")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        })
+        .collect();
+    if revisions.iter().any(|revision| {
+        revision
+            .get("revision")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+            || revision
+                .get("config_map")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            || revision
+                .get("object_count")
+                .and_then(Value::as_i64)
+                .is_none_or(|count| count < 1)
+    }) {
+        return Some("Every revision entry must name its revision and ConfigMap with a positive object count.");
+    }
+    if let Some(latest) = result.get("latest_revision").and_then(Value::as_str) {
+        if !revisions.is_empty() && !names.contains(&latest) {
+            return Some("The latest revision must appear in the revisions array.");
+        }
+    }
+    None
+}
+
+fn validate_scale_result(payload: &Value, result: &Value) -> Option<&'static str> {
+    if !matches_field(result, payload, "cluster_name", "target_cluster_name")
+        || !matches_field(result, payload, "desired_workers", "desired_workers")
+    {
+        return Some("Cluster scale result does not match the approved command.");
+    }
+    let Some(machine_deployment) = result
+        .get("machine_deployment")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return Some("Cluster scale result must name the MachineDeployment it scaled.");
+    };
+    if payload
+        .get("machine_deployment")
+        .and_then(Value::as_str)
+        .is_some_and(|expected| expected != machine_deployment)
+    {
+        return Some("Cluster scale result does not match the approved MachineDeployment.");
+    }
+    if payload.get("execution_mode").and_then(Value::as_str) == Some("execute") {
+        if !bool_is(result, "scale_simulated", false) {
+            return Some("An executed scale cannot report a simulation.");
+        }
+        if bool_is(result, "scale_performed", true) {
+            if !bool_is(result, "side_effects", true) {
+                return Some("An executed scale must report side effects.");
+            }
+            if !result
+                .get("controller_status")
+                .is_some_and(Value::is_object)
+            {
+                return Some("An executed scale must report controller status.");
+            }
+            if result.get("controller_replicas").and_then(Value::as_i64)
+                != payload.get("desired_workers").and_then(Value::as_i64)
+            {
+                return Some("The controller did not reach the requested replica count.");
+            }
+        } else if !bool_is(result, "side_effects", false) {
+            return Some("A no-op scale cannot report side effects.");
+        }
+        return None;
+    }
+    if !bool_is(result, "approval_required", true)
+        || !bool_is(result, "scale_simulated", true)
+        || !bool_is(result, "scale_performed", false)
+        || !bool_is(result, "side_effects", false)
+    {
+        return Some("A scale plan must be simulation-only until approved.");
+    }
+    if !bool_is(result, "bmh_capacity_sufficient", true) {
+        return Some("A scale plan must show sufficient BareMetalHost capacity.");
+    }
+    None
+}
+
+fn validate_repair_result(payload: &Value, result: &Value) -> Option<&'static str> {
+    if !matches_field(result, payload, "cluster_name", "target_cluster_name")
+        || !matches!(
+            result.get("namespace").and_then(Value::as_str),
+            Some(namespace)
+                if Some(namespace) == payload.get("target_namespace").and_then(Value::as_str).or(Some("default"))
+        )
+    {
+        return Some("Cluster repair result does not match the approved command.");
+    }
+    if !str_field(result, "machine_deployment").is_some_and(|value| !value.is_empty()) {
+        return Some("Cluster repair result must name the MachineDeployment it inspected.");
+    }
+    let Some(unhealthy) = result.get("unhealthy_machines").and_then(Value::as_array) else {
+        return Some("Cluster repair result must list unhealthy Machine names.");
+    };
+    if unhealthy.iter().any(|name| name.as_str().is_none()) {
+        return Some("Cluster repair result must list unhealthy Machine names.");
+    }
+    let selected = result.get("selected_machine");
+    if unhealthy.is_empty() {
+        if !selected.is_none() && !selected.is_some_and(Value::is_null) {
+            return Some("A repair with no unhealthy Machine cannot select one.");
+        }
+    } else if !selected
+        .and_then(Value::as_str)
+        .is_some_and(|name| unhealthy.iter().any(|value| value.as_str() == Some(name)))
+    {
+        return Some("A repair with unhealthy Machines must select one of them.");
+    }
+    if payload.get("execution_mode").and_then(Value::as_str) == Some("execute") {
+        if !bool_is(result, "repair_simulated", false) {
+            return Some("An executed repair cannot report a simulation.");
+        }
+        if bool_is(result, "repair_performed", true) {
+            if !bool_is(result, "side_effects", true) {
+                return Some("An executed repair must report side effects.");
+            }
+            if result
+                .get("deleted_machines")
+                .and_then(Value::as_array)
+                .is_none_or(|deleted| {
+                    !(deleted.len() == 1
+                        && selected
+                            .and_then(Value::as_str)
+                            .is_some_and(|name| deleted[0].as_str() == Some(name)))
+                })
+            {
+                return Some("An executed repair must report the selected Machine as deleted.");
+            }
+        } else if !bool_is(result, "side_effects", false) {
+            return Some("A no-op repair cannot report side effects.");
+        }
+        return None;
+    }
+    if !bool_is(result, "approval_required", true)
+        || !bool_is(result, "repair_simulated", true)
+        || !bool_is(result, "repair_performed", false)
+        || !bool_is(result, "side_effects", false)
+    {
+        return Some("A repair plan must be simulation-only until approved.");
+    }
+    None
+}
+
+/// Check the result an Agent reports for a contract command. `None` means the
+/// result is consistent with the approved payload; `Some(message)` is a 409.
+pub fn validate_result(
+    command_type: &str,
+    payload: &Value,
+    result: &Value,
+) -> Option<&'static str> {
+    match command_type {
+        "cluster.kubernetes.version.upgrade" => {
+            if !matches_field(result, payload, "cluster_name", "cluster_name")
+                || !matches_field(result, payload, "current_version", "current_version")
+                || !matches_field(result, payload, "target_version", "target_version")
+            {
+                return Some("Kubernetes upgrade result does not match the approved command.");
+            }
+            if payload.get("execution_mode").and_then(Value::as_str) == Some("execute") {
+                return validate_executed_upgrade(result);
+            }
+            if !bool_is(result, "approval_required", true)
+                || !bool_is(result, "upgrade_simulated", true)
+                || !bool_is(result, "upgrade_performed", false)
+                || !bool_is(result, "side_effects", false)
+                || !bool_is(result, "requires_manual_execution", true)
+                || !bool_is(result, "resume_supported", false)
+            {
+                return Some(
+                    "Kubernetes upgrade result violates the simulation-only safety contract.",
+                );
+            }
+            let Some(steps) = result.get("upgrade_steps").and_then(Value::as_array) else {
+                return Some(
+                    "Kubernetes upgrade plan must contain the four ordered, unexecuted stages.",
+                );
+            };
+            let expected = [
+                ("preflight", "not_run"),
+                ("control_plane", "not_started"),
+                ("workers", "not_started"),
+                ("postflight", "not_started"),
+            ];
+            if steps.len() != expected.len()
+                || steps.iter().enumerate().any(|(index, step)| {
+                    step.get("sequence").and_then(Value::as_i64) != Some(index as i64 + 1)
+                        || step.get("name").and_then(Value::as_str) != Some(expected[index].0)
+                        || step.get("status").and_then(Value::as_str) != Some(expected[index].1)
+                })
+            {
+                return Some("Kubernetes upgrade plan stages must remain ordered and unexecuted.");
+            }
+            None
+        }
+        "cluster.kubernetes.version.rollback" => {
+            validate_kubernetes_rollback_result(payload, result)
+        }
+        "cluster.scale" => validate_scale_result(payload, result),
+        "cluster.worker.repair" => validate_repair_result(payload, result),
+        "target.network.upgrade" | "target.network.rollback" => {
+            validate_network_result(command_type, payload, result)
+        }
+        "target.network.revisions" => validate_network_revisions_result(payload, result),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +1185,77 @@ mod tests {
             "revision": "../etc"
         });
         assert!(validate("target.network.rollback", &bad_revision, "prod-a").is_err());
+    }
+
+    #[test]
+    fn upgrade_result_must_prove_the_simulated_stages() {
+        let payload = json!({
+            "cluster_name": "prod-a",
+            "current_version": "v1.34.2",
+            "target_version": "v1.35.0",
+            "execution_mode": "simulation"
+        });
+        let steps = json!([
+            {"sequence": 1, "name": "preflight", "status": "not_run"},
+            {"sequence": 2, "name": "control_plane", "status": "not_started"},
+            {"sequence": 3, "name": "workers", "status": "not_started"},
+            {"sequence": 4, "name": "postflight", "status": "not_started"}
+        ]);
+        let result = json!({
+            "cluster_name": "prod-a",
+            "current_version": "v1.34.2",
+            "target_version": "v1.35.0",
+            "approval_required": true,
+            "upgrade_simulated": true,
+            "upgrade_performed": false,
+            "side_effects": false,
+            "requires_manual_execution": true,
+            "resume_supported": false,
+            "upgrade_steps": steps
+        });
+        assert_eq!(
+            validate_result("cluster.kubernetes.version.upgrade", &payload, &result),
+            None
+        );
+        let unsafe_result = json!({
+            "cluster_name": "prod-a",
+            "current_version": "v1.34.2",
+            "target_version": "v1.35.0",
+            "approval_required": true,
+            "upgrade_simulated": false,
+            "upgrade_performed": true,
+            "side_effects": true
+        });
+        assert!(validate_result(
+            "cluster.kubernetes.version.upgrade",
+            &payload,
+            &unsafe_result
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn executed_scale_requires_the_controller_to_reach_the_request() {
+        let payload = json!({
+            "target_cluster_name": "prod-a",
+            "desired_workers": 3,
+            "execution_mode": "execute",
+            "machine_deployment": "md-0"
+        });
+        let result = json!({
+            "cluster_name": "prod-a",
+            "desired_workers": 3,
+            "machine_deployment": "md-0",
+            "scale_simulated": false,
+            "scale_performed": true,
+            "side_effects": true,
+            "controller_status": {},
+            "controller_replicas": 3
+        });
+        assert_eq!(validate_result("cluster.scale", &payload, &result), None);
+        let mut short = result.clone();
+        short["controller_replicas"] = json!(2);
+        assert!(validate_result("cluster.scale", &payload, &short).is_some());
     }
 
     #[test]

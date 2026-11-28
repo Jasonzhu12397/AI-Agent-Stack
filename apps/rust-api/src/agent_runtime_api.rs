@@ -257,6 +257,30 @@ pub async fn command_result(
             "Command lease is invalid or expired.",
         );
     }
+    if outcome == "succeeded" {
+        let command_type: String = row.try_get("command_type").unwrap_or_default();
+        let stored_payload: Value = sqlx::query_scalar::<_, String>(
+            "SELECT CAST(payload AS TEXT) FROM core_agentcommand WHERE CAST(id AS TEXT) = ?",
+        )
+        .bind(&command_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}));
+        if let Some(detail) =
+            crate::command_contracts::validate_result(&command_type, &stored_payload, &result)
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": {"code": "COMMAND_RESULT_INVALID", "detail": detail}
+                })),
+            )
+                .into_response();
+        }
+    }
     let now = timestamp();
     let status_value = if outcome == "succeeded" {
         "succeeded"
