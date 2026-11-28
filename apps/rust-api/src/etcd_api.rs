@@ -347,31 +347,67 @@ fn policy_response(deployment: &DeploymentRow, spec: &Value) -> Result<(Value, V
     ))
 }
 
-/// `GET /api/v1/cluster-deployments/{deployment_id}/etcd-backup/`
-pub async fn get_state(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(deployment_id): Path<String>,
-) -> Response {
-    let (pool, deployment) = match authorize(&state, &headers, &deployment_id).await {
-        Ok(value) => value,
-        Err(response) => return response,
+/// Newest scheduler heartbeat for a deployment, as `(last_run, age_hours)`.
+async fn scheduler_last_run(
+    state: &AppState,
+    pool: &sqlx::AnyPool,
+    deployment_id: &str,
+) -> (Value, Option<f64>) {
+    let created = timestamp_column(state, "event", "created_at");
+    let metadata = if is_postgres(state) {
+        "CAST(event.metadata AS TEXT)"
+    } else {
+        "event.metadata"
     };
-    let (policy, base) = match policy_response(&deployment, &deployment.spec) {
-        Ok(value) => value,
-        Err(message) => {
-            let code = message.split(':').next().unwrap_or("ETCD_BACKUP_INVALID");
-            return fail(StatusCode::BAD_REQUEST, code, &message);
-        }
+    let sql = format!(
+        "SELECT {created} AS created, {metadata} AS metadata_text FROM core_auditevent event \
+         WHERE event.event_type = ? AND event.resource_type = 'etcd_backup_scheduler' \
+         AND CAST(event.resource_id AS TEXT) = ? ORDER BY event.created_at DESC LIMIT 1"
+    );
+    let row = sqlx::query(&sql)
+        .bind(crate::backup_queue::SCHEDULER_EVENT)
+        .bind(deployment_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+    let Some(row) = row else {
+        return (Value::Null, None);
     };
-    let history_rows = match command_rows(&state, &pool, &deployment_id, false).await {
-        Ok(rows) => rows,
-        Err(error) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error),
-    };
-    let run_rows = match command_rows(&state, &pool, &deployment_id, true).await {
-        Ok(rows) => rows,
-        Err(error) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error),
-    };
+    let created_at = row.try_get::<Option<String>, _>("created").ok().flatten();
+    let metadata = parse_json(
+        row.try_get::<Option<String>, _>("metadata_text")
+            .ok()
+            .flatten(),
+    );
+    let age = created_at
+        .as_deref()
+        .and_then(|text| advance_time(Some(text.to_string())))
+        .map(|at| (Utc::now() - at).num_minutes() as f64 / 60.0)
+        .map(|age| (age.max(0.0) * 1000.0).round() / 1000.0);
+    let body = json!({
+        "at": created_at,
+        "result": metadata.get("result").cloned().unwrap_or(Value::Null),
+        "bucket": metadata.get("bucket").cloned().unwrap_or(Value::Null),
+        "command_id": metadata.get("command_id").cloned().unwrap_or(Value::Null),
+        "reason": metadata.get("reason").cloned().unwrap_or(Value::Null),
+    });
+    (body, age)
+}
+
+/// The full backup state of one deployment, shared by the HTTP endpoint and
+/// the `check-backups` operator probe.
+pub async fn cluster_state(
+    state: &AppState,
+    pool: &sqlx::AnyPool,
+    deployment_id: &str,
+) -> Result<Value, String> {
+    let deployment = load_deployment(state, pool, deployment_id)
+        .await
+        .map_err(|_| "NOT_FOUND: deployment does not exist".to_string())?;
+    let (policy, base) = policy_response(&deployment, &deployment.spec)?;
+    let history_rows = command_rows(state, pool, deployment_id, false).await?;
+    let run_rows = command_rows(state, pool, deployment_id, true).await?;
     let history: Vec<Value> = history_rows.iter().map(command_summary).collect();
     let latest_run = run_rows.first().map(command_summary);
     let enabled = policy
@@ -391,6 +427,10 @@ pub async fn get_state(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let last_run_status = latest_run
+        .as_ref()
+        .and_then(|value| value.get("status").cloned())
+        .unwrap_or(Value::Null);
     let newest_age = latest_run
         .as_ref()
         .and_then(|value| value.get("finished_at").cloned())
@@ -398,6 +438,7 @@ pub async fn get_state(
         .and_then(|text| advance_time(Some(text)))
         .map(|at| (Utc::now() - at).num_minutes() as f64 / 60.0)
         .map(|age| (age * 1000.0).round() / 1000.0);
+    let (scheduler_run, scheduler_age) = scheduler_last_run(state, pool, deployment_id).await;
     let stale = newest_age.map(|age| age > max_age as f64).unwrap_or(true);
     let mut findings = Vec::new();
     if newest_name.is_empty() {
@@ -437,9 +478,13 @@ pub async fn get_state(
         object.insert("invalid_directories".into(), json!([]));
         object.insert("restore_point".into(), restore_point);
         object.insert("unconfirmed_restore_points".into(), json!([]));
-        object.insert("scheduler_last_run".into(), Value::Null);
-        object.insert("scheduler_age_hours".into(), Value::Null);
+        object.insert("scheduler_last_run".into(), scheduler_run);
+        object.insert(
+            "scheduler_age_hours".into(),
+            scheduler_age.map(|v| json!(v)).unwrap_or(Value::Null),
+        );
         object.insert("last_run".into(), latest_run.unwrap_or(Value::Null));
+        object.insert("last_run_status".into(), last_run_status);
         object.insert("history".into(), json!(history));
         object.insert("newest".into(), newest_backup);
         object.insert(
@@ -451,7 +496,29 @@ pub async fn get_state(
         object.insert("ok".into(), json!(ok));
         object.insert("findings".into(), json!(findings));
     }
-    Json(body).into_response()
+    Ok(body)
+}
+
+/// `GET /api/v1/cluster-deployments/{deployment_id}/etcd-backup/`
+pub async fn get_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(deployment_id): Path<String>,
+) -> Response {
+    let (pool, deployment) = match authorize(&state, &headers, &deployment_id).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match cluster_state(&state, &pool, &deployment.id).await {
+        Ok(body) => Json(body).into_response(),
+        Err(message) => {
+            let code = message.split(':').next().unwrap_or("ETCD_BACKUP_INVALID");
+            if code == "NOT_FOUND" {
+                return fail(StatusCode::NOT_FOUND, "NOT_FOUND", "Not found.");
+            }
+            fail(StatusCode::BAD_REQUEST, code, &message)
+        }
+    }
 }
 
 /// `POST /api/v1/cluster-deployments/{deployment_id}/etcd-backup/policy/`

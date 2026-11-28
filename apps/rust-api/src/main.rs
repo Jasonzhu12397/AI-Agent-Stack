@@ -11,6 +11,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    if let Some(name) = std::env::args().nth(1) {
+        if ai_agent_stack_api::ops_cli::is_ops_command(&name) {
+            let config = Config::from_env()?;
+            let state = AppState::new(config)?;
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let code = match ai_agent_stack_api::ops_cli::run(&state, &name, &args).await {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("{error}");
+                    1
+                }
+            };
+            std::process::exit(code);
+        }
+        eprintln!("unknown command: {name}");
+        std::process::exit(2);
+    }
     let config = Config::from_env()?;
     let address: SocketAddr = config.listen.parse()?;
     let state = AppState::new(config)?;

@@ -20,7 +20,7 @@ const UPGRADE_ACTION: &str = "cluster.kubernetes.version.upgrade";
 const POLICY_AUDIT_EVENT: &str = "cluster.etcd_backup.policy.updated";
 const ROLLBACK_PROTECTION_RELEASED_EVENT: &str = "cluster.kubernetes.rollback.protection.released";
 const DEFAULT_ROLLBACK_PROTECTION_HORIZON_MINUTES: i64 = 24 * 60;
-const SCHEDULER_EVENT: &str = "cluster.etcd_backup.scheduler.run";
+pub const SCHEDULER_EVENT: &str = "cluster.etcd_backup.scheduler.run";
 const SCHEDULER_RESOURCE: &str = "etcd_backup_scheduler";
 const DEPLOYMENT_RESOURCE: &str = "cluster_deployment";
 
@@ -873,7 +873,7 @@ fn rollback_protection_horizon_minutes(spec: &Value) -> i64 {
 
 /// Parse the timestamp shapes both dialects hand back: `YYYY-MM-DD HH:MM:SS`
 /// with optional fractional seconds and an optional UTC suffix.
-fn parse_timestamp(text: &str) -> Option<NaiveDateTime> {
+pub fn parse_timestamp(text: &str) -> Option<NaiveDateTime> {
     let trimmed = text.trim().trim_end_matches('Z');
     let trimmed = trimmed
         .strip_suffix("+00")
@@ -1008,16 +1008,32 @@ pub async fn dispatch_hourly_backups(
 ) -> Result<usize, String> {
     let rows = sqlx::query(
         "SELECT CAST(id AS TEXT) AS id, cluster_name, CAST(tenant_id AS TEXT) AS tenant_id, \
-         CAST(project_id AS TEXT) AS project_id FROM core_clusterdeployment \
-         WHERE status = 'succeeded' AND target_node_id IS NOT NULL",
+         CAST(project_id AS TEXT) AS project_id, CAST(target_node_id AS TEXT) AS target_node_id \
+         FROM core_clusterdeployment WHERE status = 'succeeded' AND target_node_id IS NOT NULL \
+         ORDER BY created_at DESC, CAST(id AS TEXT) DESC",
     )
     .fetch_all(pool)
     .await
     .map_err(|error| error.to_string())?;
     let bucket = hour_bucket(now);
     let mut queued = 0;
+    // A reinstall leaves the older succeeded record behind. Only the newest
+    // record per (tenant, project, node, cluster name) describes the cluster
+    // that exists now, exactly as the operator panel decides it.
+    let mut seen: std::collections::HashSet<(String, String, String, String)> =
+        std::collections::HashSet::new();
     for row in rows {
         let deployment_id: String = row.try_get("id").unwrap_or_default();
+        let key = (
+            row.try_get::<String, _>("tenant_id").unwrap_or_default(),
+            row.try_get::<String, _>("project_id").unwrap_or_default(),
+            row.try_get::<String, _>("target_node_id")
+                .unwrap_or_default(),
+            row.try_get::<String, _>("cluster_name").unwrap_or_default(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
         let cluster_name: String = row.try_get("cluster_name").unwrap_or_default();
         let tenant_id: String = row.try_get("tenant_id").unwrap_or_default();
         let project_id: String = row.try_get("project_id").unwrap_or_default();

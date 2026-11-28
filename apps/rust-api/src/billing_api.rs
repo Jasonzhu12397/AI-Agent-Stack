@@ -214,25 +214,9 @@ pub async fn get_usage(
     .into_response()
 }
 
-pub async fn get_capabilities(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(tenant_id): Path<String>,
-) -> Response {
-    let user = match require_user(&state, &headers).await {
-        Ok(user) => user,
-        Err(response) => return response,
-    };
-    let Some(pool) = state.identity_pool.as_ref() else {
-        return unavailable();
-    };
-    if !tenant_member(pool, &tenant_id, user.id)
-        .await
-        .unwrap_or(false)
-    {
-        return not_found();
-    }
-    let mut channels = Vec::new();
+/// Readiness per payment channel, reporting slot names only: configuration
+/// metadata, never a reference URI or a secret value.
+pub async fn payment_channel_diagnostics(state: &AppState) -> Vec<Value> {
     let mut diagnostics = Vec::new();
     for (channel, env_names, slots) in [
         (
@@ -267,10 +251,7 @@ pub async fn get_capabilities(
             ],
         ),
     ] {
-        let missing = missing_slots(&state, channel, &env_names, &slots).await;
-        if missing.is_empty() {
-            channels.push(channel);
-        }
+        let missing = missing_slots(state, channel, &env_names, &slots).await;
         diagnostics.push(json!({
             "channel": channel,
             "configured": missing.is_empty(),
@@ -278,6 +259,43 @@ pub async fn get_capabilities(
             "required": slots,
         }));
     }
+    diagnostics
+}
+
+/// Environment prefixes a payment channel may read.
+pub fn payment_env_prefixes() -> Vec<String> {
+    vec!["WECHATPAY_".to_string(), "ALIPAY_".to_string()]
+}
+
+pub async fn get_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(tenant_id): Path<String>,
+) -> Response {
+    let user = match require_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(pool) = state.identity_pool.as_ref() else {
+        return unavailable();
+    };
+    if !tenant_member(pool, &tenant_id, user.id)
+        .await
+        .unwrap_or(false)
+    {
+        return not_found();
+    }
+    let diagnostics = payment_channel_diagnostics(&state).await;
+    let mut channels: Vec<String> = diagnostics
+        .iter()
+        .filter(|entry| entry.get("configured").and_then(Value::as_bool) == Some(true))
+        .filter_map(|entry| {
+            entry
+                .get("channel")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
     channels.sort();
     let available = !channels.is_empty();
     Json(json!({

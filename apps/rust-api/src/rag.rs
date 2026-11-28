@@ -64,7 +64,7 @@ pub async fn ingest_document(
     mark_ingesting(pool, state, document_id).await?;
     match ingest_inner(pool, state, tenant_id, project_id, user_id, document_id).await {
         Ok(result) => {
-            mark_ready(pool, state, document_id, result.chunks).await?;
+            mark_ready(pool, state, document_id, &result).await?;
             Ok(result)
         }
         Err(error) => {
@@ -198,18 +198,20 @@ async fn mark_ready(
     pool: &AnyPool,
     state: &AppState,
     document_id: &str,
-    chunks: i64,
+    result: &IngestResult,
 ) -> Result<(), String> {
     let postgres = is_postgres(state);
     let sql = if postgres {
-        "UPDATE core_knowledgedocument SET status = 'ready', chunk_count = ?, error = NULL, \
-         ingested_at = now(), updated_at = now() WHERE CAST(id AS TEXT) = ?"
+        "UPDATE core_knowledgedocument SET status = 'ready', chunk_count = ?, vector_collection = ?, \
+         error = NULL, ingested_at = now(), updated_at = now() WHERE CAST(id AS TEXT) = ?"
     } else {
-        "UPDATE core_knowledgedocument SET status = 'ready', chunk_count = ?, error = NULL, \
-         ingested_at = datetime('now'), updated_at = datetime('now') WHERE CAST(id AS TEXT) = ?"
+        "UPDATE core_knowledgedocument SET status = 'ready', chunk_count = ?, vector_collection = ?, \
+         error = NULL, ingested_at = datetime('now'), updated_at = datetime('now') \
+         WHERE CAST(id AS TEXT) = ?"
     };
     sqlx::query(sql)
-        .bind(chunks)
+        .bind(result.chunks)
+        .bind(&result.collection)
         .bind(document_id)
         .execute(pool)
         .await
@@ -379,6 +381,17 @@ struct QdrantStore {
     client: reqwest::Client,
 }
 
+fn model_slug(model_name: &str) -> String {
+    let slug = model_name
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    slug.chars().take(40).collect::<String>()
+}
+
 impl QdrantStore {
     fn from_env() -> Result<Self, String> {
         let base_url = std::env::var("QDRANT_URL")
@@ -413,14 +426,7 @@ impl QdrantStore {
     }
 
     fn for_model(&self, model_name: &str, dimensions: usize) -> Self {
-        let slug = model_name
-            .to_lowercase()
-            .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-            .collect::<String>()
-            .trim_matches('-')
-            .to_string();
-        let slug = slug.chars().take(40).collect::<String>();
+        let slug = model_slug(model_name);
         Self {
             base_url: self.base_url.clone(),
             collection: format!("{}__{}-{}", self.collection, slug, dimensions),
@@ -546,4 +552,44 @@ impl QdrantStore {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+/// Collection-name prefix owned by an embedding model. ``for_model`` appends
+/// ``-<dimension>``, so stripping that suffix gives the scope check without
+/// knowing the vector dimension.
+pub fn collection_prefix_for_model(model_name: &str) -> Result<String, String> {
+    let store = QdrantStore::from_env()?;
+    Ok(format!("{}__{}-", store.collection, model_slug(model_name)))
+}
+
+async fn qdrant_request(method: reqwest::Method, path: &str) -> Result<Value, String> {
+    let store = QdrantStore::from_env()?;
+    store.request(method, path, None).await
+}
+
+pub async fn list_collections() -> Result<Vec<String>, String> {
+    let body = qdrant_request(reqwest::Method::GET, "/collections").await?;
+    Ok(body
+        .get("result")
+        .and_then(|result| result.get("collections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+pub async fn delete_collection(name: &str) -> Result<(), String> {
+    qdrant_request(
+        reqwest::Method::DELETE,
+        &format!("/collections/{}?wait=true", name),
+    )
+    .await
+    .map(|_| ())
 }
