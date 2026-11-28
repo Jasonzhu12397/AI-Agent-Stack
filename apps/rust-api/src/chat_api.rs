@@ -2252,6 +2252,7 @@ pub(crate) async fn scheduled_run(
     execution_target: &str,
     effort: &str,
     job_id: &str,
+    trigger: &str,
 ) -> Result<(String, String, String, String), String> {
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false);
     let (thread, model_id) = if let Some(thread_id) = thread_id {
@@ -2321,7 +2322,7 @@ pub(crate) async fn scheduled_run(
         (thread, model)
     };
     let user_message_id = uuid::Uuid::new_v4().to_string();
-    let context = json!({"trigger": "manual", "scheduled_job_id": job_id});
+    let context = json!({"trigger": trigger, "scheduled_job_id": job_id});
     sqlx::query(
         "INSERT INTO core_agentchatmessage (id, thread_id, role, content, author_id, context, \
          usage, tool_calls, error_code, created_at) VALUES (?, ?, 'user', ?, ?, ?, '{}', '[]', '', ?)",
@@ -2357,8 +2358,9 @@ pub(crate) async fn scheduled_run(
                     Ok(credential) => {
                         let system = chat_prompt(pool, state, &thread, &json!({})).await?;
                         let history = vec![json!({"role": "user", "content": prompt_text})];
-                        let scheduled_scope =
-                            format!("agent-chat-scheduled:{job_id}:{}", thread.id);
+                        // One key per run: the message id keeps every slot
+                        // chargeable, while a retry of the same slot settles once.
+                        let scheduled_scope = format!("scheduled:{job_id}:{user_message_id}");
                         match complete_model(
                             state,
                             &model,

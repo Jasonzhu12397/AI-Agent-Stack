@@ -497,6 +497,7 @@ pub async fn dispatch_due_jobs(state: &AppState, limit: i64) -> Result<usize, St
             &execution_target,
             &effort,
             &id,
+            "schedule",
         )
         .await;
         let error_code = match outcome {
@@ -700,6 +701,7 @@ pub async fn run_job_now(
         target,
         effort,
         &job_id,
+        "manual",
     )
     .await;
     let (thread, user_message, assistant_message, error_code) = match run {
