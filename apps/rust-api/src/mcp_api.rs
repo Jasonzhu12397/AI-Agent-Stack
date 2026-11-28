@@ -409,6 +409,58 @@ pub(crate) async fn invoke(
             json!({"code": "CAPABILITY_PROTOCOL_UNSUPPORTED"}),
         ));
     }
+    let manifest: Value = row
+        .try_get::<String, _>("manifest")
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}));
+    if crate::plugin_http::has_operations(&manifest) {
+        // Studio plugins publish an operation per capability; the request
+        // must follow that mapping instead of posting the raw argument object.
+        let started = std::time::Instant::now();
+        let credential_ref = row
+            .try_get::<String, _>("credential_ref")
+            .unwrap_or_default();
+        let outcome = crate::plugin_http::invoke_operation(
+            crate::plugin_http::ConnectorAuth {
+                state,
+                pool,
+                tenant_id: tenant,
+                credential_ref: &credential_ref,
+                auth_required: row.try_get::<i64, _>("auth_required").unwrap_or(0) != 0,
+            },
+            &manifest,
+            capability,
+            &invocation_args,
+            row.try_get::<i64, _>("timeout_seconds").unwrap_or(30),
+        )
+        .await;
+        let latency = started.elapsed().as_millis() as i64;
+        let (status, code) = match &outcome {
+            Ok(_) => ("succeeded", ""),
+            Err(fault) => ("failed", fault.code),
+        };
+        let _ = sqlx::query(
+            "INSERT INTO core_agentcapabilityinvocation (id, installation_id, capability, protocol, status, error_code, latency_ms, created_at) \
+             VALUES (?, ?, ?, 'http_json', ?, ?, ?, CURRENT_TIMESTAMP)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&installation_id)
+        .bind(capability)
+        .bind(status)
+        .bind(code)
+        .bind(latency)
+        .execute(pool)
+        .await;
+        return match outcome {
+            Ok(result) => Ok(result),
+            Err(fault) => Err(rpc_data(
+                -32602,
+                &fault.message,
+                json!({"code": fault.code}),
+            )),
+        };
+    }
     let endpoint = row.try_get::<String, _>("endpoint_url").unwrap_or_default();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

@@ -1029,7 +1029,7 @@ fn id_after_insert(_id: &str, _version: &str) -> Option<()> {
 /// AES-GCM sealing compatible with `core.field_crypto`: the key is
 /// `sha256(f"{scope}:{SECRET_KEY}")`, the nonce is the first 12 bytes of the
 /// blob and the AAD is the scope.
-fn seal_scope(secret: &str, scope: &str, plaintext: &str) -> Result<String, Response> {
+pub(crate) fn seal_scope(secret: &str, scope: &str, plaintext: &str) -> Result<String, Response> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes256Gcm, Nonce};
     use sha2::Digest;
@@ -1053,7 +1053,7 @@ fn seal_scope(secret: &str, scope: &str, plaintext: &str) -> Result<String, Resp
     Ok(base64::engine::general_purpose::URL_SAFE.encode(blob))
 }
 
-fn open_scope(secret: &str, scope: &str, blob: &str) -> Option<String> {
+pub(crate) fn open_scope(secret: &str, scope: &str, blob: &str) -> Option<String> {
     use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes256Gcm, Nonce};
     use sha2::Digest;

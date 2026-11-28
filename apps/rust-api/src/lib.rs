@@ -37,6 +37,7 @@ pub mod ops_cli;
 pub mod platform_api;
 pub mod plugin_api;
 pub mod plugin_catalog;
+pub mod plugin_http;
 pub mod plugin_studio_api;
 pub mod preferences_api;
 pub mod privacy_api;
